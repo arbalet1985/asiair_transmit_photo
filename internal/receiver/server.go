@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -365,18 +364,6 @@ func (s *Server) uiAuth(next http.Handler) http.Handler {
 	})
 }
 
-type uiFile struct {
-	Path       string    `json:"path"`
-	Folder     string    `json:"folder"`
-	Name       string    `json:"name"`
-	Size       int64     `json:"size"`
-	MTime      time.Time `json:"mtime"`
-	Local      bool      `json:"local"`
-	Remote     bool      `json:"remote"`
-	RemoteSize int64     `json:"remote_size"`
-	Pending    bool      `json:"pending"`
-}
-
 type uiState struct {
 	Files         []uiFile             `json:"files"`
 	Commands      []*Command           `json:"commands"`
@@ -387,6 +374,7 @@ type uiState struct {
 	InventoryTime time.Time            `json:"inventory_time"`
 	Fingerprint   string               `json:"fingerprint"`
 	DestDir       string               `json:"dest_dir"`
+	Totals        uiTotals             `json:"totals"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -397,50 +385,21 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 			shares = append(shares, sh)
 		}
 	}
-	local, _ := s.getStore().List(shares)
-	byPath := map[string]*uiFile{}
-	var files []*uiFile
-	get := func(p string) *uiFile {
-		if f, ok := byPath[p]; ok {
-			return f
-		}
-		f := &uiFile{Path: p, Folder: path.Dir(p), Name: path.Base(p)}
-		byPath[p] = f
-		files = append(files, f)
-		return f
-	}
-	for _, l := range local {
-		f := get(l.Path)
-		f.Local, f.Size, f.MTime = true, l.Size, l.ModTime
-	}
-	for _, rf := range snap.Inventory {
-		f := get(rf.Path)
-		f.Remote, f.RemoteSize = true, rf.Size
-		if !f.Local {
-			f.Size, f.MTime = rf.Size, rf.ModTime
-		}
-	}
-	for _, c := range snap.Commands {
-		if c.Status == StatusPending {
-			if f, ok := byPath[c.Path]; ok {
-				f.Pending = true
-			}
-		}
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	store := s.getStore()
+	local, _ := store.List(shares)
+	online := time.Since(snap.LastSeen) < 2*time.Minute
+	files, totals := buildFiles(local, snap.Inventory, snap.Commands, snap.Status, online, store.Partials())
 	out := uiState{
-		Files:         make([]uiFile, len(files)),
+		Files:         files,
+		Totals:        totals,
 		Commands:      snap.Commands,
 		MaxRate:       snap.MaxRate,
 		Agent:         snap.Status,
 		LastSeen:      snap.LastSeen,
-		AgentOnline:   time.Since(snap.LastSeen) < 2*time.Minute,
+		AgentOnline:   online,
 		InventoryTime: snap.InvTime,
 		Fingerprint:   s.fingerprint,
-		DestDir:       s.getStore().root,
-	}
-	for i, f := range files {
-		out.Files[i] = *f
+		DestDir:       store.root,
 	}
 	writeJSON(w, out)
 }

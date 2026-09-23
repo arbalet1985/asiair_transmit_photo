@@ -82,6 +82,17 @@
   .vside .kv { grid-template-columns: max-content 1fr; font-size: 12px; }
   .vsel.on { background: var(--danger); border-color: var(--danger); color: #fff; }
   @media (max-width: 800px) { .vbody { flex-direction: column; } .vside { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 40%; } }
+  tr.file.ghost td { color: var(--muted); }
+  tr.file.ghost td.name, tr.file.ghost td.num { opacity: .7; }
+  .info { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+  .gray { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+  .mini { display: inline-block; vertical-align: middle; width: 70px; height: 5px; background: var(--row); border-radius: 3px; overflow: hidden; margin-left: 6px; }
+  .mini > div { height: 100%; background: var(--accent); }
+  .fbar { display: inline-block; vertical-align: middle; width: 120px; height: 5px; background: color-mix(in srgb, var(--muted) 25%, transparent); border-radius: 3px; overflow: hidden; margin-left: 8px; }
+  .fbar > div { height: 100%; background: var(--ok); }
+  .xfer h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
+  .xfer .line { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+  .progress.total > div { background: var(--ok); }
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
 </style>
@@ -90,6 +101,7 @@
 <header>
   <h1>ASIAIR → приём фото</h1>
   <span id="agentBadge" class="badge off">агент не на связи</span>
+  <span class="badge info" id="hdrProgress" hidden></span>
   <span class="muted" id="destDir"></span>
 </header>
 <main>
@@ -107,11 +119,16 @@
     </section>
     <section class="panel">
       <h2>Передача</h2>
-      <dl class="kv">
-        <dt>Файл</dt><dd id="uFile">—</dd>
-        <dt>Скорость</dt><dd id="uSpeed">—</dd>
-      </dl>
-      <div class="progress"><div id="uBar"></div></div>
+      <div class="xfer">
+        <h3>Текущий файл</h3>
+        <div class="line" id="uFile">—</div>
+        <div class="progress"><div id="uBar"></div></div>
+        <div class="line muted" id="uSpeed">—</div>
+        <h3>Всего</h3>
+        <div class="progress total"><div id="tBar"></div></div>
+        <div class="line" id="tLine">—</div>
+        <div class="line err" id="tErr"></div>
+      </div>
       <h2 style="margin-top:14px">Ограничение скорости</h2>
       <div class="toolbar">
         <input type="text" id="rateInput" placeholder="напр. 2MB/s, 10Mbit/s, 0" size="16">
@@ -180,8 +197,10 @@
         <option value="remote">На ASIAIR</option>
         <option value="both">Получены и есть на ASIAIR</option>
         <option value="waiting">Ещё не получены</option>
+        <option value="errors">С ошибками</option>
         <option value="localonly">Только у меня</option>
       </select>
+      <label title="Миниатюры, журналы и другие файлы, которые агент по настройкам не передаёт"><input type="checkbox" id="showFiltered"> Показать непередаваемые</label>
       <span class="spacer"></span>
       <span class="muted" id="selInfo"></span>
       <label><input type="checkbox" id="alsoLocal"> удалить и у себя</label>
@@ -191,7 +210,7 @@
       <table>
         <thead><tr>
           <th><input type="checkbox" id="selAll" title="Выбрать все видимые"></th>
-          <th>Имя</th><th class="num">Размер</th><th>Дата</th><th>У меня</th><th>ASIAIR</th>
+          <th>Имя</th><th class="num">Размер</th><th>Дата</th><th>Статус</th><th>ASIAIR</th>
         </tr></thead>
         <tbody id="files"></tbody>
       </table>
@@ -308,17 +327,55 @@ function el(tag, props, ...kids) {
 
 function visibleFiles() {
   const q = $("filter").value.trim().toLowerCase();
-  const mode = $("show").value;
+  const mode = $("show").value, showFiltered = $("showFiltered").checked;
   return state.files.filter(f => {
     if (q && !f.path.toLowerCase().includes(q)) return false;
+    if (f.status === "filtered" && !showFiltered) return false;
     switch (mode) {
       case "remote": return f.remote;
       case "both": return f.remote && f.local;
-      case "waiting": return f.remote && !f.local;
-      case "localonly": return f.local && !f.remote;
+      case "waiting": return f.remote && f.status !== "received" && f.status !== "filtered";
+      case "errors": return f.status === "retry" || (f.status === "partial" && !!f.error);
+      case "localonly": return f.status === "local-only";
     }
     return true;
   });
+}
+
+// status badge of a file
+function statusBadge(f) {
+  const pct = f.progress ? Math.floor(f.progress * 100) + "%" : "";
+  const badge = (cls, text, title) => el("span", { className: "badge " + cls, textContent: text, title: title || "" });
+  switch (f.status) {
+    case "received": return badge("on", "получен");
+    case "uploading": {
+      const span = el("span", {}, badge("info", "передаётся " + pct));
+      const bar = el("span", { className: "mini" }, el("div", { style: `width:${pct || "0"}` }));
+      span.append(bar);
+      return span;
+    }
+    case "partial": return f.retry_at && !f.retry_at.startsWith("0001")
+      ? badge("pend", `прервано на ${pct}, докачка в ${fmtClock(f.retry_at)}`, f.error)
+      : badge("pend", `прервано на ${pct}, будет докачан`);
+    case "retry": return badge("off", "ошибка, повтор в " + fmtClock(f.retry_at), f.error);
+    case "queued": return badge("gray", "в очереди");
+    case "writing": return badge("gray", "записывается на ASIAIR", "Файл ещё меняется; агент передаст его, когда запись закончится");
+    case "changed": return badge("pend", "изменён на ASIAIR", "На ASIAIR другая версия файла, она будет передана заново");
+    case "local-only": return badge("gray", "только у меня", "На ASIAIR файла уже нет");
+    case "deleting": return badge("pend", "удаляется");
+    case "filtered": return badge("gray", "не передаётся (фильтр)", "Отсеян настройками агента: extensions / exclude");
+  }
+  return badge("gray", f.status || "—");
+}
+const fmtClock = t => (!t || t.startsWith("0001")) ? "—" : new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function fmtDur(sec) {
+  if (!sec || !isFinite(sec)) return "";
+  sec = Math.round(sec);
+  if (sec < 60) return `~${sec} с`;
+  const m = Math.round(sec / 60);
+  if (m < 60) return `~${m} мин`;
+  const h = Math.floor(m / 60);
+  return `~${h} ч ${m % 60} мин`;
 }
 
 function renderFiles() {
@@ -339,13 +396,19 @@ function renderFiles() {
         for (const x of selectable) cb.checked ? selected.add(x.path) : selected.delete(x.path);
         renderFiles();
       };
-      const size = inFolder.reduce((a, x) => a + x.size, 0);
       const fname = folder;
-      const tr = el("tr", { className: "folder" },
-        el("td", {}, cb),
-        el("td", { className: "name", colSpan: 5 },
-          (collapsed.has(folder) ? "▸ " : "▾ ") + folder + "  ",
-          el("span", { className: "muted" }, `${inFolder.length} файл(ов), ${fmtBytes(size)}`)));
+      // progress of the folder over the files the agent transfers
+      const xfer = inFolder.filter(x => x.remote && x.status !== "filtered");
+      const tb2 = xfer.reduce((a, x) => a + x.remote_size, 0);
+      const db = xfer.reduce((a, x) => a + (x.status === "received" ? x.remote_size : (x.progress || 0) * x.remote_size), 0);
+      const dn = xfer.filter(x => x.status === "received").length;
+      const info = xfer.length
+        ? `получено ${dn} из ${xfer.length} · ${fmtBytes(db)} из ${fmtBytes(tb2)}`
+        : `${inFolder.length} файл(ов), ${fmtBytes(inFolder.reduce((a, x) => a + x.size, 0))}`;
+      const head = el("td", { className: "name", colSpan: 5 },
+        (collapsed.has(folder) ? "▸ " : "▾ ") + folder + "  ", el("span", { className: "muted" }, info));
+      if (xfer.length) head.append(el("span", { className: "fbar" }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
+      const tr = el("tr", { className: "folder" }, el("td", {}, cb), head);
       tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); renderFiles(); };
       tb.append(tr);
     }
@@ -361,16 +424,12 @@ function renderFiles() {
     if (f.pending) remote = el("span", { className: "badge pend", textContent: "удаляется" });
     else if (f.remote) remote = el("span", { className: "badge on", textContent: "есть" });
     else remote = el("span", { className: "muted", textContent: "нет" });
-    let local;
-    if (f.local) local = el("span", { className: "badge on", textContent: "получен" });
-    else if (state.agent.uploading === f.path) local = el("span", { className: "badge pend", textContent: "передаётся" });
-    else local = el("span", { className: "muted", textContent: "ожидает" });
-    tb.append(el("tr", { className: "file" },
+    tb.append(el("tr", { className: "file" + (f.local ? "" : " ghost") },
       el("td", {}, cb),
       el("td", { className: "name" }, name),
       el("td", { className: "num", textContent: fmtBytes(f.size) }),
       el("td", { textContent: fmtTime(f.mtime) }),
-      el("td", {}, local),
+      el("td", {}, statusBadge(f)),
       el("td", {}, remote)));
   }
   const sel = [...selected];
@@ -379,8 +438,10 @@ function renderFiles() {
   $("delBtn").disabled = sel.length === 0;
   const vis = files.filter(f => f.remote && !f.pending);
   $("selAll").checked = vis.length > 0 && vis.every(f => selected.has(f.path));
-  const nr = state.files.filter(f => f.remote).length, nl = state.files.filter(f => f.local).length;
-  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length}. На ASIAIR: ${nr}, получено: ${nl}. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
+  const nr = state.files.filter(f => f.remote && f.status !== "filtered").length, nl = state.files.filter(f => f.local).length;
+  const nf = state.files.filter(f => f.status === "filtered").length;
+  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length}. На ASIAIR: ${nr}, получено: ${nl}` +
+    (nf ? `, непередаваемых: ${nf}` : "") + `. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
 }
 
 function renderCmds() {
@@ -418,9 +479,28 @@ function renderStatus() {
   $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
   $("aErr").textContent = a.last_error || "—";
-  $("uFile").textContent = a.uploading || "—";
-  $("uSpeed").textContent = state.agent_online && a.uploading ? `${fmtBytes(a.speed)}/s (лимит: ${fmtRate(a.rate)})` : `— (лимит: ${fmtRate(a.rate)})`;
-  $("uBar").style.width = a.uploading && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
+  const up = state.agent_online && a.uploading;
+  $("uFile").textContent = up ? a.uploading : "нет";
+  $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
+  if (up && a.upload_size) {
+    const left = a.speed > 0 ? fmtDur((a.upload_size - a.upload_done) / a.speed) : "";
+    $("uSpeed").textContent = `${fmtBytes(a.upload_done)} из ${fmtBytes(a.upload_size)} · ${fmtBytes(a.speed)}/s` +
+      (left ? ` · осталось ${left}` : "") + ` · лимит: ${fmtRate(a.rate)}`;
+  } else {
+    $("uSpeed").textContent = `лимит: ${fmtRate(a.rate)}`;
+  }
+  const t = state.totals || {};
+  const pct = t.bytes ? 100 * t.done_bytes / t.bytes : 0;
+  $("tBar").style.width = pct.toFixed(1) + "%";
+  if (t.files) {
+    $("tLine").textContent = `Получено ${fmtBytes(t.done_bytes)} из ${fmtBytes(t.bytes)} (${Math.floor(pct)}%) · ${t.done_files} из ${t.files} файлов` +
+      (t.remaining_bytes > 0 ? ` · осталось ${fmtBytes(t.remaining_bytes)}` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "") : " · всё получено");
+  } else {
+    $("tLine").textContent = state.inventory_time && !state.inventory_time.startsWith("0001") ? "на ASIAIR нет файлов для передачи" : "список файлов ASIAIR ещё не получен от агента";
+  }
+  $("tErr").textContent = t.failed ? `ждут повтора после ошибки: ${t.failed} (агент повторит сам; фильтр «С ошибками» покажет какие)` : "";
+  $("hdrProgress").hidden = !t.files || t.remaining_bytes <= 0;
+  $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
   $("rateNow").textContent = state.max_rate === null
     ? "Сейчас: берётся из конфигурации агента"
     : "Сейчас задано здесь: " + fmtRate(state.max_rate);
@@ -448,6 +528,7 @@ async function refresh() {
 
 $("filter").oninput = () => state && renderFiles();
 $("show").onchange = () => state && renderFiles();
+$("showFiltered").onchange = () => state && renderFiles();
 $("selAll").onchange = e => {
   for (const f of visibleFiles()) if (f.remote && !f.pending) e.target.checked ? selected.add(f.path) : selected.delete(f.path);
   renderFiles();

@@ -59,6 +59,22 @@ type AgentStatus struct {
 	QueueBytes int64     `json:"queue_bytes"` // bytes waiting to be sent
 	SentFiles  int       `json:"sent_files"`  // files sent since start
 	SentBytes  int64     `json:"sent_bytes"`  // bytes sent since start
+
+	// Totals over the files to transfer that are on the ASIAIR now.
+	TotalFiles int   `json:"total_files"`
+	TotalBytes int64 `json:"total_bytes"`
+	DoneFiles  int   `json:"done_files"` // already at the receiver
+	DoneBytes  int64 `json:"done_bytes"`
+
+	// Failed lists files waiting for a retry (at most 50).
+	Failed []FailedFile `json:"failed,omitempty"`
+}
+
+// FailedFile is a file whose last transfer attempt failed.
+type FailedFile struct {
+	Path    string    `json:"path"`
+	Error   string    `json:"error"`
+	RetryAt time.Time `json:"retry_at"`
 }
 
 type SyncRequest struct {
@@ -87,12 +103,22 @@ type CommandResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// File states reported in the inventory.
+const (
+	StateSent     = "sent"     // at the receiver
+	StateQueued   = "queued"   // waiting for its turn
+	StateWriting  = "writing"  // still changing on the ASIAIR (not stable yet)
+	StateRetry    = "retry"    // last attempt failed, retry later
+	StateFiltered = "filtered" // not transferred (extension or excluded folder)
+)
+
 // RemoteFile is a file present on the ASIAIR.
 type RemoteFile struct {
 	Path    string    `json:"path"`
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mtime"`
 	Sent    bool      `json:"sent"`
+	State   string    `json:"state,omitempty"` // empty from older agents
 }
 
 // Inventory is the full list of files on the ASIAIR after a scan.

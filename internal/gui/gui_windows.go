@@ -104,7 +104,8 @@ type window struct {
 	iconState string
 
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
-	progress                                                             *walk.ProgressBar
+	lblTotal                                                             *walk.Label
+	progress, totalBar                                                   *walk.ProgressBar
 	cbAutostart, cbMinimized                                             *walk.CheckBox
 	logView                                                              *walk.ListBox
 	logModel                                                             *logModel
@@ -246,6 +247,8 @@ func (w *window) create() error {
 									Label{Text: "Передаётся:"}, Label{AssignTo: &w.lblFile, Text: "—"},
 									Label{Text: ""}, ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
 									Label{Text: "Скорость:"}, Label{AssignTo: &w.lblSpeed, Text: "—"},
+									Label{Text: "Всего:"}, ProgressBar{AssignTo: &w.totalBar, MaxValue: 1000},
+									Label{Text: ""}, Label{AssignTo: &w.lblTotal, Text: "—"},
 									Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
 									Label{Text: "Отправлено:"}, Label{AssignTo: &w.lblSent, Text: "—"},
 									Label{Text: "Ошибка:"}, Label{AssignTo: &w.lblErr, Text: "—", TextColor: walk.RGB(200, 40, 40)},
@@ -454,11 +457,12 @@ func (w *window) update() {
 		} else if cfgErr != nil {
 			msg = "ошибка в настройках: " + cfgErr.Error()
 		}
-		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent} {
+		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent, w.lblTotal} {
 			l.SetText("—")
 		}
 		setShort(w.lblErr, msg, maxStatus)
 		w.progress.SetValue(0)
+		w.totalBar.SetValue(0)
 		w.setTray(StateStopped, "ASIAIR Agent — "+msg)
 		return
 	}
@@ -491,6 +495,24 @@ func (w *window) update() {
 		w.lblFile.SetText("—")
 		w.progress.SetValue(0)
 		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + ")")
+	}
+	// overall progress: files on the ASIAIR already at the receiver, plus the
+	// part of the current file
+	done := st.DoneBytes
+	if st.Uploading != "" {
+		done += st.UploadDone
+	}
+	if st.TotalBytes > 0 {
+		w.totalBar.SetValue(int(done * 1000 / st.TotalBytes))
+		text := fmt.Sprintf("%s из %s (%d%%), %d из %d файлов", config.FormatBytes(done), config.FormatBytes(st.TotalBytes),
+			done*100/st.TotalBytes, st.DoneFiles, st.TotalFiles)
+		if left := st.TotalBytes - done; left > 0 && st.Uploading != "" && st.Speed > 0 {
+			text += ", осталось " + formatETA(float64(left)/st.Speed)
+		}
+		setShort(w.lblTotal, text, maxStatus)
+	} else {
+		w.totalBar.SetValue(0)
+		w.lblTotal.SetText("—")
 	}
 	w.lblQueue.SetText(fmt.Sprintf("%d файл(ов), %s", st.QueueFiles, config.FormatBytes(st.QueueBytes)))
 	w.lblSent.SetText(fmt.Sprintf("%d файл(ов), %s с момента запуска", st.SentFiles, config.FormatBytes(st.SentBytes)))
