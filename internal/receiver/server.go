@@ -48,6 +48,8 @@ type Server struct {
 
 	// Startup, when set, lets the web page manage starting with Windows.
 	Startup Startup
+
+	previews *previewCache
 }
 
 func New(cfg *config.Receiver) (*Server, error) {
@@ -64,7 +66,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("состояние: %w", err)
 	}
-	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token}
+	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6)}
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
 		if err != nil {
@@ -335,6 +337,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
 	mux.HandleFunc("/ui/api/destdir", s.handleUIDestDir)
 	mux.HandleFunc("/ui/api/startup", s.handleUIStartup)
+	mux.HandleFunc("/ui/preview", s.handleUIPreview)
 	return s.uiAuth(mux)
 }
 
