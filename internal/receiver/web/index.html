@@ -491,7 +491,7 @@ function renderStatus() {
     : !a.remote_pause ? "пауза включится при следующей связи с агентом"
     : "передача на паузе; текущий файл потом докачается с того же места";
   else if (state.agent_online && a.remote_pause) pn = "пауза снимется при следующей связи с агентом";
-  if (state.agent_online && a.local_pause) pn += (pn ? "; " : "") + "в окне агента тоже включена пауза — снимается там";
+  if (state.agent_online && a.local_pause) pn += pn ? "; в окне агента тоже включена пауза — снимается там" : "пауза включена в окне агента — снимается там";
   $("pauseNow").textContent = pn;
   $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
   if (up && a.upload_size) {
