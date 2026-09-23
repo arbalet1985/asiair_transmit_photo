@@ -114,6 +114,24 @@
       </div>
       <div class="hint">Структура папок ASIAIR сохраняется внутри этой папки. Уже полученные снимки при смене папки остаются на старом месте.</div>
     </section>
+    <section class="panel" id="startupPanel" hidden>
+      <h2>Запуск на этом компьютере</h2>
+      <div class="label">Сейчас приёмник работает</div>
+      <div class="field"><span class="value" id="suMode">—</span></div>
+      <div id="suUser">
+        <label><input type="checkbox" id="suAuto"> Запускать при входе в Windows (значок в трее)</label>
+        <div class="hint">Права администратора не нужны. Приёмник стартует, когда вы входите в Windows.</div>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="primary" id="suInstall">Установить как службу Windows…</button>
+        </div>
+        <div class="hint">Служба работает сразу после включения компьютера, даже если никто не вошёл в Windows. Windows попросит подтвердить права администратора; после этого приёмник сам переключится на службу, а страница обновится.</div>
+      </div>
+      <div id="suSvc">
+        <div class="toolbar"><button id="suRemove">Удалить службу…</button></div>
+        <div class="hint" id="suSvcHint"></div>
+      </div>
+      <div class="err" id="suErr"></div>
+    </section>
     <section class="panel">
       <h2>Подключение агента</h2>
       <div class="label">Эти данные нужно ввести в окне агента в обсерватории (вкладка «Настройки»).</div>
@@ -473,6 +491,52 @@ $("dirChoose").onclick = async () => {
   try { await post("/ui/api/destdir", { path }); $("dirDlg").close(); toast("Папка изменена"); refresh(); }
   catch (e) { $("dirErr").textContent = e.message; }
 };
+
+// ---------- start with Windows ----------
+let su = null, suSwitching = false, suRemoved = false;
+const suModes = {
+  service: "как служба Windows — запускается вместе с компьютером, без входа в систему",
+  tray: "как программа (значок в трее)",
+  console: "в окне консоли",
+};
+function renderStartup() {
+  const p = $("startupPanel");
+  if (!su || !su.supported) { p.hidden = true; return; }
+  p.hidden = false;
+  $("suMode").textContent = suRemoved ? "служба удалена, приёмник остановлен — запустите asiair-receiver.exe"
+    : suSwitching ? "переключение на службу… страница обновится сама" : (suModes[su.mode] || su.mode);
+  const isSvc = su.mode === "service";
+  $("suUser").hidden = isSvc || su.service !== "not-installed";
+  $("suAuto").checked = su.autostart;
+  $("suInstall").disabled = suSwitching;
+  $("suSvc").hidden = su.service === "not-installed";
+  $("suSvcHint").textContent = isSvc
+    ? "После удаления служба остановится и страница перестанет открываться. Затем запустите asiair-receiver.exe двойным щелчком и при желании включите запуск при входе в Windows."
+    : (su.service === "running"
+        ? "Служба установлена и работает отдельно от этой программы."
+        : "Служба установлена, но остановлена. Удалите её, если хотите запускать приёмник как программу.");
+}
+async function loadStartup() {
+  try { su = await (await fetch("/ui/api/startup")).json(); } catch (e) { return; } // restarting
+  if (suSwitching && su && su.mode === "service") { suSwitching = false; toast("Приёмник работает как служба"); }
+  renderStartup();
+}
+async function suAction(action) {
+  $("suErr").textContent = "";
+  try { su = await post("/ui/api/startup", { action }); renderStartup(); return true; }
+  catch (e) { $("suErr").textContent = e.message; loadStartup(); return false; }
+}
+$("suAuto").onchange = e => suAction(e.target.checked ? "autostart-on" : "autostart-off");
+$("suInstall").onclick = async () => {
+  if (!confirm("Установить приёмник как службу Windows?\n\nWindows попросит подтвердить права администратора. Приёмник перезапустится как служба, страница обновится сама.")) return;
+  if (await suAction("install-service")) { suSwitching = true; renderStartup(); }
+};
+$("suRemove").onclick = async () => {
+  if (!confirm("Удалить службу приёмника?" + (su && su.mode === "service" ? "\n\nПриёмник остановится, и эта страница перестанет открываться до запуска asiair-receiver.exe." : ""))) return;
+  if (await suAction("remove-service") && su.mode === "service") { suRemoved = true; renderStartup(); }
+};
+setInterval(loadStartup, 3000);
+loadStartup();
 
 loadConn();
 refresh();

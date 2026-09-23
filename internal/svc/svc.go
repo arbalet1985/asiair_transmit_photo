@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -111,11 +112,68 @@ func setupLog(file string) {
 		log.Printf("Не удалось открыть журнал %s: %v", file, err)
 		return
 	}
-	if service.Interactive() {
-		log.SetOutput(io.MultiWriter(os.Stderr, f))
-	} else {
+	if IsService() {
 		log.SetOutput(f)
+		// a service has no console: send crash reports to the log too
+		if lf, ok := f.(*os.File); ok {
+			debug.SetCrashOutput(lf, debug.CrashOptions{})
+		}
+	} else {
+		log.SetOutput(teeWriter{f, os.Stderr})
 	}
+}
+
+func newService(app App, cfgPath string, prg service.Interface) (service.Service, error) {
+	if prg == nil {
+		prg = &program{}
+	}
+	return service.New(prg, &service.Config{
+		Name:        app.Name,
+		DisplayName: app.DisplayName,
+		Description: app.Description,
+		// "service" tells the program it runs as a service; detecting it
+		// automatically is unreliable on some systems
+		Arguments: []string{"-config", cfgPath, "service"},
+		Option: service.KeyValue{
+			"StartType":              "automatic",
+			"OnFailure":              "restart",
+			"OnFailureDelayDuration": "30s",
+			"OnFailureResetPeriod":   600,
+		},
+	})
+}
+
+// Service states reported by ServiceState.
+const (
+	ServiceNotInstalled = "not-installed"
+	ServiceRunning      = "running"
+	ServiceStopped      = "stopped"
+)
+
+// ServiceState reports whether the app is installed as a service and running.
+func ServiceState(app App, cfgPath string) string {
+	s, err := newService(app, cfgPath, nil)
+	if err != nil {
+		return ServiceNotInstalled
+	}
+	st, err := s.Status()
+	switch {
+	case err != nil:
+		return ServiceNotInstalled
+	case st == service.StatusRunning:
+		return ServiceRunning
+	}
+	return ServiceStopped
+}
+
+// ServiceControl performs "install", "uninstall", "start", "stop" or
+// "restart" on the app's service (administrator rights required).
+func ServiceControl(app App, cfgPath, action string) error {
+	s, err := newService(app, cfgPath, nil)
+	if err != nil {
+		return err
+	}
+	return service.Control(s, action)
 }
 
 // Main parses the command line and runs the app.
@@ -174,28 +232,19 @@ func Main(app App) {
 	}
 
 	prg := &program{}
-	s, err := service.New(prg, &service.Config{
-		Name:        app.Name,
-		DisplayName: app.DisplayName,
-		Description: app.Description,
-		Arguments:   []string{"-config", *cfgPath, "run"},
-		Option: service.KeyValue{
-			"StartType":              "automatic",
-			"DelayedAutoStart":       true,
-			"OnFailure":              "restart",
-			"OnFailureDelayDuration": "30s",
-			"OnFailureResetPeriod":   600,
-		},
-	})
+	s, err := newService(app, *cfgPath, prg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Ошибка:", err)
 		os.Exit(1)
 	}
 
 	switch cmd {
-	case "run":
+	case "run", "service":
+		if cmd == "service" {
+			asService = true
+		}
 		run, logFile, err := app.Start(*cfgPath)
-		if logFile == "" && !service.Interactive() {
+		if logFile == "" && IsService() {
 			logFile = filepath.Join(exeDir(), app.Name+".log")
 		}
 		setupLog(logFile)
@@ -210,6 +259,13 @@ func Main(app App) {
 		}
 		defer release()
 		prg.run = run
+		if cmd == "service" {
+			if err := runService(app.Name, run); err != nil {
+				log.Printf("Ошибка службы: %v", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if err := s.Run(); err != nil {
 			log.Printf("Ошибка: %v", err)
 			os.Exit(1)
@@ -250,9 +306,25 @@ func control(s service.Service, cmd string) {
 	}
 }
 
+// asService is set when the program was started with the "service" command.
+var asService bool
+
 // Interactive reports whether the program runs in a console or window
 // rather than as a service.
-func Interactive() bool { return service.Interactive() }
+func Interactive() bool { return !IsService() }
+
+// IsService reports whether the program runs as a service.
+func IsService() bool { return asService || !service.Interactive() }
+
+// teeWriter writes to the log file and copies to the console; a missing
+// console (write error) never loses the file copy.
+type teeWriter struct{ file, console io.Writer }
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	n, err := t.file.Write(p)
+	t.console.Write(p)
+	return n, err
+}
 
 // OpenBrowser opens url in the default browser (best effort).
 func OpenBrowser(url string) {

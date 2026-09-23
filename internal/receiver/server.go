@@ -45,6 +45,9 @@ type Server struct {
 
 	// Addresses actually bound (useful when configured with port 0).
 	APIAddr, UIAddr net.Addr
+
+	// Startup, when set, lets the web page manage starting with Windows.
+	Startup Startup
 }
 
 func New(cfg *config.Receiver) (*Server, error) {
@@ -331,6 +334,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/dirs", s.handleUIDirs)
 	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
 	mux.HandleFunc("/ui/api/destdir", s.handleUIDestDir)
+	mux.HandleFunc("/ui/api/startup", s.handleUIStartup)
 	return s.uiAuth(mux)
 }
 

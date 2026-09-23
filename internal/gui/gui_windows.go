@@ -119,7 +119,7 @@ type window struct {
 // Run shows the agent window (or only the tray icon when "start minimized"
 // is on) and runs the agent until the user chooses "Выход".
 func Run(cfgPath string) error {
-	detachConsole()
+	DetachConsole()
 	release, ok := svc.SingleInstance(appName)
 	if !ok {
 		// Another window is running (maybe hidden in the tray): show it.

@@ -194,3 +194,50 @@ func TestUIFolders(t *testing.T) {
 		t.Fatal("relative destination accepted")
 	}
 }
+
+type fakeStartup struct {
+	info    StartupInfo
+	actions []string
+}
+
+func (f *fakeStartup) Info() StartupInfo { return f.info }
+func (f *fakeStartup) SetAutostart(on bool) error {
+	f.info.Autostart = on
+	f.actions = append(f.actions, "autostart")
+	return nil
+}
+func (f *fakeStartup) InstallService() error {
+	f.actions = append(f.actions, "install")
+	return nil
+}
+func (f *fakeStartup) RemoveService() error {
+	f.actions = append(f.actions, "remove")
+	return nil
+}
+
+func TestUIStartup(t *testing.T) {
+	s, _ := newTestServer(t)
+	ui := s.uiHandler()
+	var info StartupInfo
+	// no control: the block is hidden (supported=false)
+	if uiCall(t, ui, "GET", "/ui/api/startup", nil, &info) != 200 || info.Supported {
+		t.Fatalf("without control: %+v", info)
+	}
+	f := &fakeStartup{info: StartupInfo{Supported: true, Mode: ModeTray, Service: "not-installed"}}
+	s.Startup = f
+	uiCall(t, ui, "POST", "/ui/api/startup", map[string]string{"action": "autostart-on"}, &info)
+	if !info.Autostart {
+		t.Fatal("autostart not switched on")
+	}
+	for _, a := range []string{"install-service", "remove-service", "autostart-off"} {
+		if code := uiCall(t, ui, "POST", "/ui/api/startup", map[string]string{"action": a}, nil); code != 200 {
+			t.Fatalf("%s: %d", a, code)
+		}
+	}
+	if strings.Join(f.actions, ",") != "autostart,install,remove,autostart" {
+		t.Fatalf("actions: %v", f.actions)
+	}
+	if uiCall(t, ui, "POST", "/ui/api/startup", map[string]string{"action": "format-c"}, nil) != 400 {
+		t.Fatal("unknown action accepted")
+	}
+}
