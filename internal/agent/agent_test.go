@@ -224,6 +224,10 @@ func TestPause(t *testing.T) {
 	if st := a.Status(); st.Uploading != "" || st.SentFiles != 0 || len(st.Failed) != 0 {
 		t.Fatalf("paused upload: %+v", st)
 	}
+	// the part already at the receiver still counts in the overall progress
+	if st := a.Status(); st.DoneBytes < 100_000 || st.DoneBytes >= int64(len(big)) {
+		t.Fatalf("overall progress while paused: %d of %d", st.DoneBytes, st.TotalBytes)
+	}
 
 	a.SetPaused(false)
 	dest := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "Light", "big.fit")
