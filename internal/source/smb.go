@@ -1,0 +1,275 @@
+package source
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"net"
+	"path"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hirochachacha/go-smb2"
+)
+
+// Credentials used when none are configured. The ASIAIR normally maps any
+// login to its guest account; "." / "123456789" is known to work on firmware
+// versions that refuse a plain guest login.
+var guestAttempts = [][2]string{{"guest", ""}, {".", "123456789"}}
+
+// SMB is a Source backed by SMB shares on the ASIAIR.
+type SMB struct {
+	host     string
+	shares   []string
+	user     string
+	password string
+	domain   string
+
+	mu      sync.Mutex
+	conn    net.Conn
+	session *smb2.Session
+	mounts  map[string]*smb2.Share
+
+	lastSkip string // last logged "share skipped" message, to avoid repeating it
+}
+
+// NewSMB creates an SMB source. Nothing is connected until first use.
+func NewSMB(l *Link, defaultShares []string, user, password, domain string) *SMB {
+	host := l.Host
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		host = net.JoinHostPort(host, "445")
+	}
+	shares := l.Shares
+	if len(shares) == 0 {
+		shares = defaultShares
+	}
+	if len(shares) == 0 {
+		shares = []string{DefaultShare}
+	}
+	if l.Username != "" {
+		user, password = l.Username, l.Password
+	}
+	return &SMB{host: host, shares: shares, user: user, password: password, domain: domain}
+}
+
+func (s *SMB) dial(ctx context.Context, user, pass string) (net.Conn, *smb2.Session, error) {
+	d := net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", s.host)
+	if err != nil {
+		return nil, nil, err
+	}
+	sd := &smb2.Dialer{Initiator: &smb2.NTLMInitiator{User: user, Password: pass, Domain: s.domain}}
+	sess, err := sd.DialContext(ctx, conn)
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	return conn, sess, nil
+}
+
+// connect returns a live session, logging in if needed. Caller holds s.mu.
+func (s *SMB) connect(ctx context.Context) error {
+	if s.session != nil {
+		return nil
+	}
+	attempts := guestAttempts
+	if s.user != "" {
+		attempts = [][2]string{{s.user, s.password}}
+	}
+	var lastErr error
+	for _, a := range attempts {
+		conn, sess, err := s.dial(ctx, a[0], a[1])
+		if err != nil {
+			lastErr = err
+			var ne net.Error
+			if errors.As(err, &ne) || ctx.Err() != nil {
+				break // network problem, other credentials will not help
+			}
+			continue
+		}
+		who := a[0]
+		if s.user == "" {
+			who = "гость (" + a[0] + ")"
+		}
+		log.Printf("ASIAIR: подключено к %s как %s", s.host, who)
+		s.conn, s.session, s.mounts = conn, sess, map[string]*smb2.Share{}
+		return nil
+	}
+	return fmt.Errorf("не удалось подключиться к ASIAIR %s: %w", s.host, lastErr)
+}
+
+func (s *SMB) share(ctx context.Context, name string) (*smb2.Share, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.connect(ctx); err != nil {
+		return nil, err
+	}
+	if m, ok := s.mounts[name]; ok {
+		return m, nil
+	}
+	m, err := s.session.Mount(name)
+	if err != nil {
+		return nil, fmt.Errorf("шара %q: %w", name, err)
+	}
+	s.mounts[name] = m
+	return m, nil
+}
+
+// reset drops the connection so the next call reconnects.
+func (s *SMB) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeLocked()
+}
+
+func (s *SMB) closeLocked() {
+	for _, m := range s.mounts {
+		m.Umount()
+	}
+	if s.session != nil {
+		s.session.Logoff()
+	}
+	if s.conn != nil {
+		s.conn.Close()
+	}
+	s.conn, s.session, s.mounts = nil, nil, nil
+}
+
+// isConnErr reports whether err means the SMB connection is broken
+// (as opposed to e.g. a missing file).
+func isConnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		return false
+	}
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		var re *smb2.ResponseError
+		if errors.As(pe.Err, &re) {
+			return false
+		}
+	}
+	return true
+}
+
+func smbPath(p string) string { return strings.ReplaceAll(p, "/", `\`) }
+
+func (s *SMB) Walk(ctx context.Context, skipDir func(string) bool, fn func(File) error) error {
+	s.mu.Lock()
+	err := s.connect(ctx)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, name := range s.shares {
+		m, err := s.share(ctx, name)
+		if err != nil {
+			// e.g. "Udisk" when no USB stick is inserted
+			errs = append(errs, err)
+			continue
+		}
+		if err := s.walkDir(ctx, m.WithContext(ctx), name, "", skipDir, fn); err != nil {
+			if isConnErr(err) {
+				s.reset()
+			}
+			return err
+		}
+	}
+	if len(errs) == len(s.shares) {
+		s.reset()
+		return errors.Join(errs...)
+	}
+	skip := fmt.Sprint(errs)
+	if len(errs) > 0 && skip != s.lastSkip {
+		for _, e := range errs {
+			log.Printf("ASIAIR: пропуск: %v", e)
+		}
+	}
+	s.lastSkip = skip
+	return nil
+}
+
+func (s *SMB) walkDir(ctx context.Context, m *smb2.Share, share, dir string, skipDir func(string) bool, fn func(File) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	name := dir
+	if name == "" {
+		name = "."
+	}
+	entries, err := m.ReadDir(smbPath(name))
+	if err != nil {
+		if !isConnErr(err) && dir != "" {
+			log.Printf("ASIAIR: не удалось прочитать папку %s/%s: %v", share, dir, err)
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		rel := path.Join(dir, e.Name())
+		full := share + "/" + rel
+		if e.IsDir() {
+			if skipDir != nil && skipDir(full) {
+				continue
+			}
+			if err := s.walkDir(ctx, m, share, rel, skipDir, fn); err != nil {
+				return err
+			}
+			continue
+		}
+		if !e.Mode().IsRegular() {
+			continue
+		}
+		if err := fn(File{Path: full, Size: e.Size(), ModTime: e.ModTime()}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SMB) Open(p string) (io.ReadSeekCloser, error) {
+	share, rest, err := SplitPath(p)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.share(context.Background(), share)
+	if err != nil {
+		return nil, err
+	}
+	f, err := m.Open(smbPath(rest))
+	if err != nil && isConnErr(err) {
+		s.reset()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+func (s *SMB) Remove(p string) error {
+	share, rest, err := SplitPath(p)
+	if err != nil {
+		return err
+	}
+	m, err := s.share(context.Background(), share)
+	if err != nil {
+		return err
+	}
+	err = m.Remove(smbPath(rest))
+	if err != nil && isConnErr(err) {
+		s.reset()
+	}
+	return err
+}
+
+func (s *SMB) Close() error {
+	s.reset()
+	return nil
+}

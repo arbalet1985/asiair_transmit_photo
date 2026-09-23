@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASIAIR — приём фото</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6a7384; --border: #dde1e7;
+    --accent: #2f6fde; --danger: #c83737; --ok: #1f8a4c; --warn: #b7791f; --row: #f0f3f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --text: #e3e7ee; --muted: #8d96a6; --border: #2c333f;
+      --accent: #5b92f0; --danger: #e86161; --ok: #4cc27f; --warn: #e0a84a; --row: #222936;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  main { padding: 16px 20px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+  .on { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .off { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+  .pend { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  button, input, select { font: inherit; color: inherit; }
+  button { border: 1px solid var(--border); background: var(--panel); padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], input[type=search], select { border: 1px solid var(--border); background: var(--bg); padding: 5px 8px; border-radius: 6px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .toolbar .spacer { flex: 1; }
+  .progress { height: 6px; background: var(--row); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .5s; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+  td.name { white-space: normal; overflow-wrap: anywhere; }
+  tr.folder td { background: var(--row); font-weight: 600; cursor: pointer; }
+  tr.file:hover td { background: var(--row); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .err { color: var(--danger); }
+  #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  #toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ASIAIR → приём фото</h1>
+  <span id="agentBadge" class="badge off">агент не на связи</span>
+  <span class="muted" id="destDir"></span>
+</header>
+<main>
+  <div class="grid">
+    <section class="panel">
+      <h2>Агент в обсерватории</h2>
+      <dl class="kv">
+        <dt>ASIAIR</dt><dd id="aAsiair">—</dd>
+        <dt>Связь</dt><dd id="aSeen">—</dd>
+        <dt>Последний обход</dt><dd id="aScan">—</dd>
+        <dt>Очередь</dt><dd id="aQueue">—</dd>
+        <dt>Отправлено</dt><dd id="aSent">—</dd>
+        <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
+      </dl>
+    </section>
+    <section class="panel">
+      <h2>Передача</h2>
+      <dl class="kv">
+        <dt>Файл</dt><dd id="uFile">—</dd>
+        <dt>Скорость</dt><dd id="uSpeed">—</dd>
+      </dl>
+      <div class="progress"><div id="uBar"></div></div>
+      <h2 style="margin-top:14px">Ограничение скорости</h2>
+      <div class="toolbar">
+        <input type="text" id="rateInput" placeholder="напр. 2MB/s, 10Mbit/s, 0" size="16">
+        <button class="primary" id="rateApply">Применить</button>
+        <button id="rateAgent" title="Использовать max_rate из конфигурации агента">Как в агенте</button>
+      </div>
+      <div class="muted" id="rateNow"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Файлы</h2>
+    <div class="toolbar">
+      <input type="search" id="filter" placeholder="Фильтр по имени или папке" size="30">
+      <select id="show">
+        <option value="all">Все</option>
+        <option value="remote">На ASIAIR</option>
+        <option value="both">Получены и есть на ASIAIR</option>
+        <option value="waiting">Ещё не получены</option>
+        <option value="localonly">Только у меня</option>
+      </select>
+      <span class="spacer"></span>
+      <span class="muted" id="selInfo"></span>
+      <label><input type="checkbox" id="alsoLocal"> удалить и у себя</label>
+      <button class="danger" id="delBtn" disabled>Удалить на ASIAIR</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th><input type="checkbox" id="selAll" title="Выбрать все видимые"></th>
+          <th>Имя</th><th class="num">Размер</th><th>Дата</th><th>У меня</th><th>ASIAIR</th>
+        </tr></thead>
+        <tbody id="files"></tbody>
+      </table>
+    </div>
+    <div class="muted" id="filesInfo" style="margin-top:8px"></div>
+  </section>
+
+  <section class="panel">
+    <div class="toolbar">
+      <h2 style="margin:0">Команды удаления</h2>
+      <span class="spacer"></span>
+      <button id="clearBtn">Очистить завершённые</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Файл</th><th>Статус</th><th>Создана</th><th></th></tr></thead>
+        <tbody id="cmds"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel muted" id="fpPanel" hidden>
+    Отпечаток сертификата (укажите в <code>receiver_fingerprint</code> у агента):<br>
+    <code id="fp"></code>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const selected = new Set();
+const collapsed = new Set();
+let state = null;
+
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + u[i];
+}
+function fmtRate(bps) { return bps > 0 ? fmtBytes(bps) + "/s" : "без ограничения"; }
+function fmtTime(t) {
+  if (!t || t.startsWith("0001")) return "—";
+  return new Date(t).toLocaleString();
+}
+function ago(t) {
+  if (!t || t.startsWith("0001")) return "никогда";
+  const s = Math.round((Date.now() - new Date(t)) / 1000);
+  if (s < 60) return s + " с назад";
+  if (s < 3600) return Math.round(s / 60) + " мин назад";
+  return fmtTime(t);
+}
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3000);
+}
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.status === 204 ? null : r.json();
+}
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props || {});
+  for (const k of kids) e.append(k);
+  return e;
+}
+
+function visibleFiles() {
+  const q = $("filter").value.trim().toLowerCase();
+  const mode = $("show").value;
+  return state.files.filter(f => {
+    if (q && !f.path.toLowerCase().includes(q)) return false;
+    switch (mode) {
+      case "remote": return f.remote;
+      case "both": return f.remote && f.local;
+      case "waiting": return f.remote && !f.local;
+      case "localonly": return f.local && !f.remote;
+    }
+    return true;
+  });
+}
+
+function renderFiles() {
+  const files = visibleFiles();
+  const tb = $("files");
+  tb.replaceChildren();
+  let folder = null;
+  for (const f of files) {
+    if (f.folder !== folder) {
+      folder = f.folder;
+      const inFolder = files.filter(x => x.folder === folder);
+      const cb = el("input", { type: "checkbox" });
+      const selectable = inFolder.filter(x => x.remote && !x.pending);
+      cb.checked = selectable.length > 0 && selectable.every(x => selected.has(x.path));
+      cb.disabled = selectable.length === 0;
+      cb.onclick = e => {
+        e.stopPropagation();
+        for (const x of selectable) cb.checked ? selected.add(x.path) : selected.delete(x.path);
+        renderFiles();
+      };
+      const size = inFolder.reduce((a, x) => a + x.size, 0);
+      const fname = folder;
+      const tr = el("tr", { className: "folder" },
+        el("td", {}, cb),
+        el("td", { className: "name", colSpan: 5 },
+          (collapsed.has(folder) ? "▸ " : "▾ ") + folder + "  ",
+          el("span", { className: "muted" }, `${inFolder.length} файл(ов), ${fmtBytes(size)}`)));
+      tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); renderFiles(); };
+      tb.append(tr);
+    }
+    if (collapsed.has(folder)) continue;
+    const cb = el("input", { type: "checkbox", checked: selected.has(f.path), disabled: !f.remote || f.pending });
+    cb.onchange = () => { cb.checked ? selected.add(f.path) : selected.delete(f.path); renderFiles(); };
+    let name = f.name;
+    if (f.local && /\.(jpe?g|png)$/i.test(f.name)) {
+      name = el("a", { href: "/ui/file?path=" + encodeURIComponent(f.path), target: "_blank", textContent: f.name });
+    }
+    let remote;
+    if (f.pending) remote = el("span", { className: "badge pend", textContent: "удаляется" });
+    else if (f.remote) remote = el("span", { className: "badge on", textContent: "есть" });
+    else remote = el("span", { className: "muted", textContent: "нет" });
+    let local;
+    if (f.local) local = el("span", { className: "badge on", textContent: "получен" });
+    else if (state.agent.uploading === f.path) local = el("span", { className: "badge pend", textContent: "передаётся" });
+    else local = el("span", { className: "muted", textContent: "ожидает" });
+    tb.append(el("tr", { className: "file" },
+      el("td", {}, cb),
+      el("td", { className: "name" }, name),
+      el("td", { className: "num", textContent: fmtBytes(f.size) }),
+      el("td", { textContent: fmtTime(f.mtime) }),
+      el("td", {}, local),
+      el("td", {}, remote)));
+  }
+  const sel = [...selected];
+  const selSize = state.files.filter(f => selected.has(f.path)).reduce((a, f) => a + f.size, 0);
+  $("selInfo").textContent = sel.length ? `выбрано: ${sel.length} (${fmtBytes(selSize)})` : "";
+  $("delBtn").disabled = sel.length === 0;
+  const vis = files.filter(f => f.remote && !f.pending);
+  $("selAll").checked = vis.length > 0 && vis.every(f => selected.has(f.path));
+  const nr = state.files.filter(f => f.remote).length, nl = state.files.filter(f => f.local).length;
+  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length}. На ASIAIR: ${nr}, получено: ${nl}. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
+}
+
+function renderCmds() {
+  const tb = $("cmds");
+  tb.replaceChildren();
+  const cmds = [...state.commands].reverse();
+  if (!cmds.length) {
+    tb.append(el("tr", {}, el("td", { colSpan: 4, className: "muted", textContent: "нет команд" })));
+    return;
+  }
+  for (const c of cmds) {
+    let st;
+    if (c.status === "pending") st = el("span", { className: "badge pend", textContent: "ожидает агента" });
+    else if (c.status === "done") st = el("span", { className: "badge on", textContent: "удалено" + (c.also_local ? " (и у меня)" : "") });
+    else st = el("span", { className: "badge off", textContent: "ошибка: " + (c.error || "") });
+    const td = el("td");
+    if (c.status === "pending") {
+      const b = el("button", { textContent: "Отменить" });
+      b.onclick = async () => { await post("/ui/api/cancel", { id: c.id }); refresh(); };
+      td.append(b);
+    }
+    tb.append(el("tr", {}, el("td", { className: "name", textContent: c.path }), el("td", {}, st),
+      el("td", { textContent: fmtTime(c.created) }), td));
+  }
+}
+
+function renderStatus() {
+  const a = state.agent;
+  $("agentBadge").className = "badge " + (state.agent_online ? "on" : "off");
+  $("agentBadge").textContent = state.agent_online ? "агент на связи" : "агент не на связи";
+  $("destDir").textContent = "Папка: " + state.dest_dir;
+  $("aAsiair").textContent = a.asiair ? `${a.asiair} — ${a.connected ? "подключено" : "нет подключения"}` : "—";
+  $("aSeen").textContent = ago(state.last_seen);
+  $("aScan").textContent = ago(a.last_scan);
+  $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
+  $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
+  $("aErr").textContent = a.last_error || "—";
+  $("uFile").textContent = a.uploading || "—";
+  $("uSpeed").textContent = state.agent_online && a.uploading ? `${fmtBytes(a.speed)}/s (лимит: ${fmtRate(a.rate)})` : `— (лимит: ${fmtRate(a.rate)})`;
+  $("uBar").style.width = a.uploading && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
+  $("rateNow").textContent = state.max_rate === null
+    ? "Сейчас: берётся из конфигурации агента"
+    : "Сейчас задано здесь: " + fmtRate(state.max_rate);
+  $("fpPanel").hidden = !state.fingerprint;
+  $("fp").textContent = state.fingerprint;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/ui/api/state");
+    if (!r.ok) throw new Error(r.statusText);
+    state = await r.json();
+    state.files = state.files || [];
+    state.commands = state.commands || [];
+    // drop selections that no longer apply
+    const ok = new Set(state.files.filter(f => f.remote && !f.pending).map(f => f.path));
+    for (const p of [...selected]) if (!ok.has(p)) selected.delete(p);
+    renderStatus(); renderFiles(); renderCmds();
+  } catch (e) {
+    $("agentBadge").className = "badge off";
+    $("agentBadge").textContent = "нет связи с приёмником";
+  }
+}
+
+$("filter").oninput = () => state && renderFiles();
+$("show").onchange = () => state && renderFiles();
+$("selAll").onchange = e => {
+  for (const f of visibleFiles()) if (f.remote && !f.pending) e.target.checked ? selected.add(f.path) : selected.delete(f.path);
+  renderFiles();
+};
+$("delBtn").onclick = async () => {
+  const paths = [...selected];
+  const also = $("alsoLocal").checked;
+  if (!confirm(`Удалить ${paths.length} файл(ов) на ASIAIR${also ? " и на этом компьютере" : ""}? Это действие необратимо.`)) return;
+  try {
+    const r = await post("/ui/api/delete", { paths, also_local: also });
+    selected.clear();
+    toast(`В очереди на удаление: ${r.queued}`);
+    refresh();
+  } catch (e) { alert("Ошибка: " + e.message); }
+};
+$("rateApply").onclick = async () => {
+  try { await post("/ui/api/rate", { rate: $("rateInput").value || "0" }); toast("Ограничение применится при следующей связи с агентом"); refresh(); }
+  catch (e) { alert("Ошибка: " + e.message); }
+};
+$("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
+$("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
