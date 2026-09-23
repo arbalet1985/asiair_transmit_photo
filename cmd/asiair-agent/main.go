@@ -31,6 +31,7 @@ func main() {
 			}
 			return a.Run, cfg.LogFile, nil
 		},
+		GUI: guiMain,
 		Commands: map[string]svc.Command{
 			"check": {Help: "проверить подключение к ASIAIR и приёмнику", Run: check},
 		},

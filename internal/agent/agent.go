@@ -60,6 +60,10 @@ type Agent struct {
 	failures map[string]int
 	status   protocol.AgentStatus
 
+	// connection to the receiver, for the window
+	lastSync time.Time
+	syncErr  string
+
 	uploadDone atomic.Int64
 }
 
@@ -499,24 +503,54 @@ func (p *progressReader) Read(b []byte) (int, error) {
 
 func (a *Agent) pollLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		if err := a.poll(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("Агент: связь с приёмником: %v", err)
+		err := a.poll(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		a.mu.Lock()
+		prev := a.syncErr
+		if err != nil {
+			a.syncErr = err.Error()
+		} else {
+			a.syncErr, a.lastSync = "", time.Now()
+		}
+		a.mu.Unlock()
+		if err != nil {
+			// log only changes, the agent keeps retrying quietly
+			if err.Error() != prev {
+				log.Printf("Агент: связь с приёмником: %v", err)
+			}
 			a.setError(err)
+		} else if prev != "" {
+			log.Printf("Агент: связь с приёмником восстановлена")
 		}
 		sleep(ctx, a.cfg.PollInterval.D())
 	}
 }
 
-func (a *Agent) poll(ctx context.Context) error {
+// Receiver reports the last successful exchange with the receiver and the
+// current connection error, if any.
+func (a *Agent) Receiver() (last time.Time, errText string) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastSync, a.syncErr
+}
+
+// Status returns a snapshot of the agent state.
+func (a *Agent) Status() protocol.AgentStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.status.UploadDone = a.uploadDone.Load()
 	if a.status.Uploading == "" {
 		a.status.UploadDone, a.status.UploadSize = 0, 0
 	}
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
-	st := a.status
-	a.mu.Unlock()
+	return a.status
+}
+
+func (a *Agent) poll(ctx context.Context) error {
+	st := a.Status()
 
 	var resp protocol.SyncResponse
 	if err := a.cl.postJSON(ctx, "/api/sync", protocol.SyncRequest{Status: st}, &resp); err != nil {
