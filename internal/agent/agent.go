@@ -59,6 +59,7 @@ type Agent struct {
 	retryAt  map[string]time.Time
 	failures map[string]int
 	failErr  map[string]string // last error per failing file
+	partial  map[string]int64  // bytes the receiver holds of interrupted files
 	files    []source.File     // files to transfer found by the last scan
 	status   protocol.AgentStatus
 
@@ -92,7 +93,8 @@ func New(cfg *config.Agent) (*Agent, error) {
 		lim: ratelimit.New(rate), localRate: rate,
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
-		wake: make(chan struct{}, 1),
+		partial: map[string]int64{},
+		wake:    make(chan struct{}, 1),
 	}
 	a.status.Version = protocol.Version
 	a.status.ASIAIR = cfg.ASIAIR
@@ -389,6 +391,11 @@ func (a *Agent) scan(ctx context.Context) error {
 			delete(a.deleted, p)
 		}
 	}
+	for p := range a.partial {
+		if !present[p] {
+			delete(a.partial, p)
+		}
+	}
 	for p := range a.retryAt {
 		if !present[p] {
 			delete(a.retryAt, p)
@@ -519,6 +526,7 @@ func (a *Agent) markSent(f source.File) {
 	delete(a.retryAt, f.Path)
 	delete(a.failures, f.Path)
 	delete(a.failErr, f.Path)
+	delete(a.partial, f.Path)
 	a.dequeue(f.Path)
 	a.status.Uploading = ""
 	a.saveState()
@@ -542,6 +550,14 @@ func (a *Agent) upload(ctx context.Context, f source.File) error {
 	}
 	if errors.Is(err, errRestart) {
 		err = errors.New("приёмник сообщает другое смещение, повтор позже")
+	}
+	if err != nil {
+		// remember how much the receiver got, for the overall progress
+		a.mu.Lock()
+		if a.status.Uploading == f.Path {
+			a.partial[f.Path] = a.uploadDone.Load()
+		}
+		a.mu.Unlock()
 	}
 	return err
 }
@@ -709,6 +725,13 @@ func (a *Agent) Status() protocol.AgentStatus {
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
 	st := a.status
+	// overall progress also counts the parts of interrupted files already at
+	// the receiver (the file being sent is counted by UploadDone)
+	for _, f := range a.files {
+		if n := a.partial[f.Path]; n > 0 && f.Path != st.Uploading && !a.isSent(f) {
+			st.DoneBytes += min(n, f.Size)
+		}
+	}
 	st.Failed = nil
 	for p, t := range a.retryAt {
 		st.Failed = append(st.Failed, protocol.FailedFile{Path: p, Error: a.failErr[p], RetryAt: t})
@@ -785,6 +808,7 @@ func (a *Agent) deleteFile(p string) error {
 		}
 	}
 	a.files = kept
+	delete(a.partial, p)
 	a.dequeue(p)
 	a.saveState()
 	a.mu.Unlock()
