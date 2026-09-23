@@ -31,6 +31,7 @@ func main() {
 			}
 			return a.Run, cfg.LogFile, nil
 		},
+		GUI: guiMain,
 		Commands: map[string]svc.Command{
 			"check": {Help: "проверить подключение к ASIAIR и приёмнику", Run: check},
 		},
@@ -71,7 +72,7 @@ func check(path string, _ []string) error {
 	}
 
 	fmt.Printf("Приёмник: %s\n", cfg.ReceiverURL)
-	if err := agent.CheckReceiver(ctx, cfg); err != nil {
+	if err := agent.CheckReceiver(ctx, cfg.ReceiverURL, cfg.Token, cfg.ReceiverFingerprint); err != nil {
 		return fmt.Errorf("приёмник: %w", err)
 	}
 	fmt.Println("Приёмник: OK")

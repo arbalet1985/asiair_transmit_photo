@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -28,6 +29,10 @@ type App struct {
 	Start func(configPath string) (run func(ctx context.Context) error, logFile string, err error)
 	// Extra commands, e.g. "check".
 	Commands map[string]Command
+	// GUI, when set, runs the windowed (tray) mode. It is used for the
+	// "gui" command and when the program is started without a command
+	// outside of a service (e.g. by double-click).
+	GUI func(configPath string) error
 }
 
 type Command struct {
@@ -79,18 +84,28 @@ func exeDir() string {
 	return filepath.Dir(exe)
 }
 
+// DefaultLogFile is the log next to the executable.
+func DefaultLogFile(name string) string {
+	return filepath.Join(exeDir(), name+".log")
+}
+
+// OpenLog opens (and rotates when large) a log file for appending.
+func OpenLog(file string) (io.Writer, error) {
+	os.MkdirAll(filepath.Dir(file), 0o755)
+	if st, err := os.Stat(file); err == nil && st.Size() > 20<<20 {
+		os.Remove(file + ".old")
+		os.Rename(file, file+".old")
+	}
+	return os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+}
+
 // setupLog writes the log to the console (when interactive) and to a file.
 func setupLog(file string) {
 	log.SetFlags(log.Ldate | log.Ltime)
 	if file == "" {
 		return
 	}
-	os.MkdirAll(filepath.Dir(file), 0o755)
-	if st, err := os.Stat(file); err == nil && st.Size() > 20<<20 {
-		os.Remove(file + ".old")
-		os.Rename(file, file+".old")
-	}
-	f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := OpenLog(file)
 	if err != nil {
 		log.Printf("Не удалось открыть журнал %s: %v", file, err)
 		return
@@ -109,7 +124,12 @@ func Main(app App) {
 	fs.Usage = func() {
 		out := fs.Output()
 		fmt.Fprintf(out, "%s — %s\n\nИспользование:\n  %s [-config файл.yaml] [команда]\n\nКоманды:\n", app.Name, app.Description, app.Name)
-		fmt.Fprintln(out, "  run        запустить в консоли (по умолчанию)")
+		if app.GUI != nil {
+			fmt.Fprintln(out, "  gui        окно со значком в трее (по умолчанию в Windows)")
+			fmt.Fprintln(out, "  run        запустить в консоли")
+		} else {
+			fmt.Fprintln(out, "  run        запустить в консоли (по умолчанию)")
+		}
 		fmt.Fprintln(out, "  install    установить как службу Windows (автозапуск)")
 		fmt.Fprintln(out, "  uninstall  удалить службу")
 		fmt.Fprintln(out, "  start      запустить службу")
@@ -124,12 +144,23 @@ func Main(app App) {
 	}
 	fs.Parse(os.Args[1:])
 	cmd := "run"
+	if app.GUI != nil && service.Interactive() && runtime.GOOS == "windows" {
+		cmd = "gui"
+	}
 	if fs.NArg() > 0 {
 		cmd = strings.ToLower(fs.Arg(0))
 	}
 	abs, err := filepath.Abs(*cfgPath)
 	if err == nil {
 		*cfgPath = abs
+	}
+
+	if cmd == "gui" && app.GUI != nil {
+		if err := app.GUI(*cfgPath); err != nil {
+			log.Printf("Ошибка: %v", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if c, ok := app.Commands[cmd]; ok {
@@ -171,6 +202,12 @@ func Main(app App) {
 			log.Printf("Ошибка запуска: %v", err)
 			os.Exit(1)
 		}
+		release, ok := SingleInstance(app.Name)
+		if !ok {
+			log.Printf("%s уже запущен (служба или окно в трее)", app.Name)
+			os.Exit(1)
+		}
+		defer release()
 		prg.run = run
 		if err := s.Run(); err != nil {
 			log.Printf("Ошибка: %v", err)

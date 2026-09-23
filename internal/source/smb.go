@@ -35,6 +35,7 @@ type SMB struct {
 	mounts  map[string]*smb2.Share
 
 	lastSkip string // last logged "share skipped" message, to avoid repeating it
+	login    string // how the current session logged in
 }
 
 // NewSMB creates an SMB source. Nothing is connected until first use.
@@ -96,6 +97,7 @@ func (s *SMB) connect(ctx context.Context) error {
 			who = "гость (" + a[0] + ")"
 		}
 		log.Printf("ASIAIR: подключено к %s как %s", s.host, who)
+		s.login = who
 		s.conn, s.session, s.mounts = conn, sess, map[string]*smb2.Share{}
 		return nil
 	}
@@ -272,4 +274,33 @@ func (s *SMB) Remove(p string) error {
 func (s *SMB) Close() error {
 	s.reset()
 	return nil
+}
+
+func (s *SMB) Probe(ctx context.Context) (*ProbeResult, error) {
+	s.mu.Lock()
+	err := s.connect(ctx)
+	login := s.login
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	res := &ProbeResult{Login: login}
+	ok := false
+	for _, name := range s.shares {
+		sp := ShareProbe{Name: name}
+		m, err := s.share(ctx, name)
+		if err == nil {
+			var entries []fs.FileInfo
+			entries, err = m.WithContext(ctx).ReadDir(".")
+			sp.Entries = len(entries)
+		}
+		sp.Err = err
+		ok = ok || err == nil
+		res.Shares = append(res.Shares, sp)
+	}
+	if !ok {
+		s.reset()
+		return res, fmt.Errorf("ни одна шара не доступна (%s)", strings.Join(s.shares, ", "))
+	}
+	return res, nil
 }
