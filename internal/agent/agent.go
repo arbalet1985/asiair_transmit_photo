@@ -68,8 +68,11 @@ type Agent struct {
 
 	uploadDone atomic.Int64
 
-	// pause: no uploads while set; scanning and commands from the receiver go on
+	// pause: no uploads while set; scanning and commands from the receiver go on.
+	// It is set from the agent window (local) or from the receiver page (remote).
 	paused       atomic.Bool
+	localPause   bool          // guarded by mu
+	remotePause  bool          // guarded by mu
 	wake         chan struct{} // wakes the transfer loop on pause changes
 	cancelUpload context.CancelFunc
 }
@@ -175,18 +178,47 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// SetPaused pauses or resumes the transfer. Pausing interrupts the file
-// being sent; the receiver keeps the part already received, so it is
-// resumed from there later.
+// SetPaused pauses or resumes the transfer from the agent window. Pausing
+// interrupts the file being sent; the receiver keeps the part already
+// received, so it is resumed from there later.
 func (a *Agent) SetPaused(p bool) {
-	if a.paused.Swap(p) == p {
-		return
-	}
 	a.mu.Lock()
-	a.status.Paused = p
+	changed := a.localPause != p
+	a.localPause = p
+	a.mu.Unlock()
+	if changed {
+		a.applyPause(p, "в окне агента")
+	}
+}
+
+// setRemotePaused applies the pause set on the receiver page.
+func (a *Agent) setRemotePaused(p bool) {
+	a.mu.Lock()
+	changed := a.remotePause != p
+	a.remotePause = p
+	a.mu.Unlock()
+	if changed {
+		a.applyPause(p, "на приёмнике")
+	}
+}
+
+// applyPause recomputes the pause from both sources; where names the source
+// of the change for the log.
+func (a *Agent) applyPause(p bool, where string) {
+	a.mu.Lock()
+	on := a.localPause || a.remotePause
+	a.status.Paused, a.status.LocalPause, a.status.RemotePause = on, a.localPause, a.remotePause
 	cancel := a.cancelUpload
 	a.mu.Unlock()
 	if p {
+		log.Printf("Агент: пауза %s", where)
+	} else {
+		log.Printf("Агент: пауза %s снята", where)
+	}
+	if a.paused.Swap(on) == on {
+		return
+	}
+	if on {
 		log.Printf("Агент: передача приостановлена")
 		if cancel != nil {
 			cancel()
@@ -703,6 +735,7 @@ func (a *Agent) poll(ctx context.Context) error {
 		log.Printf("Агент: ограничение скорости: %s", config.FormatRate(rate))
 		a.lim.SetRate(rate)
 	}
+	a.setRemotePaused(resp.Paused)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {
 			return nil

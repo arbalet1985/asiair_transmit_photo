@@ -327,6 +327,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/state", s.handleUIState)
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
+	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
@@ -368,6 +369,7 @@ type uiState struct {
 	Files         []uiFile             `json:"files"`
 	Commands      []*Command           `json:"commands"`
 	MaxRate       *int64               `json:"max_rate"`
+	Paused        bool                 `json:"paused"`
 	Agent         protocol.AgentStatus `json:"agent"`
 	AgentOnline   bool                 `json:"agent_online"`
 	LastSeen      time.Time            `json:"last_seen"`
@@ -394,6 +396,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Totals:        totals,
 		Commands:      snap.Commands,
 		MaxRate:       snap.MaxRate,
+		Paused:        snap.Paused,
 		Agent:         snap.Status,
 		LastSeen:      snap.LastSeen,
 		AgentOnline:   online,
@@ -454,6 +457,25 @@ func (s *Server) handleUIRate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Приёмник: ограничение скорости — из настроек агента")
 	} else {
 		log.Printf("Приёмник: ограничение скорости: %s", config.FormatRate(*bps))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleUIPause(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paused bool `json:"paused"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if err := s.state.SetPaused(req.Paused); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if req.Paused {
+		log.Printf("Приёмник: передача поставлена на паузу")
+	} else {
+		log.Printf("Приёмник: пауза снята")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

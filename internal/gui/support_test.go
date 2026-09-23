@@ -2,7 +2,10 @@ package gui
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
 
 func TestLogBuffer(t *testing.T) {
@@ -71,5 +74,14 @@ func TestFormatETA(t *testing.T) {
 		if got := formatETA(sec); got != want {
 			t.Errorf("formatETA(%v) = %q, want %q", sec, got, want)
 		}
+	}
+}
+
+func TestPauseLabel(t *testing.T) {
+	if got := pauseLabel(protocol.AgentStatus{Paused: true, RemotePause: true}); got != "пауза на приёмнике" {
+		t.Fatalf("remote: %q", got)
+	}
+	if got := pauseLabel(protocol.AgentStatus{Paused: true, LocalPause: true}); !strings.Contains(got, "Продолжить") {
+		t.Fatalf("local: %q", got)
 	}
 }

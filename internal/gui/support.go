@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
 
 // Settings are the window options, stored next to the agent configuration.
@@ -221,4 +223,15 @@ func formatETA(sec float64) string {
 		return fmt.Sprintf("~%d мин", m)
 	}
 	return fmt.Sprintf("~%d ч %d мин", m/60, m%60)
+}
+
+// pauseLabel says where the transfer was paused.
+func pauseLabel(st protocol.AgentStatus) string {
+	switch {
+	case st.LocalPause && st.RemotePause:
+		return "пауза здесь и на приёмнике"
+	case st.RemotePause:
+		return "пауза на приёмнике"
+	}
+	return "пауза — нажмите «Продолжить»"
 }

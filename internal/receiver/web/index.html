@@ -119,6 +119,10 @@
     </section>
     <section class="panel">
       <h2>Передача</h2>
+      <div class="toolbar">
+        <button class="primary" id="pauseBtn">Пауза</button>
+        <span class="muted" id="pauseNow"></span>
+      </div>
       <div class="xfer">
         <h3>Текущий файл</h3>
         <div class="line" id="uFile">—</div>
@@ -480,7 +484,15 @@ function renderStatus() {
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
   $("aErr").textContent = a.last_error || "—";
   const up = state.agent_online && a.uploading;
-  $("uFile").textContent = up ? a.uploading : (state.agent_online && a.paused ? "пауза (включена в окне агента)" : "нет");
+  $("uFile").textContent = up ? a.uploading : (state.agent_online && a.paused ? "пауза" : "нет");
+  $("pauseBtn").textContent = state.paused ? "Продолжить" : "Пауза";
+  let pn = "";
+  if (state.paused) pn = !state.agent_online ? "агент встанет на паузу, когда выйдет на связь"
+    : !a.remote_pause ? "пауза включится при следующей связи с агентом"
+    : "передача на паузе; текущий файл потом докачается с того же места";
+  else if (state.agent_online && a.remote_pause) pn = "пауза снимется при следующей связи с агентом";
+  if (state.agent_online && a.local_pause) pn += (pn ? "; " : "") + "в окне агента тоже включена пауза — снимается там";
+  $("pauseNow").textContent = pn;
   $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
   if (up && a.upload_size) {
     const left = a.speed > 0 ? fmtDur((a.upload_size - a.upload_done) / a.speed) : "";
@@ -546,6 +558,10 @@ $("delBtn").onclick = async () => {
 };
 $("rateApply").onclick = async () => {
   try { await post("/ui/api/rate", { rate: $("rateInput").value || "0" }); toast("Ограничение применится при следующей связи с агентом"); refresh(); }
+  catch (e) { alert("Ошибка: " + e.message); }
+};
+$("pauseBtn").onclick = async () => {
+  try { await post("/ui/api/pause", { paused: !state.paused }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
 };
 $("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
