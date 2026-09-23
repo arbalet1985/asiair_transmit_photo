@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,6 +32,9 @@ const (
 	windowTitle = "ASIAIR Agent — передача снимков"
 )
 
+// errNotConfigured: agent.yaml still holds the example placeholders.
+var errNotConfigured = errors.New("настройки не заполнены")
+
 // runner starts and stops the agent inside the window process.
 type runner struct {
 	mu     sync.Mutex
@@ -45,6 +49,9 @@ func (r *runner) start(cfgPath string) {
 	defer r.mu.Unlock()
 	r.agent, r.err = nil, nil
 	cfg, err := config.LoadAgent(cfgPath)
+	if err == nil && (placeholders[cfg.Token] || strings.Contains(cfg.ReceiverURL, "my-home.example.com")) {
+		err = errNotConfigured
+	}
 	if err == nil {
 		r.agent, err = agent.New(cfg)
 	}
@@ -89,7 +96,6 @@ type window struct {
 	settingsPath string
 	settings     Settings
 	logs         *LogBuffer
-	logLines     int
 	run          runner
 
 	mw        *walk.MainWindow
@@ -100,7 +106,10 @@ type window struct {
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
 	progress                                                             *walk.ProgressBar
 	cbAutostart, cbMinimized                                             *walk.CheckBox
-	logView                                                              *walk.TextEdit
+	logView                                                              *walk.ListBox
+	logModel                                                             *logModel
+	tabs                                                                 *walk.TabWidget
+	form                                                                 settingsForm
 
 	ready    bool // set after the window is built; checkbox handlers ignore the initial state
 	quitting bool
@@ -135,9 +144,17 @@ func Run(cfgPath string) error {
 		cfgPath:      cfgPath,
 		settingsPath: SettingsPath(cfgPath),
 		logs:         NewLogBuffer(500),
+		logModel:     &logModel{},
 	}
 	w.settings = LoadSettings(w.settingsPath)
 	w.setupLog()
+	defer func() {
+		// the window has no console: make crashes visible in the log
+		if r := recover(); r != nil {
+			log.Printf("Сбой: %v\n%s", r, debug.Stack())
+			panic(r)
+		}
+	}()
 	refreshAutostart(cfgPath)
 	created := w.ensureConfig()
 
@@ -146,15 +163,17 @@ func Run(cfgPath string) error {
 	}
 	defer w.ni.Dispose()
 
-	w.run.start(cfgPath)
-	w.update()
-	if created {
-		walk.MsgBox(w.mw, "ASIAIR Agent",
-			"Создан файл настроек:\n"+cfgPath+"\n\n"+
-				"Укажите адрес ASIAIR, адрес приёмника и токен, сохраните файл "+
-				"и нажмите «Перезапустить агент».", walk.MsgBoxIconInformation)
-		w.openConfig()
+	w.loadForm()
+	if !created {
+		w.run.start(cfgPath)
 	}
+	if _, err := w.run.state(); created || err != nil {
+		// nothing runs yet: ask for the connection settings first
+		w.tabs.SetCurrentIndex(1)
+		w.show()
+		log.Printf("Заполните настройки подключения и нажмите «Сохранить и применить»")
+	}
+	w.update()
 
 	stop := make(chan struct{})
 	go func() {
@@ -206,56 +225,52 @@ func (w *window) create() error {
 	err := MainWindow{
 		AssignTo: &w.mw,
 		Title:    windowTitle,
-		MinSize:  Size{Width: 520, Height: 460},
-		Size:     Size{Width: 700, Height: 560},
+		MinSize:  Size{Width: 560, Height: 520},
+		Size:     Size{Width: 720, Height: 600},
 		Visible:  !minimized,
 		Layout:   VBox{},
 		Children: []Widget{
-			GroupBox{
-				Title:  "Состояние",
-				Layout: Grid{Columns: 2, Spacing: 6},
-				Children: []Widget{
-					Label{Text: "ASIAIR:"}, Label{AssignTo: &w.lblASIAIR, Text: "—"},
-					Label{Text: "Приёмник:"}, Label{AssignTo: &w.lblReceiver, Text: "—"},
-					Label{Text: "Передаётся:"}, Label{AssignTo: &w.lblFile, Text: "—"},
-					Label{Text: ""}, ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
-					Label{Text: "Скорость:"}, Label{AssignTo: &w.lblSpeed, Text: "—"},
-					Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
-					Label{Text: "Отправлено:"}, Label{AssignTo: &w.lblSent, Text: "—"},
-					Label{Text: "Ошибка:"}, Label{AssignTo: &w.lblErr, Text: "—", TextColor: walk.RGB(200, 40, 40)},
-				},
-			},
-			GroupBox{
-				Title:  "Запуск",
-				Layout: VBox{Alignment: AlignHNearVCenter},
-				Children: []Widget{
-					CheckBox{
-						AssignTo:            &w.cbAutostart,
-						Text:                "Запускать автоматически при входе в Windows (автозагрузка)",
-						Checked:             AutostartEnabled(),
-						OnCheckStateChanged: w.onAutostart,
+			TabWidget{
+				AssignTo: &w.tabs,
+				Pages: []TabPage{
+					{
+						Title:  "Состояние",
+						Layout: VBox{},
+						Children: []Widget{
+							GroupBox{
+								Title:  "Состояние",
+								Layout: Grid{Columns: 2, Spacing: 6},
+								Children: []Widget{
+									Label{Text: "ASIAIR:"}, Label{AssignTo: &w.lblASIAIR, Text: "—"},
+									Label{Text: "Приёмник:"}, Label{AssignTo: &w.lblReceiver, Text: "—"},
+									Label{Text: "Передаётся:"}, Label{AssignTo: &w.lblFile, Text: "—"},
+									Label{Text: ""}, ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
+									Label{Text: "Скорость:"}, Label{AssignTo: &w.lblSpeed, Text: "—"},
+									Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
+									Label{Text: "Отправлено:"}, Label{AssignTo: &w.lblSent, Text: "—"},
+									Label{Text: "Ошибка:"}, Label{AssignTo: &w.lblErr, Text: "—", TextColor: walk.RGB(200, 40, 40)},
+								},
+							},
+							GroupBox{
+								Title:         "Журнал",
+								Layout:        VBox{},
+								StretchFactor: 1,
+								Children: []Widget{
+									ListBox{AssignTo: &w.logView, Model: w.logModel, MinSize: Size{Height: 120}},
+								},
+							},
+						},
 					},
-					CheckBox{
-						AssignTo:            &w.cbMinimized,
-						Text:                "Запускать свёрнутым в трей",
-						Checked:             minimized,
-						OnCheckStateChanged: w.onMinimized,
+					{
+						Title:    "Настройки",
+						Layout:   VBox{},
+						Children: w.settingsPage(minimized),
 					},
-					HSpacer{}, // let the box take the full width
-				},
-			},
-			GroupBox{
-				Title:         "Журнал",
-				Layout:        VBox{},
-				StretchFactor: 1,
-				Children: []Widget{
-					TextEdit{AssignTo: &w.logView, ReadOnly: true, VScroll: true, MinSize: Size{Height: 120}},
 				},
 			},
 			Composite{
 				Layout: HBox{MarginsZero: true},
 				Children: []Widget{
-					PushButton{Text: "Настройки…", OnClicked: w.openConfig},
 					PushButton{Text: "Перезапустить агент", OnClicked: w.restart},
 					PushButton{Text: "Открыть журнал", OnClicked: w.openLog},
 					HSpacer{},
@@ -299,7 +314,8 @@ func (w *window) create() error {
 		a.Triggered().Attach(fn)
 		w.ni.ContextMenu().Actions().Add(a)
 	}
-	addAction("Открыть окно", w.show)
+	addAction("Открыть окно", func() { w.tabs.SetCurrentIndex(0); w.show() })
+	addAction("Настройки", func() { w.tabs.SetCurrentIndex(1); w.show() })
 	addAction("Перезапустить агент", w.restart)
 	w.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	addAction("Выход", w.quit)
@@ -327,19 +343,12 @@ func (w *window) create() error {
 	return nil
 }
 
+// appendLog adds a line to the log list and scrolls to it.
 func (w *window) appendLog(line string) {
-	if w.logLines >= 1000 {
-		// keep the view short: reload the last lines
-		lines := w.logs.Lines()
-		if len(lines) > 300 {
-			lines = lines[len(lines)-300:]
-		}
-		w.logView.SetText(strings.Join(lines, "\r\n") + "\r\n")
-		w.logLines = len(lines)
-		return
+	w.logModel.add(line)
+	if n := w.logModel.ItemCount(); n > 0 {
+		w.logView.EnsureItemVisible(n - 1)
 	}
-	w.logView.AppendText(line + "\r\n")
-	w.logLines++
 }
 
 func (w *window) show() {
@@ -374,13 +383,6 @@ func (w *window) restart() {
 		w.run.start(w.cfgPath)
 		w.mw.Synchronize(w.update)
 	}()
-}
-
-func (w *window) openConfig() {
-	w.ensureConfig()
-	if err := exec.Command("notepad.exe", w.cfgPath).Start(); err != nil {
-		walk.MsgBox(w.mw, "ASIAIR Agent", "Не удалось открыть "+w.cfgPath+": "+err.Error(), walk.MsgBoxIconError)
-	}
 }
 
 func (w *window) openLog() {
@@ -447,13 +449,15 @@ func (w *window) update() {
 	a, cfgErr := w.run.state()
 	if a == nil {
 		msg := "агент не запущен"
-		if cfgErr != nil {
+		if errors.Is(cfgErr, errNotConfigured) {
+			msg = "заполните настройки на вкладке «Настройки»"
+		} else if cfgErr != nil {
 			msg = "ошибка в настройках: " + cfgErr.Error()
 		}
 		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent} {
 			l.SetText("—")
 		}
-		w.lblErr.SetText(msg)
+		setShort(w.lblErr, msg, maxStatus)
 		w.progress.SetValue(0)
 		w.setTray(StateStopped, "ASIAIR Agent — "+msg)
 		return
@@ -463,11 +467,11 @@ func (w *window) update() {
 
 	switch {
 	case st.LastScan.IsZero() && st.LastError == "":
-		w.lblASIAIR.SetText(st.ASIAIR + " — подключение…")
+		setShort(w.lblASIAIR, st.ASIAIR+" — подключение…", maxStatus)
 	case st.Connected:
-		w.lblASIAIR.SetText(fmt.Sprintf("%s — подключено, обход %s", st.ASIAIR, ago(st.LastScan)))
+		setShort(w.lblASIAIR, fmt.Sprintf("%s — подключено, обход %s", st.ASIAIR, ago(st.LastScan)), maxStatus)
 	default:
-		w.lblASIAIR.SetText(st.ASIAIR + " — нет связи")
+		setShort(w.lblASIAIR, st.ASIAIR+" — нет связи", maxStatus)
 	}
 	switch {
 	case syncErr != "":
@@ -478,7 +482,7 @@ func (w *window) update() {
 		w.lblReceiver.SetText("на связи (" + ago(lastSync) + ")")
 	}
 	if st.Uploading != "" {
-		w.lblFile.SetText(st.Uploading)
+		setShortTail(w.lblFile, st.Uploading, maxStatus)
 		if st.UploadSize > 0 {
 			w.progress.SetValue(int(st.UploadDone * 1000 / st.UploadSize))
 		}
@@ -497,7 +501,7 @@ func (w *window) update() {
 	if errText == "" {
 		errText = "—"
 	}
-	w.lblErr.SetText(errText)
+	setShort(w.lblErr, errText, maxStatus)
 
 	state, tip := trayState(st, syncErr)
 	w.setTray(state, tip)

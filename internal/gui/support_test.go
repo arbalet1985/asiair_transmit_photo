@@ -47,3 +47,15 @@ func TestIconImage(t *testing.T) {
 		}
 	}
 }
+
+func TestShorten(t *testing.T) {
+	if Shorten("короткий", 10) != "короткий" {
+		t.Fatal("short text changed")
+	}
+	if got := Shorten("абвгдежзик", 5); got != "абвг…" {
+		t.Fatalf("Shorten = %q", got)
+	}
+	if got := ShortenTail("a/b/c/file.fit", 8); got != "…ile.fit" {
+		t.Fatalf("ShortenTail = %q", got)
+	}
+}

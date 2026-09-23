@@ -160,4 +160,19 @@ func TestEndToEnd(t *testing.T) {
 		!strings.Contains(err.Error(), "отпечаток") {
 		t.Fatalf("wrong fingerprint accepted: %v", err)
 	}
+
+	// helpers used by the settings form
+	fp, err := FetchFingerprint(context.Background(), acfg.ReceiverURL)
+	if err != nil || fp != srv.Fingerprint() {
+		t.Fatalf("FetchFingerprint = %q, %v; want %q", fp, err, srv.Fingerprint())
+	}
+	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "secret", fp); err != nil {
+		t.Fatalf("CheckReceiver: %v", err)
+	}
+	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "bad", fp); err == nil || !strings.Contains(err.Error(), "токен") {
+		t.Fatalf("CheckReceiver with bad token: %v", err)
+	}
+	if res, err := a.src.Probe(context.Background()); err != nil || len(res.Shares) != 1 || res.Shares[0].Entries != 2 {
+		t.Fatalf("Probe: %+v %v", res, err)
+	}
 }

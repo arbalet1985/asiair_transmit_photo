@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
 
@@ -122,12 +121,40 @@ func httpErr(resp *http.Response) error {
 }
 
 // CheckReceiver verifies that the receiver is reachable and accepts the token.
-func CheckReceiver(ctx context.Context, cfg *config.Agent) error {
-	c, err := newClient(cfg.ReceiverURL, cfg.Token, cfg.ReceiverFingerprint)
+func CheckReceiver(ctx context.Context, receiverURL, token, fingerprint string) error {
+	c, err := newClient(receiverURL, token, fingerprint)
 	if err != nil {
 		return err
 	}
-	st := protocol.AgentStatus{Version: protocol.Version, ASIAIR: cfg.ASIAIR}
+	st := protocol.AgentStatus{Version: protocol.Version}
 	var resp protocol.SyncResponse
-	return c.postJSON(ctx, "/api/sync", protocol.SyncRequest{Status: st}, &resp)
+	err = c.postJSON(ctx, "/api/sync", protocol.SyncRequest{Status: st}, &resp)
+	var he *HTTPError
+	if errors.As(err, &he) && he.Code == http.StatusUnauthorized {
+		return errors.New("приёмник отклонил токен: он должен совпадать с token в receiver.yaml")
+	}
+	return err
+}
+
+// FetchFingerprint connects to an https receiver and returns the SHA-256
+// fingerprint of its certificate, so the user can confirm and pin it.
+func FetchFingerprint(ctx context.Context, receiverURL string) (string, error) {
+	u, err := url.Parse(receiverURL)
+	if err != nil || u.Scheme != "https" {
+		return "", errors.New("отпечаток есть только у https-адреса")
+	}
+	d := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: 20 * time.Second},
+		Config:    &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+	}
+	conn, err := d.DialContext(ctx, "tcp", u.Host)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "", errors.New("приёмник не прислал сертификат")
+	}
+	return protocol.Fingerprint(certs[0].Raw), nil
 }

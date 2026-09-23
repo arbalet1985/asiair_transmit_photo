@@ -85,6 +85,14 @@ func (d *Dir) Remove(p string) error {
 
 func (d *Dir) Close() error { return nil }
 
+func (d *Dir) Probe(ctx context.Context) (*ProbeResult, error) {
+	entries, err := os.ReadDir(d.root)
+	if err != nil {
+		return nil, err
+	}
+	return &ProbeResult{Login: "локальная папка", Shares: []ShareProbe{{Name: d.share, Entries: len(entries)}}}, nil
+}
+
 // New creates the Source described by the link.
 func New(link string, defaultShares []string, user, password, domain string) (Source, error) {
 	l, err := ParseLink(link)

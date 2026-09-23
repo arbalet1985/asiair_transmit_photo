@@ -175,3 +175,30 @@ func inMark(x, y float64) bool {
 	}
 	return false
 }
+
+// Label length limits (in characters). Long texts are shortened in the
+// window and shown in full in the tooltip and the log: a label wider than the
+// window forces a relayout, which some Windows-compatible environments (Wine)
+// do not survive.
+const (
+	maxResult = 70
+	maxStatus = 80
+)
+
+// Shorten cuts s to n characters, ending with "…".
+func Shorten(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// ShortenTail keeps the end of s (useful for file paths).
+func ShortenTail(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return "…" + string(r[len(r)-n+1:])
+}

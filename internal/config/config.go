@@ -106,9 +106,16 @@ func resolve(base, p string) string {
 	return filepath.Join(filepath.Dir(base), p)
 }
 
-// LoadAgent reads and validates the agent configuration.
-func LoadAgent(path string) (*Agent, error) {
-	c := &Agent{
+// PeekAgent reads the agent configuration without validating it (for the
+// settings form, which must open even when required fields are empty).
+func PeekAgent(path string) *Agent {
+	c := agentDefaults()
+	load(path, c)
+	return c
+}
+
+func agentDefaults() *Agent {
+	return &Agent{
 		ScanInterval: Duration(time.Minute),
 		PollInterval: Duration(15 * time.Second),
 		MinFileAge:   Duration(30 * time.Second),
@@ -117,6 +124,11 @@ func LoadAgent(path string) (*Agent, error) {
 		Extensions:   []string{".fit", ".fits", ".fts", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".xisf"},
 		Exclude:      []string{"Thumbnail"},
 	}
+}
+
+// LoadAgent reads and validates the agent configuration.
+func LoadAgent(path string) (*Agent, error) {
+	c := agentDefaults()
 	if err := load(path, c); err != nil {
 		return nil, err
 	}

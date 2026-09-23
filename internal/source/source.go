@@ -33,6 +33,21 @@ type Source interface {
 	Open(path string) (io.ReadSeekCloser, error)
 	Remove(path string) error
 	Close() error
+	// Probe connects and lists the top of each share, without walking the
+	// whole tree: a quick availability check.
+	Probe(ctx context.Context) (*ProbeResult, error)
+}
+
+// ProbeResult describes what a quick check found.
+type ProbeResult struct {
+	Login  string // how the connection was authenticated, e.g. "гость (guest)"
+	Shares []ShareProbe
+}
+
+type ShareProbe struct {
+	Name    string
+	Entries int   // files and folders at the top of the share
+	Err     error // share not available (e.g. "Udisk" without a USB stick)
 }
 
 // Link is a parsed ASIAIR link.
