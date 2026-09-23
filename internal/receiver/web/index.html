@@ -52,6 +52,19 @@
   .muted { color: var(--muted); }
   a { color: var(--accent); }
   .err { color: var(--danger); }
+  code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+  .field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 10px; }
+  .field .value { flex: 1 1 260px; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+  .label { color: var(--muted); font-size: 12px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); padding: 16px; width: min(640px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0, 0, 0, .45); }
+  dialog h2 { font-size: 15px; margin: 0 0 10px; }
+  .crumbs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .dirlist { border: 1px solid var(--border); border-radius: 6px; height: 300px; overflow-y: auto; margin-bottom: 10px; }
+  .dirlist div { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .dirlist div:hover { background: var(--row); }
+  .dirlist .empty { color: var(--muted); cursor: default; }
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
 </style>
@@ -89,6 +102,55 @@
         <button id="rateAgent" title="Использовать max_rate из конфигурации агента">Как в агенте</button>
       </div>
       <div class="muted" id="rateNow"></div>
+    </section>
+  </div>
+
+  <div class="grid" id="setupGrid">
+    <section class="panel">
+      <h2>Папка для снимков</h2>
+      <div class="field">
+        <span class="value mono" id="destPath">—</span>
+        <button id="destChange">Изменить…</button>
+      </div>
+      <div class="hint">Структура папок ASIAIR сохраняется внутри этой папки. Уже полученные снимки при смене папки остаются на старом месте.</div>
+    </section>
+    <section class="panel" id="startupPanel" hidden>
+      <h2>Запуск на этом компьютере</h2>
+      <div class="label">Сейчас приёмник работает</div>
+      <div class="field"><span class="value" id="suMode">—</span></div>
+      <div id="suUser">
+        <label><input type="checkbox" id="suAuto"> Запускать при входе в Windows (значок в трее)</label>
+        <div class="hint">Права администратора не нужны. Приёмник стартует, когда вы входите в Windows.</div>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="primary" id="suInstall">Установить как службу Windows…</button>
+        </div>
+        <div class="hint">Служба работает сразу после включения компьютера, даже если никто не вошёл в Windows. Windows попросит подтвердить права администратора; после этого приёмник сам переключится на службу, а страница обновится.</div>
+      </div>
+      <div id="suSvc">
+        <div class="toolbar"><button id="suRemove">Удалить службу…</button></div>
+        <div class="hint" id="suSvcHint"></div>
+      </div>
+      <div class="err" id="suErr"></div>
+    </section>
+    <section class="panel">
+      <h2>Подключение агента</h2>
+      <div class="label">Эти данные нужно ввести в окне агента в обсерватории (вкладка «Настройки»).</div>
+      <div class="label" style="margin-top:8px">Адрес</div>
+      <div class="field"><span class="value">внешний IP или имя этого компьютера (порт <b id="cPort">—</b> должен быть открыт)</span></div>
+      <div class="label">Токен</div>
+      <div class="field">
+        <span class="value mono" id="cToken">••••••••••••</span>
+        <button id="cTokenShow">Показать</button>
+        <button id="cTokenCopy">Копировать</button>
+        <button id="cTokenNew" title="Создать новый токен; старый перестанет работать">Новый…</button>
+      </div>
+      <div id="cFpBlock">
+        <div class="label">Отпечаток сертификата (для сверки при первой проверке в агенте)</div>
+        <div class="field">
+          <span class="value mono" id="cFp">—</span>
+          <button id="cFpCopy">Копировать</button>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -134,11 +196,24 @@
     </div>
   </section>
 
-  <section class="panel muted" id="fpPanel" hidden>
-    Отпечаток сертификата (укажите в <code>receiver_fingerprint</code> у агента):<br>
-    <code id="fp"></code>
-  </section>
 </main>
+<dialog id="dirDlg">
+  <h2>Выбор папки для снимков</h2>
+  <div class="crumbs" id="dirRoots"></div>
+  <div class="field">
+    <input type="text" id="dirPath" class="mono" style="flex:1 1 300px" placeholder="например D:\Astro\ASIAIR">
+    <button id="dirGo">Перейти</button>
+  </div>
+  <div class="dirlist" id="dirList"></div>
+  <div class="toolbar">
+    <button id="dirUp">↑ Вверх</button>
+    <button id="dirNew">Новая папка…</button>
+    <span class="spacer"></span>
+    <button id="dirCancel">Отмена</button>
+    <button class="primary" id="dirChoose">Выбрать эту папку</button>
+  </div>
+  <div class="err" id="dirErr"></div>
+</dialog>
 <div id="toast"></div>
 
 <script>
@@ -300,8 +375,9 @@ function renderStatus() {
   $("rateNow").textContent = state.max_rate === null
     ? "Сейчас: берётся из конфигурации агента"
     : "Сейчас задано здесь: " + fmtRate(state.max_rate);
-  $("fpPanel").hidden = !state.fingerprint;
-  $("fp").textContent = state.fingerprint;
+  $("destPath").textContent = state.dest_dir;
+  // until the agent has connected once, setup comes first
+  $("setupGrid").style.order = (!state.last_seen || state.last_seen.startsWith("0001")) ? -1 : 0;
 }
 
 async function refresh() {
@@ -345,6 +421,124 @@ $("rateApply").onclick = async () => {
 $("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
 $("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
 
+// ---------- connection data ----------
+let conn = null, tokenShown = false;
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const t = el("textarea", { value: text });
+    document.body.append(t); t.select(); document.execCommand("copy"); t.remove();
+  }
+  toast("Скопировано");
+}
+function renderConn() {
+  if (!conn) return;
+  $("cPort").textContent = conn.port;
+  $("cToken").textContent = tokenShown ? conn.token : "•".repeat(12);
+  $("cTokenShow").textContent = tokenShown ? "Скрыть" : "Показать";
+  $("cFpBlock").hidden = !conn.tls;
+  $("cFp").textContent = conn.fingerprint || "—";
+}
+async function loadConn() {
+  try { conn = await (await fetch("/ui/api/connect")).json(); renderConn(); } catch (e) {}
+}
+$("cTokenShow").onclick = () => { tokenShown = !tokenShown; renderConn(); };
+$("cTokenCopy").onclick = () => conn && copyText(conn.token);
+$("cFpCopy").onclick = () => conn && copyText(conn.fingerprint);
+$("cTokenNew").onclick = async () => {
+  if (!confirm("Создать новый токен? Агент перестанет подключаться, пока вы не введёте новый токен в его настройках.")) return;
+  try { const r = await post("/ui/api/token"); conn.token = r.token; tokenShown = true; renderConn(); toast("Новый токен создан"); }
+  catch (e) { alert("Ошибка: " + e.message); }
+};
+
+// ---------- folder picker ----------
+let dirCur = "";
+async function openDir(path) {
+  $("dirErr").textContent = "";
+  try {
+    const r = await fetch("/ui/api/dirs?path=" + encodeURIComponent(path || ""));
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    dirCur = d.path;
+    $("dirPath").value = d.path;
+    $("dirUp").disabled = !d.parent;
+    $("dirUp").onclick = () => openDir(d.parent);
+    $("dirRoots").replaceChildren(el("span", { className: "label", textContent: "Диски:" }),
+      ...d.roots.map(root => { const b = el("button", { textContent: root }); b.onclick = () => openDir(root); return b; }));
+    const list = $("dirList");
+    list.replaceChildren();
+    if (!d.dirs.length) list.append(el("div", { className: "empty", textContent: "вложенных папок нет" }));
+    for (const dir of d.dirs) {
+      const item = el("div", { textContent: "📁 " + dir.name });
+      item.onclick = () => openDir(dir.path);
+      list.append(item);
+    }
+  } catch (e) { $("dirErr").textContent = e.message; }
+}
+$("destChange").onclick = () => { $("dirDlg").showModal(); openDir(state ? state.dest_dir : ""); };
+$("dirGo").onclick = () => openDir($("dirPath").value.trim());
+$("dirPath").onkeydown = e => { if (e.key === "Enter") openDir($("dirPath").value.trim()); };
+$("dirCancel").onclick = () => $("dirDlg").close();
+$("dirNew").onclick = async () => {
+  const name = prompt("Имя новой папки:", "ASIAIR");
+  if (!name) return;
+  try { const r = await post("/ui/api/mkdir", { parent: dirCur, name }); openDir(r.path); }
+  catch (e) { $("dirErr").textContent = e.message; }
+};
+$("dirChoose").onclick = async () => {
+  const path = $("dirPath").value.trim() || dirCur;
+  if (!confirm("Сохранять новые снимки в\n" + path + "?\n\nУже полученные снимки останутся в прежней папке.")) return;
+  try { await post("/ui/api/destdir", { path }); $("dirDlg").close(); toast("Папка изменена"); refresh(); }
+  catch (e) { $("dirErr").textContent = e.message; }
+};
+
+// ---------- start with Windows ----------
+let su = null, suSwitching = false, suRemoved = false;
+const suModes = {
+  service: "как служба Windows — запускается вместе с компьютером, без входа в систему",
+  tray: "как программа (значок в трее)",
+  console: "в окне консоли",
+};
+function renderStartup() {
+  const p = $("startupPanel");
+  if (!su || !su.supported) { p.hidden = true; return; }
+  p.hidden = false;
+  $("suMode").textContent = suRemoved ? "служба удалена, приёмник остановлен — запустите asiair-receiver.exe"
+    : suSwitching ? "переключение на службу… страница обновится сама" : (suModes[su.mode] || su.mode);
+  const isSvc = su.mode === "service";
+  $("suUser").hidden = isSvc || su.service !== "not-installed";
+  $("suAuto").checked = su.autostart;
+  $("suInstall").disabled = suSwitching;
+  $("suSvc").hidden = su.service === "not-installed";
+  $("suSvcHint").textContent = isSvc
+    ? "После удаления служба остановится и страница перестанет открываться. Затем запустите asiair-receiver.exe двойным щелчком и при желании включите запуск при входе в Windows."
+    : (su.service === "running"
+        ? "Служба установлена и работает отдельно от этой программы."
+        : "Служба установлена, но остановлена. Удалите её, если хотите запускать приёмник как программу.");
+}
+async function loadStartup() {
+  try { su = await (await fetch("/ui/api/startup")).json(); } catch (e) { return; } // restarting
+  if (suSwitching && su && su.mode === "service") { suSwitching = false; toast("Приёмник работает как служба"); }
+  renderStartup();
+}
+async function suAction(action) {
+  $("suErr").textContent = "";
+  try { su = await post("/ui/api/startup", { action }); renderStartup(); return true; }
+  catch (e) { $("suErr").textContent = e.message; loadStartup(); return false; }
+}
+$("suAuto").onchange = e => suAction(e.target.checked ? "autostart-on" : "autostart-off");
+$("suInstall").onclick = async () => {
+  if (!confirm("Установить приёмник как службу Windows?\n\nWindows попросит подтвердить права администратора. Приёмник перезапустится как служба, страница обновится сама.")) return;
+  if (await suAction("install-service")) { suSwitching = true; renderStartup(); }
+};
+$("suRemove").onclick = async () => {
+  if (!confirm("Удалить службу приёмника?" + (su && su.mode === "service" ? "\n\nПриёмник остановится, и эта страница перестанет открываться до запуска asiair-receiver.exe." : ""))) return;
+  if (await suAction("remove-service") && su.mode === "service") { suRemoved = true; renderStartup(); }
+};
+setInterval(loadStartup, 3000);
+loadStartup();
+
+loadConn();
 refresh();
 setInterval(refresh, 5000);
 </script>

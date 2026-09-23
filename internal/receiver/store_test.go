@@ -80,14 +80,14 @@ func TestStoreResumeAndCommit(t *testing.T) {
 	if _, done := s.Offset(p, size, mt.Add(time.Hour)); done {
 		t.Fatal("new version reported complete")
 	}
-	files, _ := s.List()
+	files, _ := s.List([]string{"EMMC Images"})
 	if len(files) != 1 || files[0].Path != p {
 		t.Fatalf("list: %+v", files)
 	}
 	if err := s.Remove(p); err != nil {
 		t.Fatal(err)
 	}
-	if files, _ := s.List(); len(files) != 0 {
+	if files, _ := s.List([]string{"EMMC Images"}); len(files) != 0 {
 		t.Fatalf("not removed: %+v", files)
 	}
 }

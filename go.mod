@@ -1,6 +1,6 @@
 module github.com/arbalet1985/asiair_transmit_photo
 
-go 1.22.12
+go 1.23
 
 require (
 	github.com/hirochachacha/go-smb2 v1.1.0

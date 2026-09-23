@@ -72,8 +72,38 @@ func JoinReceiverURL(scheme, host string, port int) (string, error) {
 // other settings and comments. The result is validated before it replaces
 // the file. A missing file is created.
 func UpdateAgentFile(path string, values map[string]string) error {
+	return updateFile(path, nil, values, func(p string) error {
+		_, err := LoadAgent(p)
+		return err
+	})
+}
+
+// UpdateReceiverFile is UpdateAgentFile for receiver.yaml.
+func UpdateReceiverFile(path string, values map[string]string) error {
+	return updateFile(path, nil, values, func(p string) error {
+		_, err := LoadReceiver(p)
+		return err
+	})
+}
+
+// CreateReceiverFile writes a new receiver.yaml from the example text with
+// the given values filled in.
+func CreateReceiverFile(path string, example []byte, values map[string]string) error {
+	return updateFile(path, example, values, func(p string) error {
+		_, err := LoadReceiver(p)
+		return err
+	})
+}
+
+// updateFile edits the YAML file at path (or base, when given) and replaces
+// the file after validate accepts the result.
+func updateFile(path string, base []byte, values map[string]string, validate func(string) error) error {
 	var doc yaml.Node
-	if b, err := os.ReadFile(path); err == nil {
+	b, err := base, error(nil)
+	if b == nil {
+		b, err = os.ReadFile(path)
+	}
+	if err == nil {
 		if err := yaml.Unmarshal(b, &doc); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
@@ -121,7 +151,7 @@ func UpdateAgentFile(path string, values map[string]string) error {
 	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
 		return err
 	}
-	if _, err := LoadAgent(tmp); err != nil {
+	if err := validate(tmp); err != nil {
 		os.Remove(tmp)
 		return err
 	}

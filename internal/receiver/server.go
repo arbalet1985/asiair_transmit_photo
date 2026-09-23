@@ -32,14 +32,22 @@ var webFS embed.FS
 
 // Server is the receiver service.
 type Server struct {
-	cfg         *config.Receiver
-	store       *Store
-	state       *State
+	cfg   *config.Receiver
+	state *State
+
+	// store and token can be changed from the web page while running
+	mu    sync.RWMutex
+	store *Store
+	token string
+
 	fingerprint string
 	tlsCert     *tls.Certificate
 
 	// Addresses actually bound (useful when configured with port 0).
 	APIAddr, UIAddr net.Addr
+
+	// Startup, when set, lets the web page manage starting with Windows.
+	Startup Startup
 }
 
 func New(cfg *config.Receiver) (*Server, error) {
@@ -56,7 +64,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("состояние: %w", err)
 	}
-	s := &Server{cfg: cfg, store: store, state: state}
+	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token}
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
 		if err != nil {
@@ -69,6 +77,18 @@ func New(cfg *config.Receiver) (*Server, error) {
 
 // Fingerprint of the TLS certificate (empty when TLS is disabled).
 func (s *Server) Fingerprint() string { return s.fingerprint }
+
+func (s *Server) getStore() *Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.store
+}
+
+func (s *Server) getToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token
+}
 
 // Run serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
@@ -91,7 +111,7 @@ func (s *Server) Run(ctx context.Context) error {
 	} else {
 		log.Printf("Приёмник: API http://%s (TLS отключён)", apiLn.Addr())
 	}
-	log.Printf("Приёмник: веб-страница http://%s, фото сохраняются в %s", uiLn.Addr(), s.cfg.DestDir)
+	log.Printf("Приёмник: веб-страница http://%s, фото сохраняются в %s", uiLn.Addr(), s.getStore().root)
 
 	errc := make(chan error, 2)
 	go func() { errc <- api.Serve(apiLn) }()
@@ -134,8 +154,8 @@ func (s *Server) apiHandler() http.Handler {
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
-	want := []byte("Bearer " + s.cfg.Token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		want := []byte("Bearer " + s.getToken())
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
 			log.Printf("Приёмник: неверный токен от %s", r.RemoteAddr)
 			time.Sleep(time.Second) // slow down guessing
@@ -171,7 +191,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodHead, http.MethodGet:
-		off, done := s.store.Offset(p, size, mtime)
+		off, done := s.getStore().Offset(p, size, mtime)
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(off, 10))
 		if done {
 			w.Header().Set(protocol.HeaderComplete, "1")
@@ -183,7 +203,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "неверный offset", http.StatusBadRequest)
 			return
 		}
-		got, sum, err := s.store.Write(p, size, mtime, off, r.Body)
+		got, sum, err := s.getStore().Write(p, size, mtime, off, r.Body)
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(got, 10))
 		var eo *ErrOffset
 		switch {
@@ -210,7 +230,7 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	err = s.store.Commit(p, size, mtime, r.URL.Query().Get("sha256"))
+	err = s.getStore().Commit(p, size, mtime, r.URL.Query().Get("sha256"))
 	var eo *ErrOffset
 	switch {
 	case errors.Is(err, ErrChecksum):
@@ -278,7 +298,7 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		if res.OK {
 			log.Printf("Приёмник: удалено на ASIAIR: %s", c.Path)
 			if c.AlsoLocal {
-				if err := s.store.Remove(c.Path); err != nil {
+				if err := s.getStore().Remove(c.Path); err != nil {
 					log.Printf("Приёмник: не удалось удалить локальную копию %s: %v", c.Path, err)
 				}
 			}
@@ -309,6 +329,12 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
+	mux.HandleFunc("/ui/api/connect", s.handleUIConnect)
+	mux.HandleFunc("/ui/api/token", s.handleUINewToken)
+	mux.HandleFunc("/ui/api/dirs", s.handleUIDirs)
+	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
+	mux.HandleFunc("/ui/api/destdir", s.handleUIDestDir)
+	mux.HandleFunc("/ui/api/startup", s.handleUIStartup)
 	return s.uiAuth(mux)
 }
 
@@ -362,7 +388,13 @@ type uiState struct {
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 	snap := s.state.Snapshot()
-	local, _ := s.store.List()
+	shares := []string{"EMMC Images", "Udisk"}
+	for _, f := range snap.Inventory {
+		if sh, _, ok := strings.Cut(f.Path, "/"); ok {
+			shares = append(shares, sh)
+		}
+	}
+	local, _ := s.getStore().List(shares)
 	byPath := map[string]*uiFile{}
 	var files []*uiFile
 	get := func(p string) *uiFile {
@@ -402,7 +434,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		AgentOnline:   time.Since(snap.LastSeen) < 2*time.Minute,
 		InventoryTime: snap.InvTime,
 		Fingerprint:   s.fingerprint,
-		DestDir:       s.cfg.DestDir,
+		DestDir:       s.getStore().root,
 	}
 	for i, f := range files {
 		out.Files[i] = *f
@@ -502,5 +534,5 @@ func (s *Server) handleUIFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment")
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	http.ServeFile(w, r, s.store.Local(p))
+	http.ServeFile(w, r, s.getStore().Local(p))
 }
