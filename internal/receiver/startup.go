@@ -83,6 +83,9 @@ func (s *Server) AgentSummary() string {
 	if time.Since(snap.LastSeen) >= 2*time.Minute {
 		return "агент не на связи"
 	}
+	if snap.WaitStart {
+		return "передача ещё не запущена"
+	}
 	if snap.Paused || snap.Status.Paused {
 		return "передача на паузе"
 	}

@@ -26,6 +26,7 @@
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; overflow-wrap: anywhere; }
+  [hidden] { display: none !important; }
   .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
   .on { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
   .off { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
@@ -89,6 +90,7 @@
   .mini { display: inline-block; vertical-align: middle; width: 70px; height: 5px; background: var(--row); border-radius: 3px; overflow: hidden; margin-left: 6px; }
   .mini > div { height: 100%; background: var(--accent); }
   .fbar { display: inline-block; vertical-align: middle; width: 120px; height: 5px; background: color-mix(in srgb, var(--muted) 25%, transparent); border-radius: 3px; overflow: hidden; margin-left: 8px; }
+  button.fetch { padding: 0 8px; font-size: 12px; margin-left: 6px; font-weight: 400; }
   .fbar > div { height: 100%; background: var(--ok); }
   .xfer h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
   .xfer .line { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
@@ -102,6 +104,7 @@
   <h1>ASIAIR → приём фото</h1>
   <span id="agentBadge" class="badge off">агент не на связи</span>
   <span class="badge info" id="hdrProgress" hidden></span>
+  <span class="badge pend" id="hdrWait" hidden>передача не запущена</span>
   <span class="muted" id="destDir"></span>
 </header>
 <main>
@@ -207,6 +210,7 @@
       <label title="Миниатюры, журналы и другие файлы, которые агент по настройкам не передаёт"><input type="checkbox" id="showFiltered"> Показать непередаваемые</label>
       <span class="spacer"></span>
       <span class="muted" id="selInfo"></span>
+      <button id="fetchBtn" hidden title="Передать выбранные файлы, не снимая паузу">Скачать выбранные</button>
       <label><input type="checkbox" id="alsoLocal"> удалить и у себя</label>
       <button class="danger" id="delBtn" disabled>Удалить на ASIAIR</button>
     </div>
@@ -346,6 +350,26 @@ function visibleFiles() {
   });
 }
 
+// the transfer is paused or not started: files can be requested one by one
+function xferPaused() {
+  return state.paused || state.wait_start || (state.agent_online && state.agent.paused);
+}
+function canFetch(f) {
+  return f.remote && !f.pending && !["received", "filtered", "uploading"].includes(f.status);
+}
+async function fetchFiles(paths, cancel) {
+  try {
+    await post("/ui/api/fetch", { paths, cancel: !!cancel });
+    if (!cancel) toast(`Запрошено скачивание: ${paths.length} файл(ов)`);
+    refresh();
+  } catch (e) { alert("Ошибка: " + e.message); }
+}
+function miniButton(text, title, fn) {
+  const b = el("button", { className: "fetch", textContent: text, title });
+  b.onclick = e => { e.stopPropagation(); fn(); };
+  return b;
+}
+
 // status badge of a file
 function statusBadge(f) {
   const pct = f.progress ? Math.floor(f.progress * 100) + "%" : "";
@@ -362,7 +386,7 @@ function statusBadge(f) {
       ? badge("pend", `прервано на ${pct}, докачка в ${fmtClock(f.retry_at)}`, f.error)
       : badge("pend", `прервано на ${pct}, будет докачан`);
     case "retry": return badge("off", "ошибка, повтор в " + fmtClock(f.retry_at), f.error);
-    case "queued": return badge("gray", "в очереди");
+    case "queued": return badge("gray", state.wait_start ? "ждёт старта" : "в очереди");
     case "writing": return badge("gray", "записывается на ASIAIR", "Файл ещё меняется; агент передаст его, когда запись закончится");
     case "changed": return badge("pend", "изменён на ASIAIR", "На ASIAIR другая версия файла, она будет передана заново");
     case "local-only": return badge("gray", "только у меня", "На ASIAIR файла уже нет");
@@ -386,6 +410,7 @@ function renderFiles() {
   const files = visibleFiles();
   const tb = $("files");
   tb.replaceChildren();
+  const paused = xferPaused(), requested = new Set(state.fetch || []);
   let folder = null;
   for (const f of files) {
     if (f.folder !== folder) {
@@ -412,6 +437,8 @@ function renderFiles() {
       const head = el("td", { className: "name", colSpan: 5 },
         (collapsed.has(folder) ? "▸ " : "▾ ") + folder + "  ", el("span", { className: "muted" }, info));
       if (xfer.length) head.append(el("span", { className: "fbar" }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
+      const toFetch = inFolder.filter(x => canFetch(x) && !requested.has(x.path)).map(x => x.path);
+      if (paused && toFetch.length) head.append(miniButton(`⤓ Скачать папку (${toFetch.length})`, "Передать файлы папки, не снимая паузу", () => fetchFiles(toFetch)));
       const tr = el("tr", { className: "folder" }, el("td", {}, cb), head);
       tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); renderFiles(); };
       tb.append(tr);
@@ -433,19 +460,33 @@ function renderFiles() {
       el("td", { className: "name" }, name),
       el("td", { className: "num", textContent: fmtBytes(f.size) }),
       el("td", { textContent: fmtTime(f.mtime) }),
-      el("td", {}, statusBadge(f)),
+      el("td", {}, statusBadge(f), fetchControl(f)),
       el("td", {}, remote)));
   }
   const sel = [...selected];
   const selSize = state.files.filter(f => selected.has(f.path)).reduce((a, f) => a + f.size, 0);
   $("selInfo").textContent = sel.length ? `выбрано: ${sel.length} (${fmtBytes(selSize)})` : "";
   $("delBtn").disabled = sel.length === 0;
+  const selFetch = state.files.filter(f => selected.has(f.path) && canFetch(f) && !requested.has(f.path)).map(f => f.path);
+  $("fetchBtn").hidden = !paused || !selFetch.length;
+  $("fetchBtn").textContent = `Скачать выбранные (${selFetch.length})`;
+  $("fetchBtn").onclick = () => fetchFiles(selFetch);
   const vis = files.filter(f => f.remote && !f.pending);
   $("selAll").checked = vis.length > 0 && vis.every(f => selected.has(f.path));
   const nr = state.files.filter(f => f.remote && f.status !== "filtered").length, nl = state.files.filter(f => f.local).length;
   const nf = state.files.filter(f => f.status === "filtered").length;
   $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length}. На ASIAIR: ${nr}, получено: ${nl}` +
     (nf ? `, непередаваемых: ${nf}` : "") + `. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
+}
+
+// "Скачать" next to a file while the transfer is paused, "запрошен" after
+function fetchControl(f) {
+  if ((state.fetch || []).includes(f.path) && f.status !== "received") {
+    return el("span", {}, " ", el("span", { className: "badge info", textContent: "запрошен" }),
+      miniButton("✕", "Отменить скачивание", () => fetchFiles([f.path], true)));
+  }
+  if (xferPaused() && canFetch(f)) return miniButton("⤓ Скачать", "Передать этот файл, не снимая паузу", () => fetchFiles([f.path]));
+  return "";
 }
 
 function renderCmds() {
@@ -485,9 +526,11 @@ function renderStatus() {
   $("aErr").textContent = a.last_error || "—";
   const up = state.agent_online && a.uploading;
   $("uFile").textContent = up ? a.uploading : (state.agent_online && a.paused ? "пауза" : "нет");
-  $("pauseBtn").textContent = state.paused ? "Продолжить" : "Пауза";
+  $("pauseBtn").textContent = state.wait_start ? "Старт" : state.paused ? "Продолжить" : "Пауза";
+  $("hdrWait").hidden = !state.wait_start;
   let pn = "";
-  if (state.paused) pn = !state.agent_online ? "агент встанет на паузу, когда выйдет на связь"
+  if (state.wait_start) pn = "передача ещё не запущена: видна только структура ASIAIR; нажмите «Старт»";
+  else if (state.paused) pn = !state.agent_online ? "агент встанет на паузу, когда выйдет на связь"
     : !a.remote_pause ? "пауза включится при следующей связи с агентом"
     : "передача на паузе; текущий файл потом докачается с того же места";
   else if (state.agent_online && a.remote_pause) pn = "пауза снимется при следующей связи с агентом";
@@ -561,7 +604,7 @@ $("rateApply").onclick = async () => {
   catch (e) { alert("Ошибка: " + e.message); }
 };
 $("pauseBtn").onclick = async () => {
-  try { await post("/ui/api/pause", { paused: !state.paused }); refresh(); }
+  try { await post("/ui/api/pause", { paused: !(state.paused || state.wait_start) }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
 };
 $("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };

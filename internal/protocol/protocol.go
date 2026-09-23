@@ -64,6 +64,7 @@ type AgentStatus struct {
 	// Where the pause is set: in the agent window and/or on the receiver page.
 	LocalPause  bool `json:"local_pause,omitempty"`
 	RemotePause bool `json:"remote_pause,omitempty"`
+	WaitStart   bool `json:"wait_start,omitempty"` // waiting for "Старт" on the receiver page
 
 	// Totals over the files to transfer that are on the ASIAIR now.
 	TotalFiles int   `json:"total_files"`
@@ -93,6 +94,12 @@ type SyncResponse struct {
 	MaxRate *int64 `json:"max_rate"`
 	// Paused: the transfer is paused from the receiver page.
 	Paused bool `json:"paused,omitempty"`
+	// WaitStart: the transfer has not been started on the receiver page yet
+	// (Paused is also set).
+	WaitStart bool `json:"wait_start,omitempty"`
+	// Fetch lists files requested from the receiver page: they are sent
+	// even while the transfer is paused or not started, and first otherwise.
+	Fetch []string `json:"fetch,omitempty"`
 }
 
 // Command types.

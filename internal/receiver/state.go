@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -31,9 +32,15 @@ type Command struct {
 
 // persisted is what survives a restart.
 type persisted struct {
-	Commands  []*Command            `json:"commands"`
-	MaxRate   *int64                `json:"max_rate"`
-	Paused    bool                  `json:"paused"` // transfer paused from the page
+	Commands []*Command `json:"commands"`
+	MaxRate  *int64     `json:"max_rate"`
+	Paused   bool       `json:"paused"` // transfer paused from the page
+	// WaitStart: a new receiver shows the ASIAIR tree but does not let the
+	// agent transfer until "Старт" is pressed on the page.
+	WaitStart bool `json:"wait_start"`
+	// Fetch: files requested on the page; the agent sends them even while
+	// the transfer is paused or not started.
+	Fetch     []string              `json:"fetch"`
 	Inventory []protocol.RemoteFile `json:"inventory"`
 	InvTime   time.Time             `json:"inventory_time"`
 	Status    protocol.AgentStatus  `json:"agent_status"`
@@ -57,6 +64,7 @@ func LoadState(file string, defaultRate *int64) (*State, error) {
 		return nil, err
 	} else {
 		s.p.MaxRate = defaultRate
+		s.p.WaitStart = true
 	}
 	return s, nil
 }
@@ -116,7 +124,8 @@ func (s *State) Sync(st protocol.AgentStatus) protocol.SyncResponse {
 	defer s.mu.Unlock()
 	s.p.Status = st
 	s.p.LastSeen = time.Now()
-	resp := protocol.SyncResponse{MaxRate: s.p.MaxRate, Paused: s.p.Paused, Commands: []protocol.Command{}}
+	resp := protocol.SyncResponse{MaxRate: s.p.MaxRate, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
+		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
 			resp.Commands = append(resp.Commands, c.Command)
@@ -159,7 +168,44 @@ func (s *State) SetInventory(files []protocol.RemoteFile) error {
 	defer s.mu.Unlock()
 	s.p.Inventory = files
 	s.p.InvTime = time.Now()
+	// forget requests for files that are gone or already received
+	waiting := map[string]bool{}
+	for _, f := range files {
+		if f.State != protocol.StateSent && f.State != protocol.StateFiltered {
+			waiting[f.Path] = true
+		}
+	}
+	s.p.Fetch = slices.DeleteFunc(s.p.Fetch, func(p string) bool { return !waiting[p] })
 	return s.save()
+}
+
+// RequestFetch adds (on) or removes files requested on the page.
+func (s *State) RequestFetch(paths []string, on bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, p := range paths {
+		i := slices.Index(s.p.Fetch, p)
+		switch {
+		case on && i < 0:
+			s.p.Fetch = append(s.p.Fetch, p)
+			n++
+		case !on && i >= 0:
+			s.p.Fetch = slices.Delete(s.p.Fetch, i, i+1)
+			n++
+		}
+	}
+	return n, s.save()
+}
+
+// FetchDone removes a received file from the requests.
+func (s *State) FetchDone(p string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i := slices.Index(s.p.Fetch, p); i >= 0 {
+		s.p.Fetch = slices.Delete(s.p.Fetch, i, i+1)
+		s.save()
+	}
 }
 
 // SetRate sets the rate pushed to the agent; nil = agent's own setting.
@@ -170,11 +216,15 @@ func (s *State) SetRate(bps *int64) error {
 	return s.save()
 }
 
-// SetPaused pauses or resumes the transfer from the page.
+// SetPaused pauses or resumes the transfer from the page. Resuming also
+// starts a transfer that was never started.
 func (s *State) SetPaused(p bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.p.Paused = p
+	if !p {
+		s.p.WaitStart = false
+	}
 	return s.save()
 }
 
@@ -217,5 +267,6 @@ func (s *State) Snapshot() persisted {
 		cp.Commands[i] = &cc
 	}
 	cp.Inventory = append([]protocol.RemoteFile(nil), s.p.Inventory...)
+	cp.Fetch = append([]string{}, s.p.Fetch...)
 	return cp
 }

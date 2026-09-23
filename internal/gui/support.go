@@ -228,6 +228,8 @@ func formatETA(sec float64) string {
 // pauseLabel says where the transfer was paused.
 func pauseLabel(st protocol.AgentStatus) string {
 	switch {
+	case st.WaitStart && !st.LocalPause:
+		return "ждёт «Старт» на странице приёмника"
 	case st.LocalPause && st.RemotePause:
 		return "пауза здесь и на приёмнике"
 	case st.RemotePause:
