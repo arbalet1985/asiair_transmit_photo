@@ -44,7 +44,7 @@ type runner struct {
 	err    error // configuration error when the agent could not start
 }
 
-func (r *runner) start(cfgPath string) {
+func (r *runner) start(cfgPath string, paused bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.agent, r.err = nil, nil
@@ -64,6 +64,7 @@ func (r *runner) start(cfgPath string) {
 	done := make(chan struct{})
 	r.cancel, r.done = cancel, done
 	a := r.agent
+	a.SetPaused(paused)
 	go func() {
 		defer close(done)
 		a.Run(ctx)
@@ -105,6 +106,8 @@ type window struct {
 
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
 	lblTotal                                                             *walk.Label
+	btnPause                                                             *walk.PushButton
+	actPause                                                             *walk.Action
 	progress, totalBar                                                   *walk.ProgressBar
 	cbAutostart, cbMinimized                                             *walk.CheckBox
 	logView                                                              *walk.ListBox
@@ -166,7 +169,7 @@ func Run(cfgPath string) error {
 
 	w.loadForm()
 	if !created {
-		w.run.start(cfgPath)
+		w.run.start(cfgPath, w.settings.Paused)
 	}
 	if _, err := w.run.state(); created || err != nil {
 		// nothing runs yet: ask for the connection settings first
@@ -274,6 +277,7 @@ func (w *window) create() error {
 			Composite{
 				Layout: HBox{MarginsZero: true},
 				Children: []Widget{
+					PushButton{AssignTo: &w.btnPause, Text: pauseText(false), MinSize: Size{Width: 110}, OnClicked: w.togglePause},
 					PushButton{Text: "Перезапустить агент", OnClicked: w.restart},
 					PushButton{Text: "Открыть журнал", OnClicked: w.openLog},
 					HSpacer{},
@@ -290,7 +294,7 @@ func (w *window) create() error {
 	// window icon and tray icon
 	w.icons = map[string]*walk.Icon{}
 	dpi := w.mw.DPI()
-	for _, st := range []string{StateStopped, StateError, StateIdle, StateUploading} {
+	for _, st := range []string{StateStopped, StateError, StateIdle, StateUploading, StatePaused} {
 		ic, err := walk.NewIconFromImageForDPI(IconImage(st, 16*dpi/96), dpi)
 		if err == nil {
 			w.icons[st] = ic
@@ -311,14 +315,16 @@ func (w *window) create() error {
 		}
 	})
 	w.ni.MessageClicked().Attach(w.show)
-	addAction := func(text string, fn func()) {
+	addAction := func(text string, fn func()) *walk.Action {
 		a := walk.NewAction()
 		a.SetText(text)
 		a.Triggered().Attach(fn)
 		w.ni.ContextMenu().Actions().Add(a)
+		return a
 	}
 	addAction("Открыть окно", func() { w.tabs.SetCurrentIndex(0); w.show() })
 	addAction("Настройки", func() { w.tabs.SetCurrentIndex(1); w.show() })
+	w.actPause = addAction(pauseText(false), w.togglePause)
 	addAction("Перезапустить агент", w.restart)
 	w.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	addAction("Выход", w.quit)
@@ -383,9 +389,31 @@ func (w *window) restart() {
 	log.Printf("Перезапуск агента...")
 	go func() {
 		w.run.stop()
-		w.run.start(w.cfgPath)
+		w.run.start(w.cfgPath, w.settings.Paused)
 		w.mw.Synchronize(w.update)
 	}()
+}
+
+func pauseText(paused bool) string {
+	if paused {
+		return "Продолжить"
+	}
+	return "Пауза"
+}
+
+// togglePause pauses or resumes the transfer. The choice is remembered,
+// so the agent stays paused after a restart until "Продолжить".
+func (w *window) togglePause() {
+	w.settings.Paused = !w.settings.Paused
+	if err := SaveSettings(w.settingsPath, w.settings); err != nil {
+		log.Printf("Не удалось сохранить состояние паузы: %v", err)
+	}
+	if a, _ := w.run.state(); a != nil {
+		a.SetPaused(w.settings.Paused)
+	} else if w.settings.Paused {
+		log.Printf("Передача будет на паузе после запуска агента")
+	}
+	w.update()
 }
 
 func (w *window) openLog() {
@@ -449,6 +477,8 @@ func ago(t time.Time) string {
 
 // update refreshes the window and the tray icon from the agent state.
 func (w *window) update() {
+	w.btnPause.SetText(pauseText(w.settings.Paused))
+	w.actPause.SetText(pauseText(w.settings.Paused))
 	a, cfgErr := w.run.state()
 	if a == nil {
 		msg := "агент не запущен"
@@ -493,6 +523,9 @@ func (w *window) update() {
 		w.lblSpeed.SetText(fmt.Sprintf("%s/s (лимит: %s)", config.FormatBytes(int64(st.Speed)), config.FormatRate(st.Rate)))
 	} else {
 		w.lblFile.SetText("—")
+		if st.Paused {
+			w.lblFile.SetText("пауза — нажмите «Продолжить»")
+		}
 		w.progress.SetValue(0)
 		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + ")")
 	}
@@ -531,6 +564,8 @@ func (w *window) update() {
 
 func trayState(st protocol.AgentStatus, syncErr string) (string, string) {
 	switch {
+	case st.Paused:
+		return StatePaused, fmt.Sprintf("ASIAIR Agent — пауза, в очереди %d", st.QueueFiles)
 	case !st.Connected && !st.LastScan.IsZero() || !st.Connected && st.LastError != "":
 		return StateError, "ASIAIR Agent — нет связи с ASIAIR"
 	case syncErr != "":

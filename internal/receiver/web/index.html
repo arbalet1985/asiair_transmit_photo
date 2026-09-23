@@ -480,7 +480,7 @@ function renderStatus() {
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
   $("aErr").textContent = a.last_error || "—";
   const up = state.agent_online && a.uploading;
-  $("uFile").textContent = up ? a.uploading : "нет";
+  $("uFile").textContent = up ? a.uploading : (state.agent_online && a.paused ? "пауза (включена в окне агента)" : "нет");
   $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
   if (up && a.upload_size) {
     const left = a.speed > 0 ? fmtDur((a.upload_size - a.upload_done) / a.speed) : "";

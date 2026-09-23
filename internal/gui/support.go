@@ -18,6 +18,7 @@ import (
 // Settings are the window options, stored next to the agent configuration.
 type Settings struct {
 	StartMinimized bool `json:"start_minimized"`
+	Paused         bool `json:"paused"` // transfer paused with the "Пауза" button
 }
 
 // SettingsPath returns the settings file for a given agent config file.
@@ -99,6 +100,7 @@ const (
 	StateError     = "error"     // no connection to the ASIAIR or receiver
 	StateIdle      = "idle"      // connected, nothing to send
 	StateUploading = "uploading" // sending a file
+	StatePaused    = "paused"    // transfer paused by the user
 )
 
 var stateColors = map[string]color.RGBA{
@@ -106,6 +108,7 @@ var stateColors = map[string]color.RGBA{
 	StateError:     {214, 64, 58, 255},
 	StateIdle:      {46, 160, 90, 255},
 	StateUploading: {47, 111, 222, 255},
+	StatePaused:    {230, 160, 30, 255},
 }
 
 // IconImage draws the tray icon: a coloured disc with a small white
