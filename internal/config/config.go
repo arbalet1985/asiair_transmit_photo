@@ -14,6 +14,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ErrNoToken is returned when the configuration has no token.
+var ErrNoToken = errors.New("token: не указан токен")
+
 // Agent is the configuration of the service running next to the ASIAIR.
 type Agent struct {
 	// ASIAIR is the link to the ASIAIR: "192.168.1.50", "\\192.168.1.50\EMMC Images",
@@ -69,6 +72,9 @@ type Receiver struct {
 	// MaxRate initial value pushed to the agent. Empty = use the agent's own setting.
 	MaxRate string `yaml:"max_rate"`
 	LogFile string `yaml:"log_file"`
+
+	// Path of the file the configuration was loaded from.
+	Path string `yaml:"-"`
 }
 
 // Duration is a time.Duration that unmarshals from strings like "30s".
@@ -139,7 +145,7 @@ func LoadAgent(path string) (*Agent, error) {
 		return nil, errors.New("receiver_url: не указан адрес приёмника")
 	}
 	if c.Token == "" {
-		return nil, errors.New("token: не указан токен")
+		return nil, ErrNoToken
 	}
 	if _, err := ParseRate(c.MaxRate); err != nil {
 		return nil, err
@@ -168,13 +174,14 @@ func LoadReceiver(path string) (*Receiver, error) {
 		return nil, err
 	}
 	if c.Token == "" {
-		return nil, errors.New("token: не указан токен")
+		return nil, ErrNoToken
 	}
 	if c.MaxRate != "" {
 		if _, err := ParseRate(c.MaxRate); err != nil {
 			return nil, err
 		}
 	}
+	c.Path = path
 	c.DestDir = resolve(path, c.DestDir)
 	c.DataDir = resolve(path, c.DataDir)
 	c.TLSCert = resolve(path, c.TLSCert)

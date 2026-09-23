@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -247,4 +248,22 @@ func control(s service.Service, cmd string) {
 		fmt.Fprintf(os.Stderr, "Ошибка (%s): %v\nЗапустите командную строку от имени администратора.\n", cmd, err)
 		os.Exit(1)
 	}
+}
+
+// Interactive reports whether the program runs in a console or window
+// rather than as a service.
+func Interactive() bool { return service.Interactive() }
+
+// OpenBrowser opens url in the default browser (best effort).
+func OpenBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	cmd.Start()
 }

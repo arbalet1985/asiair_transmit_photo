@@ -225,29 +225,33 @@ type LocalFile struct {
 	ModTime time.Time
 }
 
-// List returns all received files sorted by path.
-func (s *Store) List() ([]LocalFile, error) {
+// List returns the received files of the given ASIAIR shares (top-level
+// folders), sorted by path. Only those folders are walked, so the
+// destination can be any folder, even the root of a drive.
+func (s *Store) List(shares []string) ([]LocalFile, error) {
 	var out []LocalFile
-	err := filepath.WalkDir(s.root, func(p string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	seen := map[string]bool{}
+	for _, share := range shares {
+		if share == "" || seen[share] || share == partialDir || strings.ContainsAny(share, `/\`) {
+			continue
 		}
-		if e.IsDir() {
-			if e.Name() == partialDir {
-				return filepath.SkipDir
+		seen[share] = true
+		base := filepath.Join(s.root, share)
+		filepath.WalkDir(base, func(p string, e fs.DirEntry, err error) error {
+			if err != nil || e.IsDir() {
+				return nil
 			}
+			info, err := e.Info()
+			if err != nil || !info.Mode().IsRegular() {
+				return nil
+			}
+			rel, _ := filepath.Rel(s.root, p)
+			out = append(out, LocalFile{Path: filepath.ToSlash(rel), Size: info.Size(), ModTime: info.ModTime()})
 			return nil
-		}
-		info, err := e.Info()
-		if err != nil || !info.Mode().IsRegular() {
-			return nil
-		}
-		rel, _ := filepath.Rel(s.root, p)
-		out = append(out, LocalFile{Path: filepath.ToSlash(rel), Size: info.Size(), ModTime: info.ModTime()})
-		return nil
-	})
+		})
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, err
+	return out, nil
 }
 
 // Remove deletes a received file and empty parent folders.

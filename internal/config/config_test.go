@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestParseRate(t *testing.T) {
 	cases := map[string]int64{
@@ -42,7 +45,7 @@ func TestExampleConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Listen != ":8443" || r.UIListen != "127.0.0.1:8080" {
+	if r.Listen != ":8443" || r.UIListen != "127.0.0.1:8080" || filepath.Base(r.DestDir) != "photos" {
 		t.Fatalf("receiver example: %+v", r)
 	}
 }

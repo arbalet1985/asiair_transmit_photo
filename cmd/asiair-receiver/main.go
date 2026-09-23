@@ -4,14 +4,27 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
+	"log"
+	"net"
+	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/receiver"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
 )
+
+// localAddr turns a listen address into one a local browser can open.
+func localAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
 
 func main() {
 	svc.Main(svc.App{
@@ -20,6 +33,10 @@ func main() {
 		Description: "Принимает снимки с ASIAIR и позволяет удалять их на ASIAIR",
 		ConfigName:  "receiver.yaml",
 		Start: func(path string) (func(context.Context) error, string, error) {
+			created, err := receiver.EnsureConfig(path)
+			if err != nil {
+				return nil, "", err
+			}
 			cfg, err := config.LoadReceiver(path)
 			if err != nil {
 				return nil, "", err
@@ -28,16 +45,31 @@ func main() {
 			if err != nil {
 				return nil, cfg.LogFile, err
 			}
-			return s.Run, cfg.LogFile, nil
+			page := "http://" + localAddr(cfg.UIListen)
+			run := func(ctx context.Context) error {
+				if created {
+					log.Printf("Приёмник: создан файл настроек %s с новым токеном", path)
+				}
+				log.Printf("Приёмник: откройте %s — там папка для снимков и данные для подключения агента", page)
+				if created && svc.Interactive() {
+					go func() {
+						time.Sleep(time.Second)
+						svc.OpenBrowser(page)
+					}()
+				}
+				return s.Run(ctx)
+			}
+			return run, cfg.LogFile, nil
 		},
 		Commands: map[string]svc.Command{
 			"token": {Help: "сгенерировать случайный токен для настроек", Run: func(string, []string) error {
-				b := make([]byte, 24)
-				rand.Read(b)
-				fmt.Println(base64.RawURLEncoding.EncodeToString(b))
+				fmt.Println(receiver.NewToken())
 				return nil
 			}},
 			"fingerprint": {Help: "показать отпечаток сертификата для receiver_fingerprint агента", Run: func(path string, _ []string) error {
+				if _, err := receiver.EnsureConfig(path); err != nil {
+					return err
+				}
 				cfg, err := config.LoadReceiver(path)
 				if err != nil {
 					return err
