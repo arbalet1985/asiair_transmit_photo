@@ -59,7 +59,11 @@ type AgentStatus struct {
 	QueueBytes int64     `json:"queue_bytes"`      // bytes waiting to be sent
 	SentFiles  int       `json:"sent_files"`       // files sent since start
 	SentBytes  int64     `json:"sent_bytes"`       // bytes sent since start
-	Paused     bool      `json:"paused,omitempty"` // transfer paused by the user
+	Paused     bool      `json:"paused,omitempty"` // transfer paused (from either side)
+
+	// Where the pause is set: in the agent window and/or on the receiver page.
+	LocalPause  bool `json:"local_pause,omitempty"`
+	RemotePause bool `json:"remote_pause,omitempty"`
 
 	// Totals over the files to transfer that are on the ASIAIR now.
 	TotalFiles int   `json:"total_files"`
@@ -87,6 +91,8 @@ type SyncResponse struct {
 	Commands []Command `json:"commands"`
 	// MaxRate in bytes/s; nil = use the agent's own setting, 0 = unlimited.
 	MaxRate *int64 `json:"max_rate"`
+	// Paused: the transfer is paused from the receiver page.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // Command types.

@@ -33,6 +33,7 @@ type Command struct {
 type persisted struct {
 	Commands  []*Command            `json:"commands"`
 	MaxRate   *int64                `json:"max_rate"`
+	Paused    bool                  `json:"paused"` // transfer paused from the page
 	Inventory []protocol.RemoteFile `json:"inventory"`
 	InvTime   time.Time             `json:"inventory_time"`
 	Status    protocol.AgentStatus  `json:"agent_status"`
@@ -115,7 +116,7 @@ func (s *State) Sync(st protocol.AgentStatus) protocol.SyncResponse {
 	defer s.mu.Unlock()
 	s.p.Status = st
 	s.p.LastSeen = time.Now()
-	resp := protocol.SyncResponse{MaxRate: s.p.MaxRate, Commands: []protocol.Command{}}
+	resp := protocol.SyncResponse{MaxRate: s.p.MaxRate, Paused: s.p.Paused, Commands: []protocol.Command{}}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
 			resp.Commands = append(resp.Commands, c.Command)
@@ -166,6 +167,14 @@ func (s *State) SetRate(bps *int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.p.MaxRate = bps
+	return s.save()
+}
+
+// SetPaused pauses or resumes the transfer from the page.
+func (s *State) SetPaused(p bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.p.Paused = p
 	return s.save()
 }
 

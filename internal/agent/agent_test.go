@@ -239,4 +239,35 @@ func TestPause(t *testing.T) {
 	if st := a.Status(); st.SentBytes >= int64(len(big)) {
 		t.Fatalf("sent %d bytes of %d: not resumed", st.SentBytes, len(big))
 	}
+
+	// pause from the receiver page
+	pause := func(on bool) {
+		b, _ := json.Marshal(map[string]bool{"paused": on})
+		resp, err := http.Post("http://"+rcfg.UIListen+"/ui/api/pause", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("pause: %d", resp.StatusCode)
+		}
+	}
+	pause(true)
+	waitFor(t, "remote pause", 5*time.Second, func() bool { st := a.Status(); return st.Paused && st.RemotePause && !st.LocalPause })
+	writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "next.fit"), 10_000)
+	next := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "Light", "next.fit")
+	waitFor(t, "scan", 5*time.Second, func() bool { return a.Status().QueueFiles == 1 })
+	a.SetPaused(false) // the window cannot lift the receiver's pause
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(next); err == nil {
+		t.Fatal("file sent during the receiver's pause")
+	}
+	pause(false)
+	waitFor(t, "file after remote resume", 10*time.Second, func() bool {
+		_, err := os.Stat(next)
+		return err == nil
+	})
+	if a.Status().Paused {
+		t.Fatal("still paused")
+	}
 }

@@ -524,7 +524,7 @@ func (w *window) update() {
 	} else {
 		w.lblFile.SetText("—")
 		if st.Paused {
-			w.lblFile.SetText("пауза — нажмите «Продолжить»")
+			w.lblFile.SetText(pauseLabel(st))
 		}
 		w.progress.SetValue(0)
 		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + ")")
@@ -565,7 +565,7 @@ func (w *window) update() {
 func trayState(st protocol.AgentStatus, syncErr string) (string, string) {
 	switch {
 	case st.Paused:
-		return StatePaused, fmt.Sprintf("ASIAIR Agent — пауза, в очереди %d", st.QueueFiles)
+		return StatePaused, fmt.Sprintf("ASIAIR Agent — %s, в очереди %d", pauseLabel(st), st.QueueFiles)
 	case !st.Connected && !st.LastScan.IsZero() || !st.Connected && st.LastError != "":
 		return StateError, "ASIAIR Agent — нет связи с ASIAIR"
 	case syncErr != "":
