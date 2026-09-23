@@ -1,0 +1,6 @@
+dist/
+*.log
+agent.yaml
+receiver.yaml
+agent-state.json
+receiver-data/
