@@ -60,6 +60,8 @@ type Agent struct {
 	failures map[string]int
 	failErr  map[string]string // last error per failing file
 	partial  map[string]int64  // bytes the receiver holds of interrupted files
+	fetch    map[string]bool   // requested on the receiver page: sent even while paused
+	current  string            // file being uploaded now
 	files    []source.File     // files to transfer found by the last scan
 	status   protocol.AgentStatus
 
@@ -72,6 +74,7 @@ type Agent struct {
 	// pause: no uploads while set; scanning and commands from the receiver go on.
 	// It is set from the agent window (local) or from the receiver page (remote).
 	paused       atomic.Bool
+	synced       atomic.Bool   // the receiver has answered once: its pause/start is known
 	localPause   bool          // guarded by mu
 	remotePause  bool          // guarded by mu
 	wake         chan struct{} // wakes the transfer loop on pause changes
@@ -93,8 +96,8 @@ func New(cfg *config.Agent) (*Agent, error) {
 		lim: ratelimit.New(rate), localRate: rate,
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
-		partial: map[string]int64{},
-		wake:    make(chan struct{}, 1),
+		partial: map[string]int64{}, fetch: map[string]bool{},
+		wake: make(chan struct{}, 1),
 	}
 	a.status.Version = protocol.Version
 	a.status.ASIAIR = cfg.ASIAIR
@@ -194,27 +197,47 @@ func (a *Agent) SetPaused(p bool) {
 }
 
 // setRemotePaused applies the pause set on the receiver page.
-func (a *Agent) setRemotePaused(p bool) {
+func (a *Agent) setRemotePaused(p, waitStart bool) {
 	a.mu.Lock()
 	changed := a.remotePause != p
+	wasWaiting := a.status.WaitStart
 	a.remotePause = p
+	a.status.WaitStart = waitStart
 	a.mu.Unlock()
+	where := "на приёмнике"
+	switch {
+	case waitStart && !wasWaiting:
+		log.Printf("Агент: передача ещё не запущена — ожидание «Старт» на странице приёмника")
+		where = ""
+	case wasWaiting && !waitStart:
+		log.Printf("Агент: передача запущена на приёмнике")
+		where = ""
+	}
 	if changed {
-		a.applyPause(p, "на приёмнике")
+		a.applyPause(p, where)
+	}
+	// the first answer from the receiver allows uploads
+	if !a.synced.Swap(true) {
+		a.wakeUp()
 	}
 }
 
 // applyPause recomputes the pause from both sources; where names the source
-// of the change for the log.
+// of the change for the log ("" = already logged).
 func (a *Agent) applyPause(p bool, where string) {
 	a.mu.Lock()
 	on := a.localPause || a.remotePause
 	a.status.Paused, a.status.LocalPause, a.status.RemotePause = on, a.localPause, a.remotePause
 	cancel := a.cancelUpload
+	if a.fetch[a.current] {
+		cancel = nil // requested files are sent even while paused
+	}
 	a.mu.Unlock()
-	if p {
+	switch {
+	case where == "":
+	case p:
 		log.Printf("Агент: пауза %s", where)
-	} else {
+	default:
 		log.Printf("Агент: пауза %s снята", where)
 	}
 	if a.paused.Swap(on) == on {
@@ -228,6 +251,39 @@ func (a *Agent) applyPause(p bool, where string) {
 	} else {
 		log.Printf("Агент: передача продолжена")
 	}
+	a.wakeUp()
+}
+
+// setFetch applies the list of files requested on the receiver page.
+func (a *Agent) setFetch(paths []string) {
+	m := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		m[p] = true
+	}
+	a.mu.Lock()
+	changed := len(m) != len(a.fetch)
+	for p := range m {
+		if !a.fetch[p] {
+			changed = true
+			log.Printf("Агент: запрошено скачивание %s", p)
+		}
+	}
+	a.fetch = m
+	var cancel context.CancelFunc
+	if a.paused.Load() && a.current != "" && !m[a.current] {
+		cancel = a.cancelUpload // request withdrawn while paused
+	}
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if changed {
+		a.wakeUp()
+	}
+}
+
+// wakeUp wakes the transfer loop.
+func (a *Agent) wakeUp() {
 	select {
 	case a.wake <- struct{}{}:
 	default:
@@ -263,25 +319,26 @@ func (a *Agent) transferLoop(ctx context.Context) {
 			}
 			lastScan = time.Now()
 		}
-		if a.paused.Load() {
+		if !a.synced.Load() {
 			a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
 			continue
 		}
-		f, ok := a.next()
+		// while paused only the files requested on the receiver page go
+		f, ok := a.next(a.paused.Load())
 		if !ok {
 			a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
 			continue
 		}
 		uctx, cancel := context.WithCancel(ctx)
 		a.mu.Lock()
-		a.cancelUpload = cancel
-		a.mu.Unlock()
-		if a.paused.Load() { // paused between the check above and now
+		a.cancelUpload, a.current = cancel, f.Path
+		if a.paused.Load() && !a.fetch[f.Path] { // paused between next and now
 			cancel()
 		}
+		a.mu.Unlock()
 		err := a.upload(uctx, f)
 		a.mu.Lock()
-		a.cancelUpload = nil
+		a.cancelUpload, a.current = nil, ""
 		a.mu.Unlock()
 		cancel()
 		if err != nil {
@@ -479,18 +536,25 @@ func (a *Agent) updateQueueStatus() {
 }
 
 // next returns the next file to upload that is not waiting for a retry.
-func (a *Agent) next() (source.File, bool) {
+// Files requested on the receiver page go first; onlyFetch (the transfer is
+// paused) returns only them.
+func (a *Agent) next(onlyFetch bool) (source.File, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
-	for _, f := range a.queue {
-		if a.deleted[f.Path] || a.isSent(f) {
-			continue
+	for pass := 0; pass < 2; pass++ {
+		if pass == 1 && onlyFetch {
+			break
 		}
-		if t, ok := a.retryAt[f.Path]; ok && now.Before(t) {
-			continue
+		for _, f := range a.queue {
+			if a.deleted[f.Path] || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
+				continue
+			}
+			if t, ok := a.retryAt[f.Path]; ok && now.Before(t) {
+				continue
+			}
+			return f, true
 		}
-		return f, true
 	}
 	return source.File{}, false
 }
@@ -758,7 +822,8 @@ func (a *Agent) poll(ctx context.Context) error {
 		log.Printf("Агент: ограничение скорости: %s", config.FormatRate(rate))
 		a.lim.SetRate(rate)
 	}
-	a.setRemotePaused(resp.Paused)
+	a.setFetch(resp.Fetch)
+	a.setRemotePaused(resp.Paused, resp.WaitStart)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {
 			return nil

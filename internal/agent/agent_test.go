@@ -38,6 +38,21 @@ func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
 	t.Fatalf("timeout waiting for %s", what)
 }
 
+// startTransfer presses "Старт" on the receiver page.
+func startTransfer(t *testing.T, uiAddr string) {
+	t.Helper()
+	var resp *http.Response
+	waitFor(t, "receiver page", 5*time.Second, func() bool {
+		var err error
+		resp, err = http.Post("http://"+uiAddr+"/ui/api/pause", "application/json", strings.NewReader(`{"paused":false}`))
+		return err == nil
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("start: %d", resp.StatusCode)
+	}
+}
+
 func writeRandom(t *testing.T, name string, size int) []byte {
 	b := make([]byte, size)
 	rand.Read(b)
@@ -70,6 +85,7 @@ func TestEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go srv.Run(ctx)
+	startTransfer(t, uiAddr)
 
 	acfg := &config.Agent{
 		ASIAIR:              "dir:" + asiair,
@@ -215,8 +231,29 @@ func TestPause(t *testing.T) {
 		t.Fatalf("transfer while paused: %+v", st)
 	}
 
-	// resume, then pause in the middle of the file
+	// a new receiver waits for "Старт": the ASIAIR tree is shown, nothing is sent
 	a.SetPaused(false)
+	waitFor(t, "wait for start", 5*time.Second, func() bool { st := a.Status(); return st.WaitStart && st.Paused })
+	waitFor(t, "inventory at the receiver", 5*time.Second, func() bool {
+		resp, err := http.Get("http://" + rcfg.UIListen + "/ui/api/state")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var ui struct {
+			Files     []struct{ Status string } `json:"files"`
+			WaitStart bool                      `json:"wait_start"`
+		}
+		json.NewDecoder(resp.Body).Decode(&ui)
+		return ui.WaitStart && len(ui.Files) == 1
+	})
+	time.Sleep(500 * time.Millisecond)
+	if st := a.Status(); st.Uploading != "" || st.SentFiles != 0 {
+		t.Fatalf("transfer before start: %+v", st)
+	}
+
+	// start, then pause in the middle of the file
+	startTransfer(t, rcfg.UIListen)
 	waitFor(t, "upload to start", 5*time.Second, func() bool { return a.Status().UploadDone > 100_000 })
 	a.SetPaused(true)
 	waitFor(t, "upload to stop", 5*time.Second, func() bool { return a.Status().Uploading == "" })
@@ -274,4 +311,78 @@ func TestPause(t *testing.T) {
 	if a.Status().Paused {
 		t.Fatal("still paused")
 	}
+}
+
+// TestFetchWhilePaused: before "Старт" only the files requested on the
+// receiver page are sent.
+func TestFetchWhilePaused(t *testing.T) {
+	tmp := t.TempDir()
+	asiair := filepath.Join(tmp, "EMMC Images")
+	want := writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "a.fit"), 50_000)
+	writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "b.fit"), 50_000)
+
+	rcfg := &config.Receiver{
+		Listen: freeAddr(t), UIListen: freeAddr(t), Token: "secret",
+		DestDir: filepath.Join(tmp, "dest"), DataDir: filepath.Join(tmp, "data"),
+	}
+	srv, err := receiver.New(rcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+
+	a, err := New(&config.Agent{
+		ASIAIR: "dir:" + asiair, ReceiverURL: "https://" + rcfg.Listen, Token: "secret",
+		ReceiverFingerprint: strings.ToLower(srv.Fingerprint()), MaxRate: "0",
+		ScanInterval: config.Duration(200 * time.Millisecond), PollInterval: config.Duration(200 * time.Millisecond),
+		StateFile: filepath.Join(tmp, "agent-state.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go a.Run(ctx)
+	waitFor(t, "queue", 5*time.Second, func() bool { st := a.Status(); return st.WaitStart && st.QueueFiles == 2 })
+
+	resp, err := http.Post("http://"+rcfg.UIListen+"/ui/api/fetch", "application/json",
+		strings.NewReader(`{"paths":["EMMC Images/Autorun/Light/a.fit"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch: %d", resp.StatusCode)
+	}
+	dest := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "Light")
+	waitFor(t, "requested file", 5*time.Second, func() bool {
+		b, err := os.ReadFile(filepath.Join(dest, "a.fit"))
+		return err == nil && bytes.Equal(b, want)
+	})
+	time.Sleep(600 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(dest, "b.fit")); err == nil {
+		t.Fatal("not requested file sent before start")
+	}
+	if st := a.Status(); !st.WaitStart || st.SentFiles != 1 {
+		t.Fatalf("status: %+v", st)
+	}
+	// the request is dropped once the file is received
+	waitFor(t, "request cleared", 5*time.Second, func() bool {
+		resp, err := http.Get("http://" + rcfg.UIListen + "/ui/api/state")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var ui struct {
+			Fetch []string `json:"fetch"`
+		}
+		json.NewDecoder(resp.Body).Decode(&ui)
+		return len(ui.Fetch) == 0
+	})
+
+	startTransfer(t, rcfg.UIListen)
+	waitFor(t, "the rest after start", 5*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(dest, "b.fit"))
+		return err == nil
+	})
 }

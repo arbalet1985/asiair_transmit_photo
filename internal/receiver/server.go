@@ -244,6 +244,7 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
 		log.Printf("Приёмник: получен %s (%s)", p, config.FormatBytes(size))
+		s.state.FetchDone(p)
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -328,6 +329,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
+	mux.HandleFunc("/ui/api/fetch", s.handleUIFetch)
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
@@ -370,6 +372,8 @@ type uiState struct {
 	Commands      []*Command           `json:"commands"`
 	MaxRate       *int64               `json:"max_rate"`
 	Paused        bool                 `json:"paused"`
+	WaitStart     bool                 `json:"wait_start"`
+	Fetch         []string             `json:"fetch"`
 	Agent         protocol.AgentStatus `json:"agent"`
 	AgentOnline   bool                 `json:"agent_online"`
 	LastSeen      time.Time            `json:"last_seen"`
@@ -397,6 +401,8 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Commands:      snap.Commands,
 		MaxRate:       snap.MaxRate,
 		Paused:        snap.Paused,
+		WaitStart:     snap.WaitStart,
+		Fetch:         snap.Fetch,
 		Agent:         snap.Status,
 		LastSeen:      snap.LastSeen,
 		AgentOnline:   online,
@@ -468,16 +474,51 @@ func (s *Server) handleUIPause(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	waiting := s.state.Snapshot().WaitStart
 	if err := s.state.SetPaused(req.Paused); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if req.Paused {
 		log.Printf("Приёмник: передача поставлена на паузу")
+	} else if waiting {
+		log.Printf("Приёмник: передача запущена")
 	} else {
 		log.Printf("Приёмник: пауза снята")
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUIFetch requests (or withdraws) files to download even while the
+// transfer is paused or not started.
+func (s *Server) handleUIFetch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths  []string `json:"paths"`
+		Cancel bool     `json:"cancel"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	var paths []string
+	for _, p := range req.Paths {
+		cp, err := CleanPath(p)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		paths = append(paths, cp)
+	}
+	n, err := s.state.RequestFetch(paths, !req.Cancel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if req.Cancel {
+		log.Printf("Приёмник: отменено скачивание: %d файл(ов)", n)
+	} else {
+		log.Printf("Приёмник: запрошено скачивание: %d файл(ов)", n)
+	}
+	writeJSON(w, map[string]int{"changed": n})
 }
 
 func (s *Server) handleUIClear(w http.ResponseWriter, r *http.Request) {

@@ -81,6 +81,9 @@ func TestPauseLabel(t *testing.T) {
 	if got := pauseLabel(protocol.AgentStatus{Paused: true, RemotePause: true}); got != "пауза на приёмнике" {
 		t.Fatalf("remote: %q", got)
 	}
+	if got := pauseLabel(protocol.AgentStatus{Paused: true, RemotePause: true, WaitStart: true}); !strings.Contains(got, "Старт") {
+		t.Fatalf("wait start: %q", got)
+	}
 	if got := pauseLabel(protocol.AgentStatus{Paused: true, LocalPause: true}); !strings.Contains(got, "Продолжить") {
 		t.Fatalf("local: %q", got)
 	}
