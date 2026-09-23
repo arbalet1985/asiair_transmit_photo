@@ -67,6 +67,11 @@ type Agent struct {
 	syncErr  string
 
 	uploadDone atomic.Int64
+
+	// pause: no uploads while set; scanning and commands from the receiver go on
+	paused       atomic.Bool
+	wake         chan struct{} // wakes the transfer loop on pause changes
+	cancelUpload context.CancelFunc
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
@@ -84,6 +89,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		lim: ratelimit.New(rate), localRate: rate,
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
+		wake: make(chan struct{}, 1),
 	}
 	a.status.Version = protocol.Version
 	a.status.ASIAIR = cfg.ASIAIR
@@ -169,6 +175,45 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
+// SetPaused pauses or resumes the transfer. Pausing interrupts the file
+// being sent; the receiver keeps the part already received, so it is
+// resumed from there later.
+func (a *Agent) SetPaused(p bool) {
+	if a.paused.Swap(p) == p {
+		return
+	}
+	a.mu.Lock()
+	a.status.Paused = p
+	cancel := a.cancelUpload
+	a.mu.Unlock()
+	if p {
+		log.Printf("Агент: передача приостановлена")
+		if cancel != nil {
+			cancel()
+		}
+	} else {
+		log.Printf("Агент: передача продолжена")
+	}
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Paused reports whether the transfer is paused.
+func (a *Agent) Paused() bool { return a.paused.Load() }
+
+// wait sleeps for d or until the pause state changes.
+func (a *Agent) wait(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-a.wake:
+	case <-t.C:
+	}
+}
+
 // ---------- scanning & uploading ----------
 
 func (a *Agent) transferLoop(ctx context.Context) {
@@ -184,14 +229,37 @@ func (a *Agent) transferLoop(ctx context.Context) {
 			}
 			lastScan = time.Now()
 		}
-		f, ok := a.next()
-		if !ok {
-			sleep(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
+		if a.paused.Load() {
+			a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
 			continue
 		}
-		if err := a.upload(ctx, f); err != nil {
+		f, ok := a.next()
+		if !ok {
+			a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
+			continue
+		}
+		uctx, cancel := context.WithCancel(ctx)
+		a.mu.Lock()
+		a.cancelUpload = cancel
+		a.mu.Unlock()
+		if a.paused.Load() { // paused between the check above and now
+			cancel()
+		}
+		err := a.upload(uctx, f)
+		a.mu.Lock()
+		a.cancelUpload = nil
+		a.mu.Unlock()
+		cancel()
+		if err != nil {
 			if ctx.Err() != nil {
 				return
+			}
+			if uctx.Err() != nil { // interrupted by the pause, not a failure
+				a.mu.Lock()
+				a.status.Uploading = ""
+				a.mu.Unlock()
+				log.Printf("Агент: %s: передача прервана паузой, продолжится с того же места", f.Path)
+				continue
 			}
 			a.fail(f, err)
 		}

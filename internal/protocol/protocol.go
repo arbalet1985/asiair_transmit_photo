@@ -53,12 +53,13 @@ type AgentStatus struct {
 	Uploading  string    `json:"uploading,omitempty"`
 	UploadDone int64     `json:"upload_done"`
 	UploadSize int64     `json:"upload_size"`
-	Speed      float64   `json:"speed"`       // bytes/s, measured
-	Rate       int64     `json:"rate"`        // bytes/s, limit in effect (0 = unlimited)
-	QueueFiles int       `json:"queue_files"` // files waiting to be sent
-	QueueBytes int64     `json:"queue_bytes"` // bytes waiting to be sent
-	SentFiles  int       `json:"sent_files"`  // files sent since start
-	SentBytes  int64     `json:"sent_bytes"`  // bytes sent since start
+	Speed      float64   `json:"speed"`            // bytes/s, measured
+	Rate       int64     `json:"rate"`             // bytes/s, limit in effect (0 = unlimited)
+	QueueFiles int       `json:"queue_files"`      // files waiting to be sent
+	QueueBytes int64     `json:"queue_bytes"`      // bytes waiting to be sent
+	SentFiles  int       `json:"sent_files"`       // files sent since start
+	SentBytes  int64     `json:"sent_bytes"`       // bytes sent since start
+	Paused     bool      `json:"paused,omitempty"` // transfer paused by the user
 
 	// Totals over the files to transfer that are on the ASIAIR now.
 	TotalFiles int   `json:"total_files"`

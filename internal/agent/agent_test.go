@@ -176,3 +176,67 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("Probe: %+v %v", res, err)
 	}
 }
+
+// TestPause: a pause interrupts the file being sent and stops the transfer;
+// after "continue" the file is resumed and arrives intact.
+func TestPause(t *testing.T) {
+	tmp := t.TempDir()
+	asiair := filepath.Join(tmp, "EMMC Images")
+	big := writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "big.fit"), 600_000)
+
+	rcfg := &config.Receiver{
+		Listen: freeAddr(t), UIListen: freeAddr(t), Token: "secret",
+		DestDir: filepath.Join(tmp, "dest"), DataDir: filepath.Join(tmp, "data"),
+	}
+	srv, err := receiver.New(rcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+
+	a, err := New(&config.Agent{
+		ASIAIR: "dir:" + asiair, ReceiverURL: "https://" + rcfg.Listen, Token: "secret",
+		ReceiverFingerprint: strings.ToLower(srv.Fingerprint()), MaxRate: "200KB/s",
+		ScanInterval: config.Duration(200 * time.Millisecond), PollInterval: config.Duration(200 * time.Millisecond),
+		StateFile: filepath.Join(tmp, "agent-state.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetPaused(true)
+	go a.Run(ctx)
+
+	// paused from the start: nothing is sent
+	waitFor(t, "scan", 5*time.Second, func() bool { return a.Status().QueueFiles == 1 })
+	time.Sleep(500 * time.Millisecond)
+	if st := a.Status(); st.Uploading != "" || st.SentFiles != 0 || !st.Paused {
+		t.Fatalf("transfer while paused: %+v", st)
+	}
+
+	// resume, then pause in the middle of the file
+	a.SetPaused(false)
+	waitFor(t, "upload to start", 5*time.Second, func() bool { return a.Status().UploadDone > 100_000 })
+	a.SetPaused(true)
+	waitFor(t, "upload to stop", 5*time.Second, func() bool { return a.Status().Uploading == "" })
+	time.Sleep(500 * time.Millisecond)
+	if st := a.Status(); st.Uploading != "" || st.SentFiles != 0 || len(st.Failed) != 0 {
+		t.Fatalf("paused upload: %+v", st)
+	}
+
+	a.SetPaused(false)
+	dest := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "Light", "big.fit")
+	waitFor(t, "file to arrive", 10*time.Second, func() bool {
+		_, err := os.Stat(dest)
+		return err == nil
+	})
+	got, _ := os.ReadFile(dest)
+	if !bytes.Equal(got, big) {
+		t.Fatal("received file differs")
+	}
+	// resumed, not sent again from the start
+	if st := a.Status(); st.SentBytes >= int64(len(big)) {
+		t.Fatalf("sent %d bytes of %d: not resumed", st.SentBytes, len(big))
+	}
+}

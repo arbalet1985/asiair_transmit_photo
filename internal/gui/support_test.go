@@ -30,10 +30,16 @@ func TestSettings(t *testing.T) {
 	if !LoadSettings(p).StartMinimized {
 		t.Fatal("setting not saved")
 	}
+	if err := SaveSettings(p, Settings{Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s := LoadSettings(p); !s.Paused || s.StartMinimized {
+		t.Fatalf("pause not saved: %+v", s)
+	}
 }
 
 func TestIconImage(t *testing.T) {
-	for _, st := range []string{StateStopped, StateError, StateIdle, StateUploading} {
+	for _, st := range []string{StateStopped, StateError, StateIdle, StateUploading, StatePaused} {
 		img := IconImage(st, 32)
 		if img.Bounds().Dx() != 32 {
 			t.Fatal("wrong size")
