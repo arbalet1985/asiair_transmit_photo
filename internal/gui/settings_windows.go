@@ -31,6 +31,7 @@ type settingsForm struct {
 	port                         *walk.NumberEdit
 	asiairResult, receiverResult *walk.Label
 	testASIAIR, testReceiver     *walk.PushButton
+	findASIAIR                   *walk.PushButton
 	scheme                       string // "https" unless receiver_url says otherwise
 }
 
@@ -54,6 +55,19 @@ func (w *window) settingsPage(minimized bool) []Widget {
 				LineEdit{AssignTo: &f.asiair, ToolTipText: `Например \\192.168.1.50\EMMC Images или просто 192.168.1.50`},
 				PushButton{AssignTo: &f.testASIAIR, Text: "Проверить", OnClicked: w.testASIAIR},
 				Label{}, hint(`например \\192.168.1.50\EMMC Images или просто 192.168.1.50`), Label{},
+
+				Label{},
+				Composite{
+					Layout: HBox{MarginsZero: true},
+					Children: []Widget{
+						PushButton{AssignTo: &f.findASIAIR, Text: "Найти в сети…",
+							ToolTipText: "Просканировать локальную сеть и найти ASIAIR или StellaVita",
+							OnClicked:   w.findDevices},
+						hint("ищет ASIAIR или StellaVita в сети обсерватории"),
+						HSpacer{},
+					},
+				},
+				Label{},
 
 				Label{Text: "Логин:"},
 				LineEdit{AssignTo: &f.user},
@@ -230,6 +244,68 @@ func (w *window) testASIAIR() {
 			setResult(f.asiairResult, true, "вход: "+res.Login+", шары: "+strings.Join(names, ", "))
 			msg := "доступен, вход: " + res.Login + "; " + strings.Join(details, "; ")
 			log.Printf("Проверка ASIAIR %s: %s", link, msg)
+		})
+	}()
+}
+
+// findDevices scans the local network and fills the ASIAIR fields with
+// the first ASIAIR or StellaVita found.
+func (w *window) findDevices() {
+	f := &w.form
+	f.findASIAIR.SetEnabled(false)
+	f.testASIAIR.SetEnabled(false)
+	f.asiairResult.SetTextColor(colorDim)
+	f.asiairResult.SetText("Поиск в сети…")
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		devs, err := source.Discover(ctx, func(s string) {
+			log.Printf("Поиск ASIAIR: %s", s)
+			w.mw.Synchronize(func() { setShort(f.asiairResult, s, maxResult) })
+		})
+		w.mw.Synchronize(func() {
+			f.findASIAIR.SetEnabled(true)
+			f.testASIAIR.SetEnabled(true)
+			if err != nil && len(devs) == 0 {
+				setResult(f.asiairResult, false, "поиск не удался: "+err.Error())
+				log.Printf("Поиск ASIAIR: %v", err)
+				return
+			}
+			if len(devs) == 0 {
+				setResult(f.asiairResult, false, "ASIAIR и StellaVita в сети не найдены. Проверьте, что компьютер подключён к той же сети, и укажите адрес вручную.")
+				log.Printf("Поиск ASIAIR: ничего не найдено")
+				return
+			}
+			var list []string
+			for _, d := range devs {
+				s := d.Kind + " " + d.IP
+				if d.Name != "" {
+					s += " (" + d.Name + ")"
+				}
+				list = append(list, s)
+				log.Printf("Поиск ASIAIR: найден %s, шары: %s", s, strings.Join(d.Shares, ", "))
+			}
+			d := devs[0]
+			if len(devs) > 1 {
+				items := make([]string, len(devs))
+				for i, s := range list {
+					items[i] = fmt.Sprintf("%d. %s", i+1, s)
+				}
+				if walk.MsgBox(w.mw, "Найдено несколько устройств",
+					"Найдено:\n\n"+strings.Join(items, "\n")+"\n\nИспользовать первое ("+list[0]+")?",
+					walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+					setResult(f.asiairResult, true, "найдено: "+strings.Join(list, "; ")+". Впишите нужный адрес вручную.")
+					return
+				}
+			}
+			f.asiair.SetText(d.Link())
+			f.user.SetText(d.Username)
+			f.pass.SetText(d.Password)
+			msg := "найден " + list[0] + ", путь " + d.Link()
+			if d.Username != "" {
+				msg += ", логин " + d.Username
+			}
+			setResult(f.asiairResult, true, msg+". Нажмите «Проверить», затем «Сохранить».")
 		})
 	}()
 }

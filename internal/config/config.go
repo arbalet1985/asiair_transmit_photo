@@ -125,7 +125,7 @@ func agentDefaults() *Agent {
 		ScanInterval: Duration(time.Minute),
 		PollInterval: Duration(15 * time.Second),
 		MinFileAge:   Duration(30 * time.Second),
-		MaxRate:      "0",
+		MaxRate:      "10MB/s",
 		StateFile:    "agent-state.json",
 		Extensions:   []string{".fit", ".fits", ".fts", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".xisf"},
 		Exclude:      []string{"Thumbnail"},
