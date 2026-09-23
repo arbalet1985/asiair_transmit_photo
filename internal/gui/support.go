@@ -5,6 +5,7 @@ package gui
 
 import (
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -201,4 +202,20 @@ func ShortenTail(s string, n int) string {
 		return s
 	}
 	return "…" + string(r[len(r)-n+1:])
+}
+
+// formatETA renders a remaining time like "~41 с", "~12 мин", "~1 ч 32 мин".
+func formatETA(sec float64) string {
+	if sec <= 0 || sec != sec {
+		return ""
+	}
+	s := int(sec + 0.5)
+	if s < 60 {
+		return fmt.Sprintf("~%d с", s)
+	}
+	m := (s + 30) / 60
+	if m < 60 {
+		return fmt.Sprintf("~%d мин", m)
+	}
+	return fmt.Sprintf("~%d ч %d мин", m/60, m%60)
 }

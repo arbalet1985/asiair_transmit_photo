@@ -59,3 +59,11 @@ func TestShorten(t *testing.T) {
 		t.Fatalf("ShortenTail = %q", got)
 	}
 }
+
+func TestFormatETA(t *testing.T) {
+	for sec, want := range map[float64]string{0: "", 41: "~41 с", 720: "~12 мин", 5520: "~1 ч 32 мин"} {
+		if got := formatETA(sec); got != want {
+			t.Errorf("formatETA(%v) = %q, want %q", sec, got, want)
+		}
+	}
+}

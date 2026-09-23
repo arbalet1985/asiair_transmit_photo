@@ -58,6 +58,8 @@ type Agent struct {
 	deleted  map[string]bool // deleted during this run; never upload again
 	retryAt  map[string]time.Time
 	failures map[string]int
+	failErr  map[string]string // last error per failing file
+	files    []source.File     // files to transfer found by the last scan
 	status   protocol.AgentStatus
 
 	// connection to the receiver, for the window
@@ -81,7 +83,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		cfg: cfg, src: src, cl: cl,
 		lim: ratelimit.New(rate), localRate: rate,
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
-		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{},
+		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
 	}
 	a.status.Version = protocol.Version
 	a.status.ASIAIR = cfg.ASIAIR
@@ -209,22 +211,37 @@ func (a *Agent) wanted(p string) bool {
 	return false
 }
 
-func (a *Agent) skipDir(p string) bool {
+// excluded reports whether a file lies in an excluded folder (by name or
+// by path inside the share).
+func (a *Agent) excluded(p string) bool {
 	_, rest, _ := strings.Cut(p, "/")
+	dirs := strings.Split(path.Dir(rest), "/")
 	for _, ex := range a.cfg.Exclude {
 		ex = strings.Trim(strings.ReplaceAll(ex, `\`, "/"), "/")
-		if ex != "" && (strings.EqualFold(rest, ex) || strings.EqualFold(path.Base(rest), ex)) {
-			return true
+		if ex == "" {
+			continue
+		}
+		for i := range dirs {
+			if dirs[i] == "." {
+				continue
+			}
+			if strings.EqualFold(dirs[i], ex) || strings.EqualFold(strings.Join(dirs[:i+1], "/"), ex) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
 func (a *Agent) scan(ctx context.Context) error {
-	var files []source.File
-	err := a.src.Walk(ctx, a.skipDir, func(f source.File) error {
-		if a.wanted(f.Path) {
+	var files, filtered []source.File
+	// the whole tree is listed so the receiver can show it; filtered files
+	// are reported but never transferred
+	err := a.src.Walk(ctx, nil, func(f source.File) error {
+		if a.wanted(f.Path) && !a.excluded(f.Path) {
 			files = append(files, f)
+		} else {
+			filtered = append(filtered, f)
 		}
 		return nil
 	})
@@ -238,25 +255,24 @@ func (a *Agent) scan(ctx context.Context) error {
 	a.status.LastScan = now
 	present := make(map[string]bool, len(files))
 	seen := make(map[string]seenInfo, len(files))
-	var queue []source.File
-	var inv []protocol.RemoteFile
+	var queue, kept []source.File
 	for _, f := range files {
 		if a.deleted[f.Path] {
 			continue // removed while the scan was running
 		}
 		present[f.Path] = true
+		kept = append(kept, f)
 		s, ok := a.seen[f.Path]
 		if !ok || s.f.Size != f.Size || !s.f.ModTime.Equal(f.ModTime) {
 			s = seenInfo{f: f, since: now}
 		}
 		seen[f.Path] = s
-		sent := a.isSent(f)
-		inv = append(inv, protocol.RemoteFile{Path: f.Path, Size: f.Size, ModTime: f.ModTime, Sent: sent})
-		if !sent && now.Sub(s.since) >= a.cfg.MinFileAge.D() {
+		if !a.isSent(f) && now.Sub(s.since) >= a.cfg.MinFileAge.D() {
 			queue = append(queue, f)
 		}
 	}
 	a.seen = seen
+	a.files = kept
 	// forget files that are gone from the ASIAIR
 	changed := false
 	for p := range a.sent {
@@ -277,6 +293,7 @@ func (a *Agent) scan(ctx context.Context) error {
 		if !present[p] {
 			delete(a.retryAt, p)
 			delete(a.failures, p)
+			delete(a.failErr, p)
 		}
 	}
 	// oldest first: the night's frames arrive in shooting order
@@ -289,12 +306,54 @@ func (a *Agent) scan(ctx context.Context) error {
 	a.queue = queue
 	a.updateQueueStatus()
 	a.status.LastError = ""
+	inv := a.inventoryLocked(filtered, now)
 	a.mu.Unlock()
 
 	if err := a.cl.postJSON(ctx, "/api/inventory", protocol.Inventory{Files: inv}, nil); err != nil {
 		log.Printf("Агент: не удалось отправить список файлов: %v", err)
 	}
 	return nil
+}
+
+// inventoryLocked lists the files on the ASIAIR with their state.
+// Caller holds a.mu.
+func (a *Agent) inventoryLocked(filtered []source.File, now time.Time) []protocol.RemoteFile {
+	queued := make(map[string]bool, len(a.queue))
+	for _, f := range a.queue {
+		queued[f.Path] = true
+	}
+	inv := make([]protocol.RemoteFile, 0, len(a.files)+len(filtered))
+	for _, f := range a.files {
+		st := protocol.StateWriting
+		switch {
+		case a.isSent(f):
+			st = protocol.StateSent
+		case !a.retryAt[f.Path].IsZero() && now.Before(a.retryAt[f.Path]):
+			st = protocol.StateRetry
+		case queued[f.Path]:
+			st = protocol.StateQueued
+		}
+		inv = append(inv, protocol.RemoteFile{Path: f.Path, Size: f.Size, ModTime: f.ModTime, Sent: st == protocol.StateSent, State: st})
+	}
+	for _, f := range filtered {
+		inv = append(inv, protocol.RemoteFile{Path: f.Path, Size: f.Size, ModTime: f.ModTime, State: protocol.StateFiltered})
+	}
+	return inv
+}
+
+// updateTotalsLocked recomputes the totals over the files to transfer.
+// Caller holds a.mu.
+func (a *Agent) updateTotalsLocked() {
+	st := &a.status
+	st.TotalFiles, st.TotalBytes, st.DoneFiles, st.DoneBytes = 0, 0, 0, 0
+	for _, f := range a.files {
+		st.TotalFiles++
+		st.TotalBytes += f.Size
+		if a.isSent(f) {
+			st.DoneFiles++
+			st.DoneBytes += f.Size
+		}
+	}
 }
 
 // isSent: caller holds a.mu.
@@ -309,6 +368,7 @@ func (a *Agent) updateQueueStatus() {
 	for _, f := range a.queue {
 		a.status.QueueBytes += f.Size
 	}
+	a.updateTotalsLocked()
 }
 
 // next returns the next file to upload that is not waiting for a retry.
@@ -342,6 +402,7 @@ func (a *Agent) dequeue(p string) {
 func (a *Agent) fail(f source.File, err error) {
 	a.mu.Lock()
 	a.failures[f.Path]++
+	a.failErr[f.Path] = err.Error()
 	n := a.failures[f.Path]
 	backoff := min(30*time.Second<<min(n-1, 4), 5*time.Minute) // 30s … 5m
 	a.retryAt[f.Path] = time.Now().Add(backoff)
@@ -357,6 +418,7 @@ func (a *Agent) markSent(f source.File) {
 	a.sent[f.Path] = sentInfo{Size: f.Size, MTime: f.ModTime.UnixNano(), At: time.Now()}
 	delete(a.retryAt, f.Path)
 	delete(a.failures, f.Path)
+	delete(a.failErr, f.Path)
 	a.dequeue(f.Path)
 	a.status.Uploading = ""
 	a.saveState()
@@ -546,7 +608,16 @@ func (a *Agent) Status() protocol.AgentStatus {
 	}
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
-	return a.status
+	st := a.status
+	st.Failed = nil
+	for p, t := range a.retryAt {
+		st.Failed = append(st.Failed, protocol.FailedFile{Path: p, Error: a.failErr[p], RetryAt: t})
+	}
+	sort.Slice(st.Failed, func(i, j int) bool { return st.Failed[i].Path < st.Failed[j].Path })
+	if len(st.Failed) > 50 {
+		st.Failed = st.Failed[:50]
+	}
+	return st
 }
 
 func (a *Agent) poll(ctx context.Context) error {
@@ -606,6 +677,13 @@ func (a *Agent) deleteFile(p string) error {
 	a.mu.Lock()
 	delete(a.sent, p)
 	delete(a.seen, p)
+	kept := a.files[:0]
+	for _, f := range a.files {
+		if f.Path != p {
+			kept = append(kept, f)
+		}
+	}
+	a.files = kept
 	a.dequeue(p)
 	a.saveState()
 	a.mu.Unlock()

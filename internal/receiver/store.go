@@ -218,6 +218,30 @@ func (s *Store) Commit(p string, size int64, mtime time.Time, sum string) error 
 	return os.Chtimes(dst, mtime, mtime)
 }
 
+// Partials returns how many bytes of each unfinished upload have arrived.
+func (s *Store) Partials() map[string]int64 {
+	out := map[string]int64{}
+	dir := filepath.Join(s.root, partialDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		var m partMeta
+		if err != nil || json.Unmarshal(b, &m) != nil || m.Path == "" {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(dir, strings.TrimSuffix(e.Name(), ".json")+".part")); err == nil {
+			out[m.Path] = st.Size()
+		}
+	}
+	return out
+}
+
 // LocalFile is a received file.
 type LocalFile struct {
 	Path    string
