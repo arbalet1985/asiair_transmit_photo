@@ -65,6 +65,23 @@
   .dirlist div { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
   .dirlist div:hover { background: var(--row); }
   .dirlist .empty { color: var(--muted); cursor: default; }
+  #viewer { width: calc(100vw - 32px); max-width: none; height: calc(100vh - 32px); max-height: none; padding: 0; }
+  #viewer[open] { display: flex; flex-direction: column; }
+  .vbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .vbar .title { font-weight: 600; overflow-wrap: anywhere; flex: 1 1 200px; }
+  .vbody { flex: 1; display: flex; min-height: 0; }
+  .vimg { flex: 1; overflow: auto; background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
+  .vimg canvas, .vimg img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+  .vimg.zoom { display: block; }
+  .vimg.zoom canvas, .vimg.zoom img { width: auto; height: auto; max-width: none; object-fit: fill; cursor: zoom-out; }
+  .vimg .msg { color: #bbb; position: absolute; }
+  .vside { width: 270px; flex: none; padding: 10px 12px; border-left: 1px solid var(--border); overflow-y: auto; font-size: 13px; }
+  .vside h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .03em; }
+  .vside label { display: block; margin: 6px 0 2px; }
+  .vside input[type=range] { width: 100%; }
+  .vside .kv { grid-template-columns: max-content 1fr; font-size: 12px; }
+  .vsel.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+  @media (max-width: 800px) { .vbody { flex-direction: column; } .vside { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 40%; } }
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
 </style>
@@ -197,6 +214,37 @@
   </section>
 
 </main>
+<dialog id="viewer">
+  <div class="vbar">
+    <button id="vPrev" title="Предыдущий (←)">←</button>
+    <button id="vNext" title="Следующий (→)">→</button>
+    <span class="title" id="vTitle"></span>
+    <span class="muted" id="vPos"></span>
+    <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
+    <button id="vClose" title="Закрыть (Esc)">✕</button>
+  </div>
+  <div class="vbody">
+    <div class="vimg" id="vImgBox"><span class="msg" id="vMsg"></span></div>
+    <div class="vside">
+      <div id="vStretch">
+        <h3>Растяжка</h3>
+        <label><input type="checkbox" id="vAuto" checked> Авторастяжка</label>
+        <label><input type="checkbox" id="vLinked"> Каналы вместе</label>
+        <label for="vShadow">Чёрная точка: <span id="vShadowV"></span></label>
+        <input type="range" id="vShadow" min="-5" max="0" step="0.1" value="-2.8">
+        <label for="vBg">Яркость фона: <span id="vBgV"></span></label>
+        <input type="range" id="vBg" min="0.05" max="0.6" step="0.01" value="0.25">
+        <label for="vWhite">Белая точка: <span id="vWhiteV"></span></label>
+        <input type="range" id="vWhite" min="0.05" max="1" step="0.005" value="1">
+        <div class="toolbar" style="margin-top:8px"><button id="vReset">Сбросить</button></div>
+      </div>
+      <h3>Кадр</h3>
+      <dl class="kv" id="vInfo"></dl>
+      <div class="hint">← → листать, Delete — отметить, щелчок по кадру — увеличить, Esc — закрыть.</div>
+      <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
+    </div>
+  </div>
+</dialog>
 <dialog id="dirDlg">
   <h2>Выбор папки для снимков</h2>
   <div class="crumbs" id="dirRoots"></div>
@@ -305,8 +353,9 @@ function renderFiles() {
     const cb = el("input", { type: "checkbox", checked: selected.has(f.path), disabled: !f.remote || f.pending });
     cb.onchange = () => { cb.checked ? selected.add(f.path) : selected.delete(f.path); renderFiles(); };
     let name = f.name;
-    if (f.local && /\.(jpe?g|png)$/i.test(f.name)) {
-      name = el("a", { href: "/ui/file?path=" + encodeURIComponent(f.path), target: "_blank", textContent: f.name });
+    if (f.local && viewable(f.name)) {
+      name = el("a", { href: "#", textContent: f.name, title: "Открыть просмотр" });
+      name.onclick = e => { e.preventDefault(); openViewer(f.path, files); };
     }
     let remote;
     if (f.pending) remote = el("span", { className: "badge pend", textContent: "удаляется" });
@@ -491,6 +540,228 @@ $("dirChoose").onclick = async () => {
   try { await post("/ui/api/destdir", { path }); $("dirDlg").close(); toast("Папка изменена"); refresh(); }
   catch (e) { $("dirErr").textContent = e.message; }
 };
+
+// ---------- image viewer with auto stretch ----------
+const viewable = n => /\.(fits?|fts|jpe?g|png)$/i.test(n);
+const isFits = n => /\.(fits?|fts)$/i.test(n);
+const V = { list: [], idx: 0, img: null, req: 0, zoom: false };
+
+// midtones transfer function (PixInsight STF)
+function mtf(m, x) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  return ((m - 1) * x) / ((2 * m - 1) * x - m);
+}
+// median and normalised MAD (0..1) of 16-bit samples of the given channels
+function stats(data, channels, which) {
+  const hist = new Uint32Array(65536);
+  let n = 0;
+  for (let i = 0; i < data.length; i += channels)
+    for (const c of which) { hist[data[i + c]]++; n++; }
+  const pct = (h, total, q) => { let acc = 0; for (let v = 0; v < 65536; v++) { acc += h[v]; if (acc >= total * q) return v; } return 65535; };
+  const med = pct(hist, n, 0.5);
+  const dev = new Uint32Array(65536);
+  for (let v = 0; v < 65536; v++) if (hist[v]) dev[Math.abs(v - med)] += hist[v];
+  const mad = pct(dev, n, 0.5);
+  return { median: med / 65535, madn: 1.4826 * mad / 65535 };
+}
+function computeStretch() {
+  const im = V.img;
+  if (!im || !im.data) return;
+  const auto = $("vAuto").checked, linked = $("vLinked").checked || im.channels === 1;
+  const sigma = +$("vShadow").value, target = +$("vBg").value, c1 = +$("vWhite").value;
+  $("vShadowV").textContent = sigma.toFixed(1) + "σ";
+  $("vBgV").textContent = target.toFixed(2);
+  $("vWhiteV").textContent = c1.toFixed(3);
+  for (const id of ["vShadow", "vBg", "vLinked"]) $(id).disabled = !auto;
+  const params = [];
+  const groups = linked ? [[...Array(im.channels).keys()]] : [...Array(im.channels).keys()].map(c => [c]);
+  if (!im.stats) im.stats = {};
+  for (const g of groups) {
+    let c0 = 0, m = 0.5;
+    if (auto) {
+      const key = g.join(",");
+      const st = im.stats[key] || (im.stats[key] = stats(im.data, im.channels, g));
+      c0 = Math.min(Math.max(st.median + sigma * st.madn, 0), c1 * 0.99);
+      m = mtf(target, Math.max((st.median - c0) / (c1 - c0), 1e-6));
+    }
+    for (const c of g) params[c] = { c0, m };
+  }
+  // one lookup table per channel: 16-bit sample -> 8-bit screen value
+  im.luts = params.map(({ c0, m }) => {
+    const lut = new Uint8ClampedArray(65536), span = c1 - c0;
+    for (let v = 0; v < 65536; v++) {
+      const x = (v / 65535 - c0) / span;
+      lut[v] = x <= 0 ? 0 : x >= 1 ? 255 : Math.round(mtf(m, x) * 255);
+    }
+    return lut;
+  });
+  renderViewer();
+}
+function renderViewer() {
+  const im = V.img;
+  if (!im || !im.luts) return;
+  const cv = im.canvas, ctx = cv.getContext("2d");
+  const out = ctx.createImageData(im.width, im.height), o = out.data, d = im.data, ch = im.channels, L = im.luts;
+  for (let p = 0, i = 0; p < o.length; p += 4, i += ch) {
+    if (ch === 1) { const g = L[0][d[i]]; o[p] = o[p + 1] = o[p + 2] = g; }
+    else { o[p] = L[0][d[i]]; o[p + 1] = L[1][d[i + 1]]; o[p + 2] = L[2][d[i + 2]]; }
+    o[p + 3] = 255;
+  }
+  ctx.putImageData(out, 0, 0);
+}
+const hdrNames = { OBJECT: "Объект", IMAGETYP: "Тип", FRAME: "Тип", EXPTIME: "Выдержка, с", EXPOSURE: "Выдержка, с", GAIN: "Gain", OFFSET: "Offset",
+  "CCD-TEMP": "Температура, °C", "SET-TEMP": "Задано, °C", FILTER: "Фильтр", XBINNING: "Бининг", INSTRUME: "Камера", TELESCOP: "Телескоп",
+  FOCALLEN: "Фокус, мм", "DATE-OBS": "Дата (UTC)", BAYERPAT: "Байер", RA: "RA", DEC: "Dec", OBJCTRA: "RA", OBJCTDEC: "Dec" };
+function showInfo(f, meta) {
+  const dl = $("vInfo");
+  dl.replaceChildren();
+  const add = (k, v) => dl.append(el("dt", { textContent: k }), el("dd", { textContent: v }));
+  add("Размер файла", fmtBytes(f.size));
+  if (meta) {
+    add("Кадр", `${meta.source[0]}×${meta.source[1]}` + (meta.bayer ? " (цветной, " + meta.bayer + ")" : meta.channels === 3 ? " (RGB)" : " (ч/б)"));
+    add("Превью", `${meta.width}×${meta.height}, уменьшено в ${meta.binning}×`);
+    const seen = new Set();
+    for (const [k, v] of Object.entries(meta.header)) {
+      const name = hdrNames[k] || k;
+      if (seen.has(name) || k === "BAYERPAT") continue;
+      seen.add(name);
+      add(name, v);
+    }
+  }
+}
+function updateSel() {
+  const f = V.list[V.idx];
+  const f2 = state.files.find(x => x.path === f.path) || f;
+  const can = f2.remote && !f2.pending;
+  $("vSel").disabled = !can;
+  $("vSel").classList.toggle("on", selected.has(f.path));
+  $("vSel").textContent = f2.pending ? "удаляется" : !f2.remote ? "нет на ASIAIR" : selected.has(f.path) ? "Отмечен для удаления" : "Отметить для удаления";
+  $("vDelete").disabled = selected.size === 0;
+  $("vDelete").textContent = `Удалить отмеченные на ASIAIR (${selected.size})…`;
+}
+async function showFile() {
+  const f = V.list[V.idx], req = ++V.req;
+  $("vTitle").textContent = f.path;
+  $("vPos").textContent = `${V.idx + 1} / ${V.list.length}`;
+  $("vPrev").disabled = V.idx === 0;
+  $("vNext").disabled = V.idx === V.list.length - 1;
+  updateSel();
+  const box = $("vImgBox");
+  V.zoom = false;
+  box.classList.remove("zoom");
+  $("vMsg").textContent = "загрузка…";
+  showInfo(f, null);
+  $("vStretch").hidden = !isFits(f.name);
+  if (!isFits(f.name)) {
+    const img = el("img", { src: "/ui/file?path=" + encodeURIComponent(f.path), alt: f.name });
+    img.onload = () => { if (req === V.req) $("vMsg").textContent = ""; };
+    img.onclick = toggleZoom;
+    V.img = null;
+    box.replaceChildren($("vMsg"), img);
+    return;
+  }
+  try {
+    const max = Math.round(Math.min(2400, Math.max(800, window.innerWidth * (window.devicePixelRatio || 1))));
+    if (!(await loadFits(f, max, req))) return;
+    $("vMsg").textContent = "";
+    showInfo(f, V.img);
+  } catch (e) {
+    if (req === V.req) $("vMsg").textContent = "Не удалось открыть: " + e.message;
+  }
+}
+// loadFits fetches a preview of at most max pixels wide and shows it with
+// the current stretch settings. It returns false if another file was chosen.
+async function loadFits(f, max, req) {
+  const r = await fetch(`/ui/preview?path=${encodeURIComponent(f.path)}&max=${max}`);
+  if (!r.ok) throw new Error(await r.text());
+  const buf = await r.arrayBuffer();
+  if (req !== V.req) return false;
+  const n = new DataView(buf).getUint32(0, true);
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const data = new Uint16Array(buf, 4 + n, meta.width * meta.height * meta.channels);
+  const canvas = el("canvas", { width: meta.width, height: meta.height });
+  canvas.onclick = toggleZoom;
+  V.img = { ...meta, data, canvas, max };
+  $("vImgBox").replaceChildren($("vMsg"), canvas);
+  computeStretch();
+  return true;
+}
+// toggleZoom switches between "fit to window" and a closer look centred on
+// the clicked point; FITS frames are reloaded at full sensor resolution.
+async function toggleZoom(e) {
+  const box = $("vImgBox"), node = e.currentTarget;
+  const natW = node.width || node.naturalWidth, natH = node.height || node.naturalHeight;
+  const r = node.getBoundingClientRect();
+  // where the click was on the picture (object-fit leaves margins)
+  let fx = 0.5, fy = 0.5;
+  if (!V.zoom) {
+    const sc = Math.min(r.width / natW, r.height / natH), dw = natW * sc, dh = natH * sc;
+    fx = Math.min(Math.max((e.clientX - r.left - (r.width - dw) / 2) / dw, 0), 1);
+    fy = Math.min(Math.max((e.clientY - r.top - (r.height - dh) / 2) / dh, 0), 1);
+  }
+  V.zoom = !V.zoom;
+  if (!V.zoom) {
+    box.classList.remove("zoom");
+    node.style.width = node.style.height = "";
+    return;
+  }
+  const f = V.list[V.idx];
+  let target = node;
+  if (V.img && isFits(f.name) && V.img.binning > (V.img.bayer ? 2 : 1) && V.img.max < 8000) {
+    $("vMsg").textContent = "загрузка полного разрешения…";
+    try {
+      if (!(await loadFits(f, 8000, V.req))) return;
+      target = V.img.canvas;
+      $("vMsg").textContent = "";
+      showInfo(f, V.img);
+    } catch (err) { $("vMsg").textContent = err.message; }
+  }
+  box.classList.add("zoom");
+  const w = Math.max(target.width || target.naturalWidth, box.clientWidth * 2);
+  target.style.width = w + "px";
+  target.style.height = "auto";
+  box.scrollLeft = fx * target.offsetWidth - box.clientWidth / 2;
+  box.scrollTop = fy * target.offsetHeight - box.clientHeight / 2;
+}
+function openViewer(path, files) {
+  V.list = files.filter(f => f.local && viewable(f.name));
+  V.idx = Math.max(0, V.list.findIndex(f => f.path === path));
+  V.zoom = false; $("vImgBox").classList.remove("zoom");
+  $("viewer").showModal();
+  showFile();
+}
+function step(d) {
+  const i = V.idx + d;
+  if (i < 0 || i >= V.list.length) return;
+  V.idx = i;
+  showFile();
+}
+function toggleSel() {
+  const f = V.list[V.idx], f2 = state.files.find(x => x.path === f.path);
+  if (!f2 || !f2.remote || f2.pending) return;
+  selected.has(f.path) ? selected.delete(f.path) : selected.add(f.path);
+  updateSel();
+  renderFiles();
+}
+$("vPrev").onclick = () => step(-1);
+$("vNext").onclick = () => step(1);
+$("vClose").onclick = () => $("viewer").close();
+$("vSel").onclick = toggleSel;
+$("vDelete").onclick = () => $("delBtn").click();
+for (const id of ["vAuto", "vLinked"]) $(id).onchange = computeStretch;
+for (const id of ["vShadow", "vBg", "vWhite"]) $(id).oninput = computeStretch;
+$("vReset").onclick = () => {
+  $("vAuto").checked = true; $("vLinked").checked = false;
+  $("vShadow").value = -2.8; $("vBg").value = 0.25; $("vWhite").value = 1;
+  computeStretch();
+};
+$("viewer").addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type === "range") return;
+  if (e.key === "ArrowLeft") { step(-1); e.preventDefault(); }
+  else if (e.key === "ArrowRight") { step(1); e.preventDefault(); }
+  else if (e.key === "Delete") { toggleSel(); e.preventDefault(); }
+});
 
 // ---------- start with Windows ----------
 let su = null, suSwitching = false, suRemoved = false;
