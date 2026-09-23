@@ -25,12 +25,16 @@ func TestDeviceLink(t *testing.T) {
 	if a.Link() != `\\192.168.1.5\EMMC Images` {
 		t.Fatal(a.Link())
 	}
-	s := Device{Kind: KindStellaVita, IP: "192.168.1.6", Shares: []string{"share", "Images"}}
-	if s.Link() != `\\192.168.1.6\Images` {
+	s := Device{Kind: KindStellaVita, IP: "192.168.1.56", Shares: []string{"share", "Astrostation"}}
+	if s.Link() != `\\192.168.1.56\Astrostation` {
 		t.Fatal(s.Link())
 	}
 	s.Shares = nil
-	if s.Link() != "192.168.1.6" {
+	if s.Link() != `\\192.168.1.56\Astrostation` {
+		t.Fatal(s.Link())
+	}
+	s.Shares = []string{"share", "Images"}
+	if s.Link() != `\\192.168.1.56\Images` {
 		t.Fatal(s.Link())
 	}
 }

@@ -13,10 +13,11 @@ import (
 	"github.com/hirochachacha/go-smb2"
 )
 
-// StellaVita default SMB login.
+// StellaVita default SMB login and the share with the images.
 const (
 	StellaVitaUser     = "as"
 	StellaVitaPassword = "astrostation"
+	StellaVitaShare    = "Astrostation"
 )
 
 // Device kinds found by Discover.
@@ -40,14 +41,14 @@ func (d *Device) Link() string {
 	if d.Kind == KindASIAIR {
 		return `\\` + d.IP + `\` + DefaultShare
 	}
-	if sh := d.photoShare(); sh != "" {
-		return `\\` + d.IP + `\` + sh
-	}
-	return d.IP
+	return `\\` + d.IP + `\` + d.photoShare()
 }
 
 // photoShare picks the share that most likely holds the images.
 func (d *Device) photoShare() string {
+	if d.Kind == KindStellaVita && (len(d.Shares) == 0 || hasShare(d.Shares, StellaVitaShare)) {
+		return StellaVitaShare
+	}
 	for _, want := range []string{"image", "photo", "astro", "capture", "data"} {
 		for _, sh := range d.Shares {
 			if strings.Contains(strings.ToLower(sh), want) {
@@ -55,10 +56,7 @@ func (d *Device) photoShare() string {
 			}
 		}
 	}
-	if len(d.Shares) > 0 {
-		return d.Shares[0]
-	}
-	return ""
+	return d.Shares[0]
 }
 
 // LocalSubnets returns the IPv4 networks of the active non-loopback
@@ -118,7 +116,7 @@ func hosts(n *net.IPNet) []net.IP {
 
 // Discover scans the local networks for hosts with SMB (port 445) and
 // recognises the ASIAIR (guest share "EMMC Images") and the StellaVita
-// (login as/astrostation). progress, when not nil, receives short status texts.
+// (login as/astrostation, share "Astrostation"). progress, when not nil, receives short status texts.
 func Discover(ctx context.Context, progress func(string)) ([]Device, error) {
 	nets := LocalSubnets()
 	if len(nets) == 0 {
@@ -207,7 +205,7 @@ func identify(ctx context.Context, ip string) *Device {
 	// A host that lets any guest in would also "accept" as/astrostation,
 	// so the StellaVita login alone counts only when the guest was refused.
 	svShares, svErr := listShares(ctx, ip, StellaVitaUser, StellaVitaPassword)
-	if svErr == nil && (guestErr != nil || strings.Contains(lname, "stella")) {
+	if svErr == nil && (guestErr != nil || hasShare(svShares, StellaVitaShare) || strings.Contains(lname, "stella")) {
 		return &Device{Kind: KindStellaVita, IP: ip, Name: name, Shares: svShares,
 			Username: StellaVitaUser, Password: StellaVitaPassword}
 	}
