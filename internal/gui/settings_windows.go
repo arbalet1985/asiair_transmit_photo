@@ -31,7 +31,7 @@ type settingsForm struct {
 	port                         *walk.NumberEdit
 	asiairResult, receiverResult *walk.Label
 	testASIAIR, testReceiver     *walk.PushButton
-	findASIAIR                   *walk.PushButton
+	findASIAIR, chooseUSB        *walk.PushButton
 	scheme                       string // "https" unless receiver_url says otherwise
 }
 
@@ -48,11 +48,11 @@ func (w *window) settingsPage(minimized bool) []Widget {
 	}
 	return []Widget{
 		GroupBox{
-			Title:  "ASIAIR (в сети обсерватории)",
+			Title:  "Откуда брать снимки: ASIAIR, StellaVita или флешка",
 			Layout: Grid{Columns: 3, Spacing: 4},
 			Children: []Widget{
-				Label{Text: "Сетевой путь:"},
-				LineEdit{AssignTo: &f.asiair, ToolTipText: `Например \\192.168.1.50\EMMC Images или просто 192.168.1.50`},
+				Label{Text: "Путь:"},
+				LineEdit{AssignTo: &f.asiair, ToolTipText: `Например \\192.168.1.50\EMMC Images, 192.168.1.50 или usb: (флешка из ASIAIR в этом компьютере)`},
 				PushButton{AssignTo: &f.testASIAIR, Text: "Проверить", OnClicked: w.testASIAIR},
 				Label{}, hint(`например \\192.168.1.50\EMMC Images или просто 192.168.1.50`), Label{},
 
@@ -63,7 +63,10 @@ func (w *window) settingsPage(minimized bool) []Widget {
 						PushButton{AssignTo: &f.findASIAIR, Text: "Найти в сети…",
 							ToolTipText: "Просканировать локальную сеть и найти ASIAIR или StellaVita",
 							OnClicked:   w.findDevices},
-						hint("ищет ASIAIR или StellaVita в сети обсерватории"),
+						PushButton{AssignTo: &f.chooseUSB, Text: "Флешка…",
+							ToolTipText: "Брать снимки с флешки, вынутой из ASIAIR и вставленной в этот компьютер",
+							OnClicked:   w.chooseUSBSource},
+						hint("сеть обсерватории или флешка из ASIAIR"),
 						HSpacer{},
 					},
 				},
@@ -207,7 +210,7 @@ func (w *window) testASIAIR() {
 	f := &w.form
 	link := strings.TrimSpace(f.asiair.Text())
 	if link == "" {
-		setResult(f.asiairResult, false, "Укажите сетевой путь к ASIAIR.")
+		setResult(f.asiairResult, false, "Укажите путь к ASIAIR или флешке.")
 		return
 	}
 	shares := config.PeekAgent(w.cfgPath).Shares
@@ -246,6 +249,51 @@ func (w *window) testASIAIR() {
 			log.Printf("Проверка ASIAIR %s: %s", link, msg)
 		})
 	}()
+}
+
+// chooseUSBSource switches the source to the ASIAIR USB stick plugged into
+// this computer, or to a folder picked by hand.
+func (w *window) chooseUSBSource() {
+	f := &w.form
+	link := ""
+	drives := source.RemovableDrives()
+	if len(drives) > 0 {
+		names := make([]string, len(drives))
+		for i, d := range drives {
+			names[i] = d.String()
+		}
+		switch walk.MsgBox(w.mw, "Флешка",
+			"Найдены съёмные диски: "+strings.Join(names, ", ")+".\n\n"+
+				"«Да» — брать снимки с флешки, какая бы буква диска ей ни досталась "+
+				"(если вставлено несколько, берётся первая: "+drives[0].Root+").\n"+
+				"«Нет» — выбрать диск или папку вручную.",
+			walk.MsgBoxYesNoCancel|walk.MsgBoxIconQuestion) {
+		case walk.DlgCmdYes:
+			link = "usb:"
+		case walk.DlgCmdCancel:
+			return
+		}
+	}
+	if link == "" {
+		dlg := walk.FileDialog{Title: "Выберите флешку из ASIAIR (корень диска) или папку со снимками"}
+		if len(drives) > 0 {
+			dlg.InitialDirPath = drives[0].Root
+		}
+		ok, err := dlg.ShowBrowseFolder(w.mw)
+		if err != nil {
+			walk.MsgBox(w.mw, "ASIAIR Agent", err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		if !ok || dlg.FilePath == "" {
+			return
+		}
+		link = source.FolderLink(dlg.FilePath)
+	}
+	f.asiair.SetText(link)
+	f.user.SetText("")
+	f.pass.SetText("")
+	log.Printf("Источник снимков: %s", link)
+	w.testASIAIR()
 }
 
 // findDevices scans the local network and fills the ASIAIR fields with
