@@ -60,6 +60,7 @@ func prepare(path, mode string) (*prepared, error) {
 	p := &prepared{cfg: cfg, srv: s, page: "http://" + localAddr(cfg.UIListen), created: created}
 	p.control = &startupControl{cfgPath: path, mode: mode}
 	s.Startup = p.control
+	s.Restart = svc.Restart
 	return p, nil
 }
 

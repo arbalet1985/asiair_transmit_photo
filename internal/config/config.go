@@ -50,6 +50,9 @@ type Agent struct {
 
 	StateFile string `yaml:"state_file"`
 	LogFile   string `yaml:"log_file"`
+
+	// AutoUpdate: install new versions handed out by the receiver. Default true.
+	AutoUpdate Bool `yaml:"auto_update"`
 }
 
 // Receiver is the configuration of the service on the destination computer.
@@ -77,8 +80,33 @@ type Receiver struct {
 	MinFree string `yaml:"min_free"`
 	LogFile string `yaml:"log_file"`
 
+	// AutoUpdate: download new releases from GitHub, update the receiver
+	// and hand the new agent to the agent. Default true.
+	AutoUpdate Bool `yaml:"auto_update"`
+	// UpdateToken is a GitHub token with read access to the releases,
+	// needed while the repository is private.
+	UpdateToken string `yaml:"update_token"`
+	// UpdateRepo is "owner/name" of the GitHub repository with the releases.
+	UpdateRepo string `yaml:"update_repo"`
+
 	// Path of the file the configuration was loaded from.
 	Path string `yaml:"-"`
+}
+
+// Bool is a yes/no setting; it also accepts quoted values ("true", 'false'),
+// as written by the settings forms.
+type Bool bool
+
+func (b *Bool) UnmarshalYAML(n *yaml.Node) error {
+	switch strings.ToLower(strings.TrimSpace(n.Value)) {
+	case "true", "yes", "on", "1", "да":
+		*b = true
+	case "false", "no", "off", "0", "нет", "":
+		*b = false
+	default:
+		return fmt.Errorf("ожидается true или false, а не %q", n.Value)
+	}
+	return nil
 }
 
 // Duration is a time.Duration that unmarshals from strings like "30s".
@@ -130,6 +158,7 @@ func agentDefaults() *Agent {
 		PollInterval: Duration(15 * time.Second),
 		MinFileAge:   Duration(30 * time.Second),
 		MaxRate:      "10MB/s",
+		AutoUpdate:   true,
 		StateFile:    "agent-state.json",
 		Extensions:   []string{".fit", ".fits", ".fts", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".xisf"},
 		Exclude:      []string{"Thumbnail"},
@@ -169,11 +198,12 @@ func LoadAgent(path string) (*Agent, error) {
 // LoadReceiver reads and validates the receiver configuration.
 func LoadReceiver(path string) (*Receiver, error) {
 	c := &Receiver{
-		Listen:   ":8443",
-		UIListen: "127.0.0.1:8080",
-		DestDir:  "photos",
-		DataDir:  "receiver-data",
-		MinFree:  DefaultMinFree,
+		Listen:     ":8443",
+		UIListen:   "127.0.0.1:8080",
+		DestDir:    "photos",
+		DataDir:    "receiver-data",
+		MinFree:    DefaultMinFree,
+		AutoUpdate: true,
 	}
 	if err := load(path, c); err != nil {
 		return nil, err

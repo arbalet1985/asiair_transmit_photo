@@ -29,6 +29,7 @@ func main() {
 			if err != nil {
 				return nil, cfg.LogFile, err
 			}
+			a.Restart = svc.Restart
 			return a.Run, cfg.LogFile, nil
 		},
 		GUI: guiMain,

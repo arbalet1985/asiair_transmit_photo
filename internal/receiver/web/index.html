@@ -103,6 +103,8 @@
 <body>
 <header>
   <h1>ASIAIR → приём фото</h1>
+  <span class="muted" id="hdrVersion"></span>
+  <span class="badge info" id="hdrUpdate" hidden></span>
   <span id="agentBadge" class="badge off">агент не на связи</span>
   <span class="badge info" id="hdrProgress" hidden></span>
   <span class="badge pend" id="hdrWait" hidden>передача не запущена</span>
@@ -120,6 +122,7 @@
         <dt>Очередь</dt><dd id="aQueue">—</dd>
         <dt>Отправлено</dt><dd id="aSent">—</dd>
         <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
+        <dt>Версия</dt><dd id="aVersion">—</dd>
       </dl>
     </section>
     <section class="panel">
@@ -184,6 +187,28 @@
         <div class="hint" id="suSvcHint"></div>
       </div>
       <div class="err" id="suErr"></div>
+    </section>
+    <section class="panel">
+      <h2>Обновления</h2>
+      <dl class="kv">
+        <dt>Приёмник</dt><dd id="upMine">—</dd>
+        <dt>Агент</dt><dd id="upAgent">—</dd>
+        <dt>На GitHub</dt><dd id="upLatest">—</dd>
+      </dl>
+      <div class="line" id="upStatus"></div>
+      <div class="line err" id="upErr"></div>
+      <div class="toolbar" style="margin-top:8px">
+        <button id="upCheck">Проверить</button>
+        <button class="primary" id="upInstall">Обновить сейчас</button>
+      </div>
+      <label style="display:block;margin-top:8px"><input type="checkbox" id="upAuto"> Устанавливать обновления автоматически</label>
+      <div class="hint">Приёмник раз в 6 часов проверяет релизы на GitHub. Новую версию он ставит себе сам и перезапускается (служба — через 30 секунд), а агенту передаёт её при следующей связи: агент обновляется и перезапускается тоже сам. Передача снимков после перезапуска продолжается с того же места.</div>
+      <div class="label" style="margin-top:10px">Токен GitHub (нужен, пока репозиторий приватный)</div>
+      <div class="field">
+        <input type="password" id="upToken" placeholder="github_pat_…" style="flex:1 1 200px;min-width:0" autocomplete="off">
+        <button id="upTokenSave">Сохранить</button>
+      </div>
+      <div class="hint" id="upTokenHint"></div>
     </section>
     <section class="panel">
       <h2>Подключение агента</h2>
@@ -574,6 +599,7 @@ function renderStatus() {
     : "Сейчас задано здесь: " + fmtRate(state.max_rate);
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
+  renderUpdate(state.update || {}, state.agent || {});
   // until the agent has connected once, setup comes first
   $("setupGrid").style.order = (!state.last_seen || state.last_seen.startsWith("0001")) ? -1 : 0;
 }
@@ -603,6 +629,54 @@ $("minFreeApply").onclick = async () => {
     toast("Запас свободного места сохранён");
     refresh();
   } catch (e) { alert("Ошибка: " + e.message); }
+};
+
+function renderUpdate(u, a) {
+  const ver = v => v === "dev" ? "собран вручную" : v ? "v" + v : "—";
+  const newer = (x, y) => { // x newer than y ("1.2.0" style)
+    const p = v => (v || "").split("-")[0].split(".").map(Number);
+    const a = p(x), b = p(y);
+    if (a.length !== 3 || b.length !== 3 || a.some(isNaN) || b.some(isNaN)) return false;
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  };
+  $("hdrVersion").textContent = ver(u.version);
+  $("upMine").textContent = ver(u.version) + (u.latest && newer(u.latest, u.version) ? " — есть новая версия" : u.latest && u.version === u.latest ? " — последняя" : "");
+  const av = (a && a.version) || "";
+  $("upAgent").textContent = av ? ver(av) + (a.update ? " — " + a.update : u.agent && newer(u.agent, av) ? ` — обновится до v${u.agent} при следующей связи` : "") : "агент ещё не выходил на связь";
+  $("aVersion").textContent = av ? ver(av) + (a.update ? " — " + a.update : "") : "—";
+  $("upLatest").innerHTML = "";
+  if (u.latest) {
+    const link = el("a", { href: u.latest_url, target: "_blank", rel: "noopener", textContent: "v" + u.latest });
+    $("upLatest").append(link, document.createTextNode(u.checked && !u.checked.startsWith("0001") ? " · проверено " + ago(u.checked) : ""));
+  } else {
+    $("upLatest").textContent = u.checking ? "проверка…" : u.checked && !u.checked.startsWith("0001") ? "не удалось узнать" : "ещё не проверялось";
+  }
+  $("upStatus").textContent = u.checking ? "Проверка обновлений…" : u.status || "";
+  $("upErr").textContent = u.error || "";
+  $("upCheck").disabled = u.checking;
+  $("upInstall").disabled = u.checking;
+  if (document.activeElement !== $("upAuto")) $("upAuto").checked = u.auto;
+  $("upTokenHint").innerHTML = (u.token_set ? "Токен задан. Чтобы заменить — введите новый; чтобы удалить — сохраните пустое поле. " : "Токен не задан. ") +
+    'Создайте на GitHub: <b>Settings → Developer settings → Fine-grained tokens → Generate new token</b>, доступ только к этому репозиторию, право <b>Contents: Read-only</b>. Токен хранится в receiver.yaml. Если репозиторий станет публичным, токен не нужен.';
+  const upd = u.latest && (newer(u.latest, u.version) || (av && newer(u.latest, av)));
+  $("hdrUpdate").hidden = !upd;
+  $("hdrUpdate").textContent = upd ? "доступна версия v" + u.latest : "";
+  if (!u.can_self_update && u.latest && newer(u.latest, u.version))
+    $("upStatus").textContent = (u.version === "dev" ? "Приёмник собран вручную и сам не обновляется. " : "") + ($("upStatus").textContent || "");
+}
+async function updateAction(body, okText) {
+  try { const r = await post("/ui/api/update", body); if (okText) toast(okText); refresh(); return r; }
+  catch (e) { alert("Ошибка: " + e.message); }
+}
+$("upCheck").onclick = () => updateAction({ action: "check" }, "Проверка запущена");
+$("upInstall").onclick = () => {
+  if (confirm("Скачать последнюю версию и установить? Приёмник перезапустится, агент обновится при следующей связи.")) updateAction({ action: "install" }, "Обновление запущено");
+};
+$("upAuto").onchange = () => updateAction({ action: "settings", auto: $("upAuto").checked }, "Сохранено");
+$("upTokenSave").onclick = async () => {
+  await updateAction({ action: "settings", token: $("upToken").value }, "Токен сохранён");
+  $("upToken").value = "";
 };
 
 async function refresh() {
