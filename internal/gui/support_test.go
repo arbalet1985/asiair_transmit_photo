@@ -88,3 +88,14 @@ func TestPauseLabel(t *testing.T) {
 		t.Fatalf("local: %q", got)
 	}
 }
+
+func TestAgentIconDiffers(t *testing.T) {
+	a, r := AgentIconImage(StateIdle, 32), IconImage(StateIdle, 32)
+	if a.RGBAAt(0, 0).A != 0 {
+		t.Fatal("agent icon corner must be transparent")
+	}
+	// near the corner the square is filled and the disc is not
+	if a.RGBAAt(3, 3).A != 255 || r.RGBAAt(3, 3).A != 0 {
+		t.Fatalf("shapes do not differ: agent %v, receiver %v", a.RGBAAt(3, 3), r.RGBAAt(3, 3))
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/ratelimit"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 // sentInfo records a file version that the receiver has confirmed.
@@ -80,6 +82,13 @@ type Agent struct {
 	diskFull     string        // guarded by mu; the receiver has no room: why
 	wake         chan struct{} // wakes the transfer loop on pause changes
 	cancelUpload context.CancelFunc
+
+	// Restart runs the program again after a new version was installed
+	// (svc.Restart). Without it the agent does not update itself.
+	Restart     func() error
+	Exe         string    // program to replace; the running one when empty (tests set it)
+	updating    bool      // guarded by mu
+	updateRetry time.Time // guarded by mu; after a failed update
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
@@ -101,6 +110,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		wake: make(chan struct{}, 1),
 	}
 	a.status.Version = protocol.Version
+	a.status.OS = runtime.GOOS + "/" + runtime.GOARCH
 	a.status.ASIAIR = cfg.ASIAIR
 	a.status.Rate = rate
 	if err := a.loadState(); err != nil {
@@ -153,6 +163,13 @@ func (a *Agent) saveState() {
 func (a *Agent) Run(ctx context.Context) error {
 	log.Printf("Агент %s: ASIAIR %s → %s, ограничение скорости: %s",
 		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate))
+	if a.Restart != nil {
+		if exe, err := update.Executable(); err == nil {
+			update.Cleanup(exe) // left by the previous update
+			// the old copy may still be running for a moment after a restart
+			time.AfterFunc(time.Minute, func() { update.Cleanup(exe) })
+		}
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -859,6 +876,7 @@ func (a *Agent) poll(ctx context.Context) error {
 	}
 	a.setFetch(resp.Fetch)
 	a.setDiskFull(resp.DiskFull)
+	a.maybeUpdate(ctx, resp.Update)
 	a.setRemotePaused(resp.Paused, resp.WaitStart)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {

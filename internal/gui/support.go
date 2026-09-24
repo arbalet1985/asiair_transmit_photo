@@ -113,9 +113,26 @@ var stateColors = map[string]color.RGBA{
 	StatePaused:    {230, 160, 30, 255},
 }
 
-// IconImage draws the tray icon: a coloured disc with a small white
-// telescope-like mark, size×size pixels, antialiased.
+// IconImage draws the receiver's tray icon: a coloured disc with a small
+// white telescope-like mark, size×size pixels, antialiased.
 func IconImage(state string, size int) *image.RGBA {
+	return drawIcon(state, size, func(dx, dy float64) bool { return dx*dx+dy*dy <= 0.49*0.49 })
+}
+
+// AgentIconImage draws the agent's icon: the same mark on a rounded square,
+// so the two programs are told apart in the tray and on the taskbar.
+func AgentIconImage(state string, size int) *image.RGBA {
+	const half, r = 0.47, 0.16 // square half-size and corner radius
+	return drawIcon(state, size, func(dx, dy float64) bool {
+		x := math.Max(math.Abs(dx)-(half-r), 0)
+		y := math.Max(math.Abs(dy)-(half-r), 0)
+		return math.Abs(dx) <= half && math.Abs(dy) <= half && x*x+y*y <= r*r
+	})
+}
+
+// drawIcon fills the shape (inside(dx, dy), offsets from the centre in
+// 0..1 units) with the state colour and draws the white mark on it.
+func drawIcon(state string, size int, inside func(dx, dy float64) bool) *image.RGBA {
 	c, ok := stateColors[state]
 	if !ok {
 		c = stateColors[StateStopped]
@@ -131,7 +148,7 @@ func IconImage(state string, size int) *image.RGBA {
 					px := (float64(x) + (float64(sx)+0.5)/sub) / s // 0..1
 					py := (float64(y) + (float64(sy)+0.5)/sub) / s
 					dx, dy := px-0.5, py-0.5
-					if dx*dx+dy*dy <= 0.49*0.49 {
+					if inside(dx, dy) {
 						disc++
 						if inMark(px, py) {
 							mark++
@@ -223,6 +240,18 @@ func formatETA(sec float64) string {
 		return fmt.Sprintf("~%d мин", m)
 	}
 	return fmt.Sprintf("~%d ч %d мин", m/60, m%60)
+}
+
+// versionText shows the program version and what the update is doing.
+func versionText(update string) string {
+	v := protocol.Version
+	if v == "dev" {
+		v = "собрана вручную (без автообновления)"
+	}
+	if update != "" {
+		return v + " — " + update
+	}
+	return v
 }
 
 // pauseLabel says where the transfer was paused.

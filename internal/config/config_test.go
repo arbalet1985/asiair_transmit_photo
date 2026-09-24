@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -75,5 +76,21 @@ func TestParseReserve(t *testing.T) {
 	}
 	if r := (Reserve{Percent: 10}); r.Of(1000) != 100 {
 		t.Fatal(r.Of(1000))
+	}
+}
+
+func TestBool(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "r.yaml")
+	for in, want := range map[string]bool{"": true, "auto_update: false\n": false, "auto_update: 'false'\n": false, "auto_update: \"true\"\n": true} {
+		os.WriteFile(p, []byte("token: x\n"+in), 0o644)
+		c, err := LoadReceiver(p)
+		if err != nil || bool(c.AutoUpdate) != want {
+			t.Errorf("%q: %v %v", in, c, err)
+		}
+	}
+	os.WriteFile(p, []byte("token: x\nauto_update: maybe\n"), 0o644)
+	if _, err := LoadReceiver(p); err == nil {
+		t.Error("bad bool accepted")
 	}
 }

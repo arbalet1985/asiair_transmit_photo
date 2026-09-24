@@ -51,6 +51,13 @@ type Server struct {
 
 	// Startup, when set, lets the web page manage starting with Windows.
 	Startup Startup
+	// Restart, when set, runs the program again after an update was
+	// installed (svc.Restart). Without it the receiver does not update itself.
+	Restart func() error
+	// UpdateAPI is the GitHub API root; empty = api.github.com (tests change it).
+	UpdateAPI string
+
+	updater *updater
 
 	previews *previewCache
 }
@@ -75,6 +82,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6),
 		reserve: reserve, minFree: cfg.MinFree}
+	s.updater = newUpdater(s)
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
 		if err != nil {
@@ -123,6 +131,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	log.Printf("Приёмник: веб-страница http://%s, фото сохраняются в %s", uiLn.Addr(), s.getStore().root)
 
+	log.Printf("Приёмник: версия %s", protocol.Version)
+	go s.updater.run(ctx)
+
 	errc := make(chan error, 2)
 	go func() { errc <- api.Serve(apiLn) }()
 	go func() { errc <- ui.Serve(uiLn) }()
@@ -160,6 +171,7 @@ func (s *Server) apiHandler() http.Handler {
 	mux.HandleFunc("/api/sync", s.handleSync)
 	mux.HandleFunc("/api/inventory", s.handleInventory)
 	mux.HandleFunc("/api/result", s.handleResult)
+	mux.HandleFunc("/api/update/agent", s.handleUpdateAgent)
 	return s.auth(mux)
 }
 
@@ -290,6 +302,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := s.state.Sync(req.Status)
 	resp.DiskFull = s.disk().Full
+	resp.Update = s.updater.offer(req.Status)
 	writeJSON(w, resp)
 }
 
@@ -348,6 +361,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
+	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
 	mux.HandleFunc("/ui/api/fetch", s.handleUIFetch)
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
@@ -401,6 +415,7 @@ type uiState struct {
 	Fingerprint   string               `json:"fingerprint"`
 	DestDir       string               `json:"dest_dir"`
 	Disk          diskInfo             `json:"disk"`
+	Update        updateInfo           `json:"update"`
 	Totals        uiTotals             `json:"totals"`
 }
 
@@ -431,6 +446,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Fingerprint:   s.fingerprint,
 		DestDir:       store.root,
 		Disk:          s.disk(),
+		Update:        s.updater.info(),
 	}
 	writeJSON(w, out)
 }

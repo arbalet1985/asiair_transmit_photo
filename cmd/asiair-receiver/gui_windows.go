@@ -80,6 +80,9 @@ func guiMain(cfgPath string) error {
 			}
 			return gui.StateError
 		},
-		OnReady: func(quit func()) { p.control.quit = quit },
+		OnReady: func(quit func()) {
+			p.control.quit = quit
+			svc.SetQuit(quit) // closes the tray when a new version restarts
+		},
 	})
 }

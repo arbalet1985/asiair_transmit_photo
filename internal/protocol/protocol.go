@@ -20,8 +20,9 @@ import (
 )
 
 // Version of the programs; release builds set it from the tag
-// (-ldflags "-X .../internal/protocol.Version=1.2.0").
-var Version = "1.0.0"
+// (-ldflags "-X .../internal/protocol.Version=1.2.0"). Programs built by
+// hand are "dev" and never update themselves.
+var Version = "dev"
 
 // Fingerprint returns the SHA-256 fingerprint of a DER certificate as "AB:CD:...".
 func Fingerprint(der []byte) string {
@@ -46,7 +47,10 @@ type UploadResult struct {
 
 // AgentStatus is reported by the agent on every sync.
 type AgentStatus struct {
-	Version    string    `json:"version"`
+	Version string `json:"version"`
+	OS      string `json:"os,omitempty"` // GOOS/GOARCH, e.g. "windows/amd64"
+	// Update: what the self-update is doing, e.g. "скачивается 1.2.0" or an error.
+	Update     string    `json:"update,omitempty"`
 	ASIAIR     string    `json:"asiair"`
 	Connected  bool      `json:"connected"`
 	LastScan   time.Time `json:"last_scan"`
@@ -106,6 +110,16 @@ type SyncResponse struct {
 	// DiskFull: the receiver keeps too little free space and accepts no
 	// files until it is freed; the text says why.
 	DiskFull string `json:"disk_full,omitempty"`
+	// Update offers a new agent version; the program is downloaded from
+	// /api/update/agent.
+	Update *UpdateOffer `json:"update,omitempty"`
+}
+
+// UpdateOffer describes the agent program the receiver can hand out.
+type UpdateOffer struct {
+	Version string `json:"version"`
+	Size    int64  `json:"size"`
+	SHA256  string `json:"sha256"`
 }
 
 // Command types.

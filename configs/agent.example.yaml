@@ -39,3 +39,6 @@ min_file_age: 30s     # файл отправляется, только если
 
 state_file: agent-state.json
 log_file: asiair-agent.log
+
+# Ставить новую версию агента, которую передаёт приёмник (true/false).
+auto_update: true

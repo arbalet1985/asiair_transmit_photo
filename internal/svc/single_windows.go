@@ -7,7 +7,7 @@ import (
 // SingleInstance takes a machine-wide lock so that the service and the tray
 // application never run the agent at the same time. It returns false when
 // another instance holds the lock.
-func SingleInstance(name string) (release func(), ok bool) {
+func singleInstance(name string) (release func(), ok bool) {
 	n, err := windows.UTF16PtrFromString(`Global\` + name)
 	if err != nil {
 		return func() {}, true

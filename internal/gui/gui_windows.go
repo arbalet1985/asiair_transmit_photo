@@ -55,6 +55,9 @@ func (r *runner) start(cfgPath string, paused bool) {
 	if err == nil {
 		r.agent, err = agent.New(cfg)
 	}
+	if err == nil {
+		r.agent.Restart = svc.Restart
+	}
 	if err != nil {
 		r.err = err
 		log.Printf("Агент не запущен: %v", err)
@@ -105,7 +108,7 @@ type window struct {
 	iconState string
 
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
-	lblTotal                                                             *walk.Label
+	lblTotal, lblVersion                                                 *walk.Label
 	btnPause                                                             *walk.PushButton
 	actPause                                                             *walk.Action
 	progress, totalBar                                                   *walk.ProgressBar
@@ -166,6 +169,13 @@ func Run(cfgPath string) error {
 		return err
 	}
 	defer w.ni.Dispose()
+	svc.SetQuit(func() {
+		w.mw.Synchronize(func() {
+			w.quitting = true
+			w.ni.SetVisible(false)
+			w.mw.Close()
+		})
+	})
 
 	w.loadForm()
 	if !created {
@@ -225,7 +235,8 @@ func (w *window) ensureConfig() bool {
 }
 
 func (w *window) create() error {
-	minimized := w.settings.StartMinimized
+	// after an update the new version comes back quietly to the tray
+	minimized := w.settings.StartMinimized || svc.Restarted()
 	err := MainWindow{
 		AssignTo: &w.mw,
 		Title:    windowTitle,
@@ -255,6 +266,7 @@ func (w *window) create() error {
 									Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
 									Label{Text: "Отправлено:"}, Label{AssignTo: &w.lblSent, Text: "—"},
 									Label{Text: "Ошибка:"}, Label{AssignTo: &w.lblErr, Text: "—", TextColor: walk.RGB(200, 40, 40)},
+									Label{Text: "Версия:"}, Label{AssignTo: &w.lblVersion, Text: versionText("")},
 								},
 							},
 							GroupBox{
@@ -295,12 +307,12 @@ func (w *window) create() error {
 	w.icons = map[string]*walk.Icon{}
 	dpi := w.mw.DPI()
 	for _, st := range []string{StateStopped, StateError, StateIdle, StateUploading, StatePaused} {
-		ic, err := walk.NewIconFromImageForDPI(IconImage(st, 16*dpi/96), dpi)
+		ic, err := walk.NewIconFromImageForDPI(AgentIconImage(st, 16*dpi/96), dpi)
 		if err == nil {
 			w.icons[st] = ic
 		}
 	}
-	if big, err := walk.NewIconFromImageForDPI(IconImage(StateIdle, 32*dpi/96), dpi); err == nil {
+	if big, err := walk.NewIconFromImageForDPI(AgentIconImage(StateUploading, 32*dpi/96), dpi); err == nil {
 		w.mw.SetIcon(big)
 	}
 
@@ -498,6 +510,7 @@ func (w *window) update() {
 	}
 	st := a.Status()
 	lastSync, syncErr := a.Receiver()
+	setShort(w.lblVersion, versionText(st.Update), maxStatus)
 
 	switch {
 	case st.LastScan.IsZero() && st.LastError == "":
