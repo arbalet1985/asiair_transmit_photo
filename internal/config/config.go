@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -71,6 +72,9 @@ type Receiver struct {
 	DataDir string `yaml:"data_dir"`
 	// MaxRate initial value pushed to the agent. Empty = use the agent's own setting.
 	MaxRate string `yaml:"max_rate"`
+	// MinFree is the free space kept on the disk with the photos: "10GB",
+	// "500MB", "5%" or "0" (no reserve). Default DefaultMinFree.
+	MinFree string `yaml:"min_free"`
 	LogFile string `yaml:"log_file"`
 
 	// Path of the file the configuration was loaded from.
@@ -169,8 +173,12 @@ func LoadReceiver(path string) (*Receiver, error) {
 		UIListen: "127.0.0.1:8080",
 		DestDir:  "photos",
 		DataDir:  "receiver-data",
+		MinFree:  DefaultMinFree,
 	}
 	if err := load(path, c); err != nil {
+		return nil, err
+	}
+	if _, err := ParseReserve(c.MinFree); err != nil {
 		return nil, err
 	}
 	if c.Token == "" {
@@ -237,6 +245,66 @@ func ParseRate(s string) (int64, error) {
 		v /= 8
 	}
 	return int64(v), nil
+}
+
+// DefaultMinFree is the free space the receiver keeps on its disk.
+const DefaultMinFree = "5%"
+
+// Reserve is the free space to keep on a disk: a fixed amount or a share
+// of the disk size.
+type Reserve struct {
+	Bytes   int64
+	Percent float64 // used when > 0
+}
+
+// Of returns the reserve in bytes for a disk of the given size.
+func (r Reserve) Of(total uint64) uint64 {
+	if r.Percent > 0 {
+		return uint64(float64(total) * r.Percent / 100)
+	}
+	return uint64(r.Bytes)
+}
+
+func (r Reserve) String() string {
+	switch {
+	case r.Percent > 0:
+		return strconv.FormatFloat(r.Percent, 'f', -1, 64) + "%"
+	case r.Bytes > 0:
+		return FormatBytes(r.Bytes)
+	}
+	return "без запаса"
+}
+
+// ParseReserve parses "10GB", "500 MB", "1.5T", "5%", "0" (no reserve).
+// K/M/G/T are binary (1024) multiples; a bare number is in bytes.
+func ParseReserve(s string) (Reserve, error) {
+	orig := s
+	bad := fmt.Errorf("не удалось разобрать запас места %q (пример: 10GB, 500MB, 5%%, 0)", orig)
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" || s == "0" || s == "none" {
+		return Reserve{}, nil
+	}
+	if strings.HasSuffix(s, "%") {
+		v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, "%")), 64)
+		if err != nil || v < 0 || v >= 100 {
+			return Reserve{}, bad
+		}
+		return Reserve{Percent: v}, nil
+	}
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(s, "b"), "i"))
+	mult := 1.0
+	for i, suf := range []string{"k", "m", "g", "t"} {
+		if strings.HasSuffix(s, suf) {
+			mult = math.Pow(1024, float64(i+1))
+			s = strings.TrimSpace(strings.TrimSuffix(s, suf))
+			break
+		}
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v < 0 {
+		return Reserve{}, bad
+	}
+	return Reserve{Bytes: int64(v * mult)}, nil
 }
 
 // FormatRate renders bytes per second for humans.

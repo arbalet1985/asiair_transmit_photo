@@ -49,3 +49,31 @@ func TestExampleConfigs(t *testing.T) {
 		t.Fatalf("receiver example: %+v", r)
 	}
 }
+
+func TestParseReserve(t *testing.T) {
+	for in, want := range map[string]Reserve{
+		"":       {},
+		"0":      {},
+		"10GB":   {Bytes: 10 << 30},
+		"10 gb":  {Bytes: 10 << 30},
+		"500MB":  {Bytes: 500 << 20},
+		"1.5T":   {Bytes: 3 << 39},
+		"2GiB":   {Bytes: 2 << 30},
+		"5%":     {Percent: 5},
+		" 2.5 %": {Percent: 2.5},
+		"4096":   {Bytes: 4096},
+	} {
+		got, err := ParseReserve(in)
+		if err != nil || got != want {
+			t.Errorf("ParseReserve(%q) = %+v, %v; want %+v", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"abc", "-1GB", "100%", "10XB"} {
+		if _, err := ParseReserve(bad); err == nil {
+			t.Errorf("ParseReserve(%q): expected error", bad)
+		}
+	}
+	if r := (Reserve{Percent: 10}); r.Of(1000) != 100 {
+		t.Fatal(r.Of(1000))
+	}
+}

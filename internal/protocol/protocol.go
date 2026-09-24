@@ -65,6 +65,8 @@ type AgentStatus struct {
 	LocalPause  bool `json:"local_pause,omitempty"`
 	RemotePause bool `json:"remote_pause,omitempty"`
 	WaitStart   bool `json:"wait_start,omitempty"` // waiting for "Старт" on the receiver page
+	// DiskFull: paused because the receiver is short of disk space (why).
+	DiskFull string `json:"disk_full,omitempty"`
 
 	// Totals over the files to transfer that are on the ASIAIR now.
 	TotalFiles int   `json:"total_files"`
@@ -100,6 +102,9 @@ type SyncResponse struct {
 	// Fetch lists files requested from the receiver page: they are sent
 	// even while the transfer is paused or not started, and first otherwise.
 	Fetch []string `json:"fetch,omitempty"`
+	// DiskFull: the receiver keeps too little free space and accepts no
+	// files until it is freed; the text says why.
+	DiskFull string `json:"disk_full,omitempty"`
 }
 
 // Command types.
