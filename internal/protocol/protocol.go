@@ -19,8 +19,9 @@ import (
 	"time"
 )
 
-// Version of the programs.
-const Version = "1.0.0"
+// Version of the programs; release builds set it from the tag
+// (-ldflags "-X .../internal/protocol.Version=1.2.0").
+var Version = "1.0.0"
 
 // Fingerprint returns the SHA-256 fingerprint of a DER certificate as "AB:CD:...".
 func Fingerprint(der []byte) string {

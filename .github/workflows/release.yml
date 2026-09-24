@@ -1,0 +1,74 @@
+# Сборка релиза: .exe для Windows и бинарники для Linux прикладываются
+# к релизу GitHub (Releases), а не хранятся в репозитории.
+#
+# Запуск:
+#   * создайте релиз на GitHub (Releases → Draft a new release) с новым тегом
+#     вида v1.2.0 — или отправьте такой тег командой git push origin v1.2.0;
+#   * «Run workflow» на вкладке Actions — пробная сборка без релиза:
+#     файлы появятся в артефактах запуска.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Тесты
+        run: go test ./...
+
+      - name: Сборка
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            name="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA::7}"
+            name="$version"
+          fi
+          ldflags="-s -w -X github.com/arbalet1985/asiair_transmit_photo/internal/protocol.Version=$version"
+          mkdir -p dist/windows dist/linux
+          for cmd in asiair-agent asiair-receiver; do
+            GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/windows/$cmd.exe" "./cmd/$cmd"
+            GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/linux/$cmd"     "./cmd/$cmd"
+          done
+          cp configs/*.example.yaml dist/windows/
+          cp configs/*.example.yaml dist/linux/
+          mkdir -p upload
+          (cd dist/windows && zip -9 "../../upload/asiair-transmit-photo-$name-windows.zip" *)
+          tar -czf "upload/asiair-transmit-photo-$name-linux-amd64.tar.gz" -C dist/linux .
+          cp dist/windows/*.exe upload/
+          ls -l upload
+
+      - name: Файлы пробной сборки
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: asiair-transmit-photo
+          path: upload/
+          retention-days: 7
+
+      - name: Релиз
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # релиз, созданный на сайте вместе с тегом, уже есть: только добавляем файлы
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" upload/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" upload/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          fi
