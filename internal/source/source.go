@@ -19,6 +19,11 @@ import (
 // DefaultShare is the ASIAIR internal storage share.
 const DefaultShare = "EMMC Images"
 
+// USBShare is the ASIAIR share of its USB stick. Files read from the stick
+// plugged into this computer get the same paths, so what was already
+// received over the network is not sent again.
+const USBShare = "Udisk"
+
 // File describes a file found on the source.
 type File struct {
 	Path    string // "<share>/<dir>/<name>"
@@ -52,12 +57,12 @@ type ShareProbe struct {
 
 // Link is a parsed ASIAIR link.
 type Link struct {
-	Kind     string // "smb" or "dir"
+	Kind     string // "smb", "dir" or "usb"
 	Host     string // host or host:port
 	Shares   []string
 	Username string
 	Password string
-	Dir      string // for Kind == "dir"
+	Dir      string // for Kind "dir" and "usb"; "usb" with no Dir = any removable disk
 }
 
 // ParseLink understands:
@@ -68,6 +73,8 @@ type Link struct {
 //	//192.168.1.50/EMMC Images
 //	smb://user:pass@192.168.1.50:445/EMMC Images
 //	dir:C:\ASIAIR   (a local or already mounted folder; used for tests too)
+//	usb:E:\         (the ASIAIR USB stick plugged into this computer)
+//	usb:            (the same, on whatever removable disk is inserted)
 func ParseLink(link string) (*Link, error) {
 	link = strings.TrimSpace(link)
 	if link == "" {
@@ -75,6 +82,9 @@ func ParseLink(link string) (*Link, error) {
 	}
 	if strings.HasPrefix(strings.ToLower(link), "dir:") {
 		return &Link{Kind: "dir", Dir: link[4:]}, nil
+	}
+	if strings.HasPrefix(strings.ToLower(link), "usb:") {
+		return &Link{Kind: "usb", Dir: strings.TrimSpace(link[4:])}, nil
 	}
 	l := &Link{Kind: "smb"}
 	switch {
