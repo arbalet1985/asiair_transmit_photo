@@ -77,6 +77,7 @@ type Agent struct {
 	synced       atomic.Bool   // the receiver has answered once: its pause/start is known
 	localPause   bool          // guarded by mu
 	remotePause  bool          // guarded by mu
+	diskFull     string        // guarded by mu; the receiver has no room: why
 	wake         chan struct{} // wakes the transfer loop on pause changes
 	cancelUpload context.CancelFunc
 }
@@ -226,8 +227,9 @@ func (a *Agent) setRemotePaused(p, waitStart bool) {
 // of the change for the log ("" = already logged).
 func (a *Agent) applyPause(p bool, where string) {
 	a.mu.Lock()
-	on := a.localPause || a.remotePause
+	on := a.localPause || a.remotePause || a.diskFull != ""
 	a.status.Paused, a.status.LocalPause, a.status.RemotePause = on, a.localPause, a.remotePause
+	a.status.DiskFull = a.diskFull
 	cancel := a.cancelUpload
 	if a.fetch[a.current] {
 		cancel = nil // requested files are sent even while paused
@@ -252,6 +254,24 @@ func (a *Agent) applyPause(p bool, where string) {
 		log.Printf("Агент: передача продолжена")
 	}
 	a.wakeUp()
+}
+
+// setDiskFull pauses the transfer while the receiver is short of disk
+// space (msg says why) and resumes it when msg is empty.
+func (a *Agent) setDiskFull(msg string) {
+	a.mu.Lock()
+	changed := (a.diskFull == "") != (msg == "")
+	a.diskFull = msg
+	a.mu.Unlock()
+	if !changed {
+		return
+	}
+	if msg != "" {
+		log.Printf("Агент: передача остановлена: %s", msg)
+	} else {
+		log.Printf("Агент: на приёмнике освободилось место")
+	}
+	a.applyPause(msg != "", "")
 }
 
 // setFetch applies the list of files requested on the receiver page.
@@ -350,6 +370,18 @@ func (a *Agent) transferLoop(ctx context.Context) {
 				a.status.Uploading = ""
 				a.mu.Unlock()
 				log.Printf("Агент: %s: передача прервана паузой, продолжится с того же места", f.Path)
+				continue
+			}
+			var he *HTTPError
+			if errors.As(err, &he) && he.Code == http.StatusInsufficientStorage {
+				a.mu.Lock()
+				a.status.Uploading = ""
+				a.mu.Unlock()
+				msg := he.Msg
+				if msg == "" { // answer to HEAD: no body
+					msg = "на приёмнике мало места на диске"
+				}
+				a.setDiskFull(msg) // not the file's fault: no retry penalty
 				continue
 			}
 			a.fail(f, err)
@@ -541,6 +573,9 @@ func (a *Agent) updateQueueStatus() {
 func (a *Agent) next(onlyFetch bool) (source.File, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.diskFull != "" {
+		return source.File{}, false // the receiver would refuse even requested files
+	}
 	now := time.Now()
 	for pass := 0; pass < 2; pass++ {
 		if pass == 1 && onlyFetch {
@@ -823,6 +858,7 @@ func (a *Agent) poll(ctx context.Context) error {
 		a.lim.SetRate(rate)
 	}
 	a.setFetch(resp.Fetch)
+	a.setDiskFull(resp.DiskFull)
 	a.setRemotePaused(resp.Paused, resp.WaitStart)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {

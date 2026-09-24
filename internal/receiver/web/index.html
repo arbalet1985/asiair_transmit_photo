@@ -42,6 +42,7 @@
   .toolbar .spacer { flex: 1; }
   .progress { height: 6px; background: var(--row); border-radius: 3px; overflow: hidden; margin-top: 4px; }
   .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .5s; }
+  .progress.disk.full > div { background: var(--danger); }
   .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -105,6 +106,7 @@
   <span id="agentBadge" class="badge off">агент не на связи</span>
   <span class="badge info" id="hdrProgress" hidden></span>
   <span class="badge pend" id="hdrWait" hidden>передача не запущена</span>
+  <span class="badge off" id="hdrDisk" hidden>мало места на диске</span>
   <span class="muted" id="destDir"></span>
 </header>
 <main>
@@ -154,6 +156,16 @@
         <button id="destChange">Изменить…</button>
       </div>
       <div class="hint">Структура папок ASIAIR сохраняется внутри этой папки. Уже полученные снимки при смене папки остаются на старом месте.</div>
+      <h2 style="margin-top:14px">Место на диске</h2>
+      <div class="progress disk"><div id="dBar"></div></div>
+      <div class="line" id="dLine">—</div>
+      <div class="line err" id="dFull"></div>
+      <div class="label" style="margin-top:8px">Оставлять свободным</div>
+      <div class="toolbar">
+        <input type="text" id="minFreeInput" placeholder="напр. 5%, 10GB, 0" size="12">
+        <button class="primary" id="minFreeApply">Применить</button>
+      </div>
+      <div class="hint">Когда свободного места на диске со снимками остаётся меньше этого запаса, приёмник перестаёт принимать файлы, а агент встаёт на паузу. Снимки на ASIAIR при этом не удаляются, недокачанный файл потом продолжится с того же места. Можно указать процент диска (<b>5%</b>) или объём (<b>10GB</b>, <b>500MB</b>); <b>0</b> — без запаса.</div>
     </section>
     <section class="panel" id="startupPanel" hidden>
       <h2>Запуск на этом компьютере</h2>
@@ -534,6 +546,7 @@ function renderStatus() {
     : !a.remote_pause ? "пауза включится при следующей связи с агентом"
     : "передача на паузе; текущий файл потом докачается с того же места";
   else if (state.agent_online && a.remote_pause) pn = "пауза снимется при следующей связи с агентом";
+  if (state.agent_online && a.disk_full) pn = "агент на паузе: на этом компьютере мало места на диске (см. «Место на диске»)";
   if (state.agent_online && a.local_pause) pn += pn ? "; в окне агента тоже включена пауза — снимается там" : "пауза включена в окне агента — снимается там";
   $("pauseNow").textContent = pn;
   $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
@@ -560,9 +573,37 @@ function renderStatus() {
     ? "Сейчас: берётся из конфигурации агента"
     : "Сейчас задано здесь: " + fmtRate(state.max_rate);
   $("destPath").textContent = state.dest_dir;
+  renderDisk(state.disk || {});
   // until the agent has connected once, setup comes first
   $("setupGrid").style.order = (!state.last_seen || state.last_seen.startsWith("0001")) ? -1 : 0;
 }
+
+let minFreeEdited = false;
+function renderDisk(d) {
+  const full = !!d.full;
+  $("hdrDisk").hidden = !full;
+  $("dBar").parentElement.classList.toggle("full", full);
+  if (d.error) {
+    $("dLine").textContent = "не удалось узнать свободное место: " + d.error;
+    $("dBar").style.width = "0";
+  } else if (d.total) {
+    $("dBar").style.width = (100 * (d.total - d.free) / d.total).toFixed(1) + "%";
+    $("dLine").textContent = `Свободно ${fmtBytes(d.free)} из ${fmtBytes(d.total)} · запас ${fmtBytes(d.reserve)}` +
+      (d.min_free && d.min_free.trim().endsWith("%") ? ` (${d.min_free.trim()})` : "") +
+      (!full && d.free > d.reserve ? ` · можно принять ещё ${fmtBytes(d.free - d.reserve)}` : "");
+  }
+  $("dFull").textContent = full ? "Приём остановлен: " + d.full.replace(/^на приёмнике /, "").replace(" на странице приёмника", " ниже") : "";
+  if (!minFreeEdited && document.activeElement !== $("minFreeInput")) $("minFreeInput").value = d.min_free || "0";
+}
+$("minFreeInput").oninput = () => { minFreeEdited = true; };
+$("minFreeApply").onclick = async () => {
+  try {
+    await post("/ui/api/minfree", { min_free: $("minFreeInput").value.trim() || "0" });
+    minFreeEdited = false;
+    toast("Запас свободного места сохранён");
+    refresh();
+  } catch (e) { alert("Ошибка: " + e.message); }
+};
 
 async function refresh() {
   try {

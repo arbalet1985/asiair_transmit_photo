@@ -38,6 +38,10 @@ type Server struct {
 	mu    sync.RWMutex
 	store *Store
 	token string
+	// free space kept on the disk with the photos
+	reserve   config.Reserve
+	minFree   string
+	spaceNeed uint64 // size of the last upload refused for lack of space
 
 	fingerprint string
 	tlsCert     *tls.Certificate
@@ -65,7 +69,12 @@ func New(cfg *config.Receiver) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("состояние: %w", err)
 	}
-	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6)}
+	reserve, err := config.ParseReserve(cfg.MinFree)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6),
+		reserve: reserve, minFree: cfg.MinFree}
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
 		if err != nil {
@@ -196,12 +205,20 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(off, 10))
 		if done {
 			w.Header().Set(protocol.HeaderComplete, "1")
+		} else if msg := s.checkSpace(size - off); msg != "" {
+			// refuse before the agent starts sending the body
+			http.Error(w, msg, http.StatusInsufficientStorage)
+			return
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodPut:
 		off, err := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 		if err != nil || off < 0 || off > size {
 			http.Error(w, "неверный offset", http.StatusBadRequest)
+			return
+		}
+		if msg := s.checkSpace(size - off); msg != "" {
+			http.Error(w, msg, http.StatusInsufficientStorage)
 			return
 		}
 		got, sum, err := s.getStore().Write(p, size, mtime, off, r.Body)
@@ -271,7 +288,9 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	writeJSON(w, s.state.Sync(req.Status))
+	resp := s.state.Sync(req.Status)
+	resp.DiskFull = s.disk().Full
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +347,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/state", s.handleUIState)
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
+	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
 	mux.HandleFunc("/ui/api/fetch", s.handleUIFetch)
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
@@ -380,6 +400,7 @@ type uiState struct {
 	InventoryTime time.Time            `json:"inventory_time"`
 	Fingerprint   string               `json:"fingerprint"`
 	DestDir       string               `json:"dest_dir"`
+	Disk          diskInfo             `json:"disk"`
 	Totals        uiTotals             `json:"totals"`
 }
 
@@ -409,6 +430,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		InventoryTime: snap.InvTime,
 		Fingerprint:   s.fingerprint,
 		DestDir:       store.root,
+		Disk:          s.disk(),
 	}
 	writeJSON(w, out)
 }

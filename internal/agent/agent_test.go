@@ -386,3 +386,64 @@ func TestFetchWhilePaused(t *testing.T) {
 		return err == nil
 	})
 }
+
+// TestDiskFull: with a reserve larger than the free space the receiver
+// refuses files and the agent pauses; lowering the reserve on the page
+// lets the transfer go on.
+func TestDiskFull(t *testing.T) {
+	tmp := t.TempDir()
+	asiair := filepath.Join(tmp, "EMMC Images")
+	writeRandom(t, filepath.Join(asiair, "Autorun", "a.fit"), 50_000)
+
+	uiAddr := freeAddr(t)
+	rcfg := &config.Receiver{
+		Listen: freeAddr(t), UIListen: uiAddr, Token: "secret", DisableTLS: true,
+		DestDir: filepath.Join(tmp, "dest"), DataDir: filepath.Join(tmp, "data"), MinFree: "99.99%",
+	}
+	srv, err := receiver.New(rcfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+	startTransfer(t, uiAddr)
+
+	a, err := New(&config.Agent{
+		ASIAIR: "dir:" + asiair, ReceiverURL: "http://" + rcfg.Listen, Token: "secret", MaxRate: "0",
+		ScanInterval: config.Duration(200 * time.Millisecond), PollInterval: config.Duration(200 * time.Millisecond),
+		StateFile: filepath.Join(tmp, "agent-state.json"), Extensions: []string{".fit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go a.Run(ctx)
+
+	waitFor(t, "agent paused for disk space", 5*time.Second, func() bool {
+		st := a.Status()
+		return st.Paused && st.DiskFull != ""
+	})
+	got := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "a.fit")
+	if _, err := os.Stat(got); err == nil {
+		t.Fatal("file received despite the reserve")
+	}
+	if st := a.Status(); len(st.Failed) != 0 {
+		t.Fatalf("disk full counted as a file failure: %+v", st.Failed)
+	}
+
+	resp, err := http.Post("http://"+uiAddr+"/ui/api/minfree", "application/json", strings.NewReader(`{"min_free":"0"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("minfree: %d", resp.StatusCode)
+	}
+	waitFor(t, "file after lowering the reserve", 5*time.Second, func() bool {
+		_, err := os.Stat(got)
+		return err == nil
+	})
+	if st := a.Status(); st.DiskFull != "" || st.Paused {
+		t.Fatalf("still paused: %+v", st)
+	}
+}

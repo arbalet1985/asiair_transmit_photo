@@ -194,6 +194,7 @@ func (s *Server) SetDestDir(dir string) error {
 	s.mu.Lock()
 	old := s.store.root
 	s.store = store
+	s.spaceNeed = 0 // another disk, maybe
 	s.mu.Unlock()
 	log.Printf("Приёмник: папка для снимков изменена: %s → %s", old, dir)
 	return nil
