@@ -41,7 +41,10 @@ func TestRotatingLog(t *testing.T) {
 			prev := filepath.Join(dir, "app-"+day(d-1).Format(dayLayout)+".log")
 			os.Chtimes(prev, day(d-1), day(d-1))
 		}
-		r.cleanup(now)
+		// wait for the background cleanups, then clean up as of now
+		r.cleaning.Lock()
+		r.cleanupLocked(now)
+		r.cleaning.Unlock()
 	}
 	got := strings.Join(names(), " ")
 	// on day 12: days 10..11 are younger than 3 days: plain; 5..9 compressed;
