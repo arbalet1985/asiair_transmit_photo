@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
@@ -22,6 +23,10 @@ type client struct {
 	base  string
 	token string
 	http  *http.Client
+
+	mu     sync.Mutex
+	pinned string       // normalised fingerprint the certificate must have
+	onPin  func(string) // called when an empty fingerprint is learnt on first contact
 }
 
 func newClient(base, token, fingerprint string) (*client, error) {
@@ -29,23 +34,15 @@ func newClient(base, token, fingerprint string) (*client, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("receiver_url %q: ожидается https://адрес:порт", base)
 	}
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	c := &client{base: u.String(), token: token}
 	if fp := strings.TrimSpace(fingerprint); fp != "" {
-		want := normFP(fp)
-		// The receiver uses a self-signed certificate: trust exactly that
-		// certificate instead of a certificate authority.
-		tlsCfg.InsecureSkipVerify = true
-		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("приёмник не прислал сертификат")
-			}
-			got := normFP(protocol.Fingerprint(cs.PeerCertificates[0].Raw))
-			if got != want {
-				return fmt.Errorf("отпечаток сертификата приёмника не совпадает (получен %s)", protocol.Fingerprint(cs.PeerCertificates[0].Raw))
-			}
-			return nil
-		}
+		c.pinned = normFP(fp)
 	}
+	// The receiver uses a self-signed certificate: trust exactly that
+	// certificate instead of a certificate authority. Without a fingerprint
+	// in the settings (the receiver was unreachable when they were saved)
+	// the certificate of the first contact is trusted and remembered.
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: c.verify}
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -55,7 +52,31 @@ func newClient(base, token, fingerprint string) (*client, error) {
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConnsPerHost:   4,
 	}
-	return &client{base: u.String(), token: token, http: &http.Client{Transport: tr}}, nil
+	c.http = &http.Client{Transport: tr}
+	return c, nil
+}
+
+func (c *client) verify(cs tls.ConnectionState) error {
+	if len(cs.PeerCertificates) == 0 {
+		return errors.New("приёмник не прислал сертификат")
+	}
+	fp := protocol.Fingerprint(cs.PeerCertificates[0].Raw)
+	c.mu.Lock()
+	if c.pinned == "" {
+		c.pinned = normFP(fp)
+		pin := c.onPin
+		c.mu.Unlock()
+		if pin != nil {
+			pin(fp)
+		}
+		return nil
+	}
+	want := c.pinned
+	c.mu.Unlock()
+	if normFP(fp) != want {
+		return fmt.Errorf("отпечаток сертификата приёмника не совпадает (получен %s)", fp)
+	}
+	return nil
 }
 
 func normFP(s string) string {

@@ -42,6 +42,8 @@ type runner struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	err    error // configuration error when the agent could not start
+	// onConfig is told what the agent wrote to agent.yaml by itself
+	onConfig func(values map[string]string)
 }
 
 func (r *runner) start(cfgPath string, paused bool) {
@@ -57,6 +59,7 @@ func (r *runner) start(cfgPath string, paused bool) {
 	}
 	if err == nil {
 		r.agent.Restart = svc.Restart
+		r.agent.OnConfigChanged = r.onConfig
 	}
 	if err != nil {
 		r.err = err
@@ -154,6 +157,11 @@ func Run(cfgPath string) error {
 		logModel:     &logModel{},
 	}
 	w.settings = LoadSettings(w.settingsPath)
+	w.run.onConfig = func(values map[string]string) {
+		if w.mw != nil {
+			w.mw.Synchronize(func() { w.applyAgentConfig(values) })
+		}
+	}
 	w.setupLog()
 	defer func() {
 		// the window has no console: make crashes visible in the log

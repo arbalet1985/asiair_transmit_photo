@@ -53,6 +53,10 @@ type Agent struct {
 
 	// AutoUpdate: install new versions handed out by the receiver. Default true.
 	AutoUpdate Bool `yaml:"auto_update"`
+
+	// Path of the file the configuration was loaded from; the agent writes
+	// back what it finds out itself (new ASIAIR address, certificate).
+	Path string `yaml:"-"`
 }
 
 // Receiver is the configuration of the service on the destination computer.
@@ -190,6 +194,7 @@ func LoadAgent(path string) (*Agent, error) {
 		}
 		c.Extensions[i] = e
 	}
+	c.Path = path
 	c.StateFile = resolve(path, c.StateFile)
 	c.LogFile = resolve(path, c.LogFile)
 	return c, nil
