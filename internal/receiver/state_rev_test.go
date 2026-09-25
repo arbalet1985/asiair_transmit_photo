@@ -13,7 +13,7 @@ func TestStateChangedWakesSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rev := s.Sync(protocol.AgentStatus{}).Rev
+	rev := s.Sync(protocol.SyncRequest{}).Rev
 	if rev == 0 {
 		t.Fatal("no rev in the answer")
 	}
@@ -42,12 +42,30 @@ func TestStateChangedWakesSync(t *testing.T) {
 		if s.Changed(rev) != nil {
 			t.Fatalf("%s: old rev still current", name)
 		}
-		rev = s.Sync(protocol.AgentStatus{}).Rev
+		rev = s.Sync(protocol.SyncRequest{}).Rev
 	}
 	// the same delete again, or a result, changes nothing for the agent
 	ch := s.Changed(rev)
 	s.QueueDelete([]string{"EMMC Images/a.fit"}, false)
 	if closed(ch) {
 		t.Fatal("a duplicate delete woke the agent")
+	}
+}
+
+// A status that arrives after a newer one of the same agent run is ignored.
+func TestSyncKeepsNewestStatus(t *testing.T) {
+	s, err := LoadState(filepath.Join(t.TempDir(), "state.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Sync(protocol.SyncRequest{Session: "a", Seq: 2, Status: protocol.AgentStatus{LocalPause: true}})
+	s.Sync(protocol.SyncRequest{Session: "a", Seq: 1, Status: protocol.AgentStatus{LocalPause: false}}) // late
+	if !s.Snapshot().Status.LocalPause {
+		t.Fatal("a late status replaced a newer one")
+	}
+	// a restarted agent starts counting again
+	s.Sync(protocol.SyncRequest{Session: "b", Seq: 1, Status: protocol.AgentStatus{LocalPause: false}})
+	if s.Snapshot().Status.LocalPause {
+		t.Fatal("status of a new agent run ignored")
 	}
 }

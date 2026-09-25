@@ -322,7 +322,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	// long polling: answer when something for the agent changes
 	if req.WaitMS > 0 && req.Rev != 0 {
 		if ch := s.state.Changed(req.Rev); ch != nil {
-			s.state.Sync(req.Status) // the page sees the fresh status meanwhile
+			s.state.Sync(req) // the page sees the fresh status meanwhile
 			t := time.NewTimer(min(time.Duration(req.WaitMS)*time.Millisecond, maxHold))
 			defer t.Stop()
 			select {
@@ -334,7 +334,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	resp := s.state.Sync(req.Status)
+	resp := s.state.Sync(req)
 	resp.DiskFull = s.disk().Full
 	resp.Update = s.updater.offer(req.Status)
 	writeJSON(w, resp)
