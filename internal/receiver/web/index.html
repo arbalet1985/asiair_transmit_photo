@@ -110,6 +110,13 @@
   .panel.folded > :not(:first-child) { display: none !important; }
   input[type=date] { border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; font: inherit; color: inherit; }
   .filters label { color: var(--muted); }
+  /* the filter and action bar of "Файлы" stays at the top while scrolling */
+  .filesbar { position: sticky; top: 0; z-index: 5; background: var(--panel); margin: 0 -16px 6px; padding: 6px 16px 0; border-bottom: 1px solid var(--border); }
+  .filesbar.stuck { box-shadow: 0 4px 10px -6px rgba(0, 0, 0, .35); }
+  .fbhead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+  .fbhead button { border: 0; background: none; padding: 0; font-weight: 600; }
+  .fbhead button:hover { color: var(--accent); }
+  .filesbar.folded #filtersBody { display: none; }
   .filters.active #fReset { border-color: var(--accent); color: var(--accent); }
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
@@ -281,6 +288,12 @@
 
   <section class="panel">
     <h2>Файлы</h2>
+    <div class="filesbar" id="filesBar">
+    <div class="fbhead">
+      <button id="filtersToggle" title="Свернуть или развернуть фильтры">▾ Фильтры</button>
+      <span class="muted" id="filtersSummary"></span>
+    </div>
+    <div id="filtersBody">
     <div class="toolbar">
       <input type="search" id="filter" placeholder="Фильтр по имени или папке" size="30">
       <select id="show">
@@ -301,6 +314,7 @@
       <button id="fLastNight" title="Кадры последней ночи: с полудня накануне до полудня">Последняя ночь</button>
       <button id="fReset" title="Показать все файлы">Сбросить фильтры</button>
     </div>
+    </div>
     <div class="toolbar">
       <button id="collapseAll" title="Свернуть все папки">▸ Свернуть все</button>
       <button id="expandAll" title="Развернуть все папки">▾ Развернуть все</button>
@@ -312,6 +326,7 @@
       <button class="danger" id="delReceived" title="Удалить на ASIAIR все показанные файлы, которые уже получены и сверены (с учётом фильтров). Копии на этом компьютере остаются.">Удалить полученные на ASIAIR</button>
       <label><input type="checkbox" id="alsoLocal"> удалить и у себя</label>
       <button class="danger" id="delBtn" disabled>Удалить на ASIAIR</button>
+    </div>
     </div>
     <div class="tablewrap">
       <table>
@@ -504,6 +519,23 @@ function renderFilterOptions() {
   fill($("fType"), "Все типы", tl);
   $("filters").classList.toggle("active", filtersActive());
 }
+// one line with the filters in effect, shown next to "Фильтры"
+function renderFiltersSummary(shown) {
+  const parts = [];
+  const q = $("filter").value.trim();
+  if (q) parts.push(`«${q}»`);
+  if ($("show").value !== "all") parts.push($("show").selectedOptions[0].textContent);
+  if ($("fShare").value) parts.push(shareLabel($("fShare").value));
+  if ($("fType").value) parts.push($("fType").selectedOptions[0].textContent.split(" — ")[0]);
+  const d = v => v ? v.split("-").reverse().join(".") : "";
+  if ($("fFrom").value || $("fTo").value) parts.push(($("fFrom").value ? "с " + d($("fFrom").value) : "") + ($("fTo").value ? " по " + d($("fTo").value) : ""));
+  if ($("showFiltered").checked) parts.push("с непередаваемыми");
+  $("filtersSummary").textContent = (parts.length ? parts.join(" · ") : "без фильтров") + ` — показано ${shown} из ${state.files.length}`;
+}
+function setFiltersFolded(f) {
+  $("filesBar").classList.toggle("folded", f);
+  $("filtersToggle").textContent = (f ? "▸" : "▾") + " Фильтры";
+}
 
 function visibleFiles() {
   const q = $("filter").value.trim().toLowerCase();
@@ -656,7 +688,7 @@ function renderFiles() {
   $("selNone").hidden = sel.length === 0;
   const rec = receivedToDelete();
   $("delReceived").textContent = `Удалить полученные на ASIAIR (${rec.length})`;
-  $("delReceived").disabled = rec.length === 0;
+  $("delReceived").hidden = rec.length === 0;
   const found = files.filter(f => f.remote && !f.pending);
   $("selFound").textContent = `Выбрать все найденные (${found.length})`;
   $("selFound").disabled = found.length === 0;
@@ -664,6 +696,7 @@ function renderFiles() {
   $("selAll").checked = vis.length > 0 && vis.every(f => selected.has(f.path));
   const nr = state.files.filter(f => f.remote && f.status !== "filtered").length, nl = state.files.filter(f => f.local).length;
   const nf = state.files.filter(f => f.status === "filtered").length;
+  renderFiltersSummary(files.length);
   const folders = new Set(files.map(f => f.folder));
   $("collapseAll").disabled = [...folders].every(x => collapsed.has(x));
   $("expandAll").disabled = ![...folders].some(x => collapsed.has(x));
@@ -1023,6 +1056,18 @@ $("setupToggle").onclick = () => {
 }
 loadFilters();
 for (const c of store.get("collapsed", [])) collapsed.add(c);
+setFiltersFolded(store.get("filtersFolded", false));
+$("filtersToggle").onclick = () => {
+  const f = !$("filesBar").classList.contains("folded");
+  setFiltersFolded(f);
+  store.set("filtersFolded", f);
+};
+// a shadow under the bar while it is stuck at the top
+if ("IntersectionObserver" in window) {
+  const probe = el("div", { style: "height:1px;margin-bottom:-1px" });
+  $("filesBar").before(probe);
+  new IntersectionObserver(([e]) => $("filesBar").classList.toggle("stuck", !e.isIntersecting && e.boundingClientRect.top < 0)).observe(probe);
+}
 
 // ---------- Tailscale ----------
 let ts = null;
