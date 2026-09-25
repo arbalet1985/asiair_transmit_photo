@@ -451,6 +451,25 @@ func (w *window) saveSettings() {
 	w.restart()
 }
 
+// applyAgentConfig shows in the form what the agent saved by itself, so a
+// later «Сохранить» does not bring the old values back.
+func (w *window) applyAgentConfig(values map[string]string) {
+	f := &w.form
+	for k, v := range values {
+		switch k {
+		case "asiair":
+			f.asiair.SetText(v)
+			setResult(f.asiairResult, true, "агент нашёл ASIAIR по новому адресу и сохранил путь")
+		case "username":
+			f.user.SetText(v)
+		case "password":
+			f.pass.SetText(v)
+		case "receiver_fingerprint":
+			f.fingerprint.SetText(v)
+		}
+	}
+}
+
 func (w *window) openConfig() {
 	w.ensureConfig()
 	if err := exec.Command("notepad.exe", w.cfgPath).Start(); err != nil {

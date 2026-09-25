@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -133,4 +134,27 @@ func SplitPath(p string) (share, rest string, err error) {
 		}
 	}
 	return share, rest, nil
+}
+
+// ReplaceHost returns the link with the device address replaced by ip,
+// keeping the share, the port and the login. Links to folders ("dir:",
+// "usb:") are returned unchanged.
+func ReplaceHost(link, ip string) (string, error) {
+	l, err := ParseLink(link)
+	if err != nil {
+		return "", err
+	}
+	if l.Kind != "smb" {
+		return link, nil
+	}
+	host := ip
+	if _, port, err := net.SplitHostPort(l.Host); err == nil {
+		host = net.JoinHostPort(ip, port)
+	}
+	link = strings.TrimSpace(link)
+	i := strings.Index(link, l.Host)
+	if i < 0 {
+		return "", fmt.Errorf("не удалось заменить адрес в %q", link)
+	}
+	return link[:i] + host + link[i+len(l.Host):], nil
 }

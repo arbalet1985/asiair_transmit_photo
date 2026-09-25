@@ -110,3 +110,20 @@ func TestFolderLink(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceHost(t *testing.T) {
+	for in, want := range map[string]string{
+		`\\192.168.1.50\EMMC Images`:                  `\\192.168.1.77\EMMC Images`,
+		`\\192.168.1.50\EMMC Images\`:                 `\\192.168.1.77\EMMC Images\`,
+		"192.168.1.50":                                "192.168.1.77",
+		`//asiair.local/Udisk`:                        `//192.168.1.77/Udisk`,
+		`\\127.0.0.1:1445\EMMC Images`:                `\\192.168.1.77:1445\EMMC Images`,
+		"smb://as:astrostation@10.0.0.5/Astrostation": "smb://as:astrostation@192.168.1.77/Astrostation",
+		`usb:E:\`: `usb:E:\`,
+	} {
+		got, err := ReplaceHost(in, "192.168.1.77")
+		if err != nil || got != want {
+			t.Errorf("ReplaceHost(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}

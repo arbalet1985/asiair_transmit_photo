@@ -85,10 +85,23 @@ type Agent struct {
 
 	// Restart runs the program again after a new version was installed
 	// (svc.Restart). Without it the agent does not update itself.
-	Restart     func() error
-	Exe         string    // program to replace; the running one when empty (tests set it)
-	updating    bool      // guarded by mu
-	updateRetry time.Time // guarded by mu; after a failed update
+	Restart func() error
+	Exe     string // program to replace; the running one when empty (tests set it)
+
+	// OnConfigChanged is told what the agent itself wrote to agent.yaml
+	// (a new ASIAIR address, the receiver certificate), for the window.
+	OnConfigChanged func(values map[string]string)
+
+	srcMu        sync.RWMutex // guards src, which a search may replace
+	scanErrors   int          // guarded by mu; failed scans in a row
+	everScanned  bool         // guarded by mu; the ASIAIR answered at least once
+	lastDiscover time.Time
+	discovering  atomic.Bool
+	rescan       atomic.Bool // scan now, e.g. after a new address was found
+	discover     func(context.Context, func(string)) ([]source.Device, error)
+	newSource    func(link, user, pass string) (source.Source, error)
+	updating     bool      // guarded by mu
+	updateRetry  time.Time // guarded by mu; after a failed update
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
@@ -113,6 +126,8 @@ func New(cfg *config.Agent) (*Agent, error) {
 	a.status.OS = runtime.GOOS + "/" + runtime.GOARCH
 	a.status.ASIAIR = cfg.ASIAIR
 	a.status.Rate = rate
+	a.initDiscovery()
+	cl.onPin = a.pinFingerprint
 	if err := a.loadState(); err != nil {
 		return nil, fmt.Errorf("файл состояния %s: %w", cfg.StateFile, err)
 	}
@@ -178,7 +193,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 	a.transferLoop(ctx)
 	wg.Wait()
-	a.src.Close()
+	a.source().Close()
 	return nil
 }
 
@@ -346,13 +361,14 @@ func (a *Agent) wait(ctx context.Context, d time.Duration) {
 func (a *Agent) transferLoop(ctx context.Context) {
 	var lastScan time.Time
 	for ctx.Err() == nil {
-		if time.Since(lastScan) >= a.cfg.ScanInterval.D() {
+		if time.Since(lastScan) >= a.cfg.ScanInterval.D() || a.rescan.Swap(false) {
 			if err := a.scan(ctx); err != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				log.Printf("Агент: обход ASIAIR: %v", err)
 				a.setError(err)
+				a.scanFailed(ctx)
 			}
 			lastScan = time.Now()
 		}
@@ -445,7 +461,7 @@ func (a *Agent) scan(ctx context.Context) error {
 	var files, filtered []source.File
 	// the whole tree is listed so the receiver can show it; filtered files
 	// are reported but never transferred
-	err := a.src.Walk(ctx, nil, func(f source.File) error {
+	err := a.source().Walk(ctx, nil, func(f source.File) error {
 		if a.wanted(f.Path) && !a.excluded(f.Path) {
 			files = append(files, f)
 		} else {
@@ -459,6 +475,7 @@ func (a *Agent) scan(ctx context.Context) error {
 		a.mu.Unlock()
 		return err
 	}
+	a.scanErrors, a.everScanned = 0, true
 	now := time.Now()
 	a.status.LastScan = now
 	present := make(map[string]bool, len(files))
@@ -700,7 +717,7 @@ func (a *Agent) uploadOnce(ctx context.Context, f source.File) error {
 		return fmt.Errorf("неверный ответ приёмника: offset %q", resp.Header.Get(protocol.HeaderOffset))
 	}
 
-	src, err := a.src.Open(f.Path)
+	src, err := a.source().Open(f.Path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			a.mu.Lock()
@@ -905,7 +922,7 @@ func (a *Agent) deleteFile(p string) error {
 	a.mu.Lock()
 	a.deleted[p] = true
 	a.mu.Unlock()
-	err := a.src.Remove(p)
+	err := a.source().Remove(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		err = nil // already gone
 	}
