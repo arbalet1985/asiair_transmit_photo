@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -175,6 +176,11 @@ func TestEndToEnd(t *testing.T) {
 	if err := c.postJSON(context.Background(), "/api/sync", map[string]any{}, nil); err == nil ||
 		!strings.Contains(err.Error(), "отпечаток") {
 		t.Fatalf("wrong fingerprint accepted: %v", err)
+	}
+	// the settings form offers the new fingerprint from the error
+	var fe *FingerprintError
+	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "secret", strings.Repeat("00", 32)); !errors.As(err, &fe) || fe.Got != srv.Fingerprint() {
+		t.Fatalf("no fingerprint error: %v", err)
 	}
 
 	// helpers used by the settings form

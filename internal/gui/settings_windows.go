@@ -410,6 +410,22 @@ func (w *window) testReceiver() {
 				err := agent.CheckReceiver(ctx, u, token, fp)
 				w.mw.Synchronize(func() {
 					f.testReceiver.SetEnabled(true)
+					var fe *agent.FingerprintError
+					if errors.As(err, &fe) {
+						log.Printf("Проверка приёмника %s: сертификат изменился, отпечаток %s", u, fe.Got)
+						if walk.MsgBox(w.mw, "Сертификат приёмника изменился",
+							"Приёмник прислал другой сертификат.\n\nБыл:\n"+TwoLines(fp)+"\n\nСтал:\n"+TwoLines(fe.Got)+"\n\n"+
+								"Так бывает после переустановки приёмника или удаления папки receiver-data. "+
+								"Сверьте новый отпечаток со страницей приёмника (блок «Подключение агента»). "+
+								"Если он не совпадает, не заменяйте: возможно, это чужой сервер.\n\nЗаменить отпечаток?",
+							walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
+							setResult(f.receiverResult, false, "Сертификат не подтверждён, отпечаток оставлен прежним.")
+							return
+						}
+						f.fingerprint.SetText(fe.Got)
+						w.testReceiver() // check the token with the new certificate
+						return
+					}
 					if err != nil {
 						setResult(f.receiverResult, false, explain(err, "Приёмник"))
 						log.Printf("Проверка приёмника %s: %v", u, err)

@@ -74,9 +74,18 @@ func (c *client) verify(cs tls.ConnectionState) error {
 	want := c.pinned
 	c.mu.Unlock()
 	if normFP(fp) != want {
-		return fmt.Errorf("отпечаток сертификата приёмника не совпадает (получен %s)", fp)
+		return &FingerprintError{Got: fp}
 	}
 	return nil
+}
+
+// FingerprintError: the receiver presented another certificate than the
+// one in the settings (the receiver was reinstalled, or someone is in the
+// middle). Got is the fingerprint of the certificate received.
+type FingerprintError struct{ Got string }
+
+func (e *FingerprintError) Error() string {
+	return "отпечаток сертификата приёмника не совпадает (получен " + e.Got + ")"
 }
 
 func normFP(s string) string {
