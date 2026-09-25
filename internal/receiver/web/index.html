@@ -120,13 +120,13 @@
       <h2>Агент в обсерватории</h2>
       <div class="line err" id="aStale" hidden style="margin-bottom:8px"></div>
       <dl class="kv" id="aKv">
+        <dt>Версия агента</dt><dd id="aVersion">—</dd>
         <dt>ASIAIR</dt><dd id="aAsiair">—</dd>
         <dt>Связь</dt><dd id="aSeen">—</dd>
         <dt>Последний обход</dt><dd id="aScan">—</dd>
         <dt>Очередь</dt><dd id="aQueue">—</dd>
         <dt>Отправлено</dt><dd id="aSent">—</dd>
         <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
-        <dt>Версия</dt><dd id="aVersion">—</dd>
       </dl>
     </section>
     <section class="panel">
@@ -590,7 +590,9 @@ function renderAsiair(a, stale) {
 function renderStatus() {
   const a = state.agent;
   $("agentBadge").className = "badge " + (state.agent_online ? "on" : "off");
-  $("agentBadge").textContent = state.agent_online ? "агент на связи" : "агент не на связи";
+  const av = a && a.version ? (a.version === "dev" ? " (собран вручную)" : " v" + a.version) : "";
+  $("agentBadge").textContent = state.agent_online ? "агент" + av + " на связи" : "агент не на связи";
+  $("agentBadge").title = a && a.version ? "Версия агента: " + a.version : "";
   $("destDir").textContent = "Папка: " + state.dest_dir;
   // offline: the rows below are what the agent reported last time
   const everSeen = state.last_seen && !state.last_seen.startsWith("0001");
@@ -685,12 +687,14 @@ function renderUpdate(u, a) {
     for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
     return false;
   };
-  $("hdrVersion").textContent = ver(u.version);
+  $("hdrVersion").textContent = "приёмник " + ver(u.version);
   $("upMine").textContent = ver(u.version) + (u.latest && newer(u.latest, u.version) ? " — есть новая версия" : u.latest && u.version === u.latest ? " — последняя" : "");
   const av = (a && a.version) || "";
   $("upAgent").textContent = av ? ver(av) + (!state.agent_online ? " (на момент последней связи)" : "") +
     (a.update && state.agent_online ? " — " + a.update : u.agent && newer(u.agent, av) ? ` — обновится до v${u.agent} при следующей связи` : "") : "агент ещё не выходил на связь";
-  $("aVersion").textContent = av ? ver(av) + (a.update ? " — " + a.update : "") : "—";
+  const seen = state.last_seen && !state.last_seen.startsWith("0001");
+  $("aVersion").textContent = av ? ver(av) + (a.update ? " — " + a.update : u.agent && newer(u.agent, av) ? ` — обновится до v${u.agent}` : "")
+    : seen ? "неизвестна (старая версия агента — обновите его вручную)" : "агент ещё не выходил на связь";
   $("upLatest").innerHTML = "";
   if (u.latest) {
     const link = el("a", { href: u.latest_url, target: "_blank", rel: "noopener", textContent: "v" + u.latest });

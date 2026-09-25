@@ -23,7 +23,8 @@ type Agent struct {
 	// ASIAIR is the link to the ASIAIR: "192.168.1.50", "\\192.168.1.50\EMMC Images",
 	// "smb://user:pass@192.168.1.50/EMMC Images" or "dir:C:\some\folder".
 	ASIAIR string `yaml:"asiair"`
-	// Shares used when the link does not name a share. Default: ["EMMC Images"].
+	// Shares used when the link names no share or "EMMC Images". Default
+	// (empty or "*"): every disk share of the ASIAIR — eMMC, SD card, USB stick.
 	Shares []string `yaml:"shares"`
 	// Username/Password for SMB. Empty means guest access (ASIAIR default).
 	Username string `yaml:"username"`

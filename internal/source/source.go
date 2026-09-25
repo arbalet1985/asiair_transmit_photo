@@ -1,7 +1,8 @@
 // Package source provides access to the files stored on the ASIAIR.
 //
 // The ASIAIR exposes its storage as SMB shares: "EMMC Images" (internal
-// memory) and "Udisk" (USB stick, when inserted). By default the shares are
+// memory), "Udisk" (USB stick, when inserted) and, on models with a card
+// slot, one for the SD card; by default all of them are walked. The shares are
 // accessible as guest, without a username or password. Paths used by this
 // package are "<share>/<path inside share>" with forward slashes.
 package source
