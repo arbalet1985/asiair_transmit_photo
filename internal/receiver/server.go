@@ -373,7 +373,11 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		if res.OK {
 			log.Printf("Приёмник: удалено на ASIAIR: %s", c.Path)
 			if c.AlsoLocal {
-				if err := s.getStore().Remove(c.Path); err != nil {
+				remove := s.getStore().Remove
+				if c.IsDir() {
+					remove = s.getStore().RemoveDir
+				}
+				if err := remove(c.Path); err != nil {
 					log.Printf("Приёмник: не удалось удалить локальную копию %s: %v", c.Path, err)
 				}
 			}
@@ -400,6 +404,7 @@ func (s *Server) uiHandler() http.Handler {
 	})
 	mux.HandleFunc("/ui/api/state", s.handleUIState)
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
+	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
@@ -451,6 +456,7 @@ type uiState struct {
 	Paused        bool                 `json:"paused"`
 	WaitStart     bool                 `json:"wait_start"`
 	Fetch         []string             `json:"fetch"`
+	SyncDirs      []string             `json:"sync_dirs"`
 	Agent         protocol.AgentStatus `json:"agent"`
 	AgentOnline   bool                 `json:"agent_online"`
 	LastSeen      time.Time            `json:"last_seen"`
@@ -484,6 +490,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Paused:        snap.Paused,
 		WaitStart:     snap.WaitStart,
 		Fetch:         snap.Fetch,
+		SyncDirs:      snap.SyncDirs,
 		Agent:         snap.Status,
 		LastSeen:      snap.LastSeen,
 		AgentOnline:   online,
@@ -501,27 +508,49 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUIDelete(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Paths     []string `json:"paths"`
+		Dirs      []string `json:"dirs"` // folders deleted with everything in them
 		AlsoLocal bool     `json:"also_local"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	var paths []string
-	for _, p := range req.Paths {
-		cp, err := CleanPath(p)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+	clean := func(list []string) ([]string, bool) {
+		var out []string
+		for _, p := range list {
+			cp, err := CleanPath(p)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return nil, false
+			}
+			out = append(out, cp)
 		}
-		paths = append(paths, cp)
+		return out, true
 	}
-	n, err := s.state.QueueDelete(paths, req.AlsoLocal)
+	paths, ok := clean(req.Paths)
+	if !ok {
+		return
+	}
+	dirs, ok := clean(req.Dirs)
+	if !ok {
+		return
+	}
+	n, err := s.state.QueueDelete(paths, protocol.CmdDelete, req.AlsoLocal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("Приёмник: поставлено в очередь на удаление: %d файл(ов)", n)
-	writeJSON(w, map[string]int{"queued": n})
+	nd, err := s.state.QueueDelete(dirs, protocol.CmdDeleteDir, req.AlsoLocal)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if n > 0 {
+		log.Printf("Приёмник: поставлено в очередь на удаление: %d файл(ов)", n)
+	}
+	if nd > 0 {
+		log.Printf("Приёмник: поставлено в очередь на удаление: %d папк(и) целиком", nd)
+	}
+	writeJSON(w, map[string]int{"queued": n + nd})
 }
 
 func (s *Server) handleUIRate(w http.ResponseWriter, r *http.Request) {
@@ -570,6 +599,33 @@ func (s *Server) handleUIPause(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Приёмник: передача запущена")
 	} else {
 		log.Printf("Приёмник: пауза снята")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUISyncDir turns on or off the synchronisation of a folder while the
+// transfer is paused.
+func (s *Server) handleUISyncDir(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+		On   bool   `json:"on"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	dir, err := CleanPath(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.state.SetSyncDir(dir, req.On); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if req.On {
+		log.Printf("Приёмник: папка синхронизируется и на паузе: %s", dir)
+	} else {
+		log.Printf("Приёмник: синхронизация папки на паузе снята: %s", dir)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -25,6 +25,7 @@ func (d *deadSource) Walk(context.Context, func(string) bool, func(source.File) 
 }
 func (d *deadSource) Open(string) (io.ReadSeekCloser, error) { return nil, errDead }
 func (d *deadSource) Remove(string) error                    { return errDead }
+func (d *deadSource) RemoveAll(string) error                 { return errDead }
 func (d *deadSource) Close() error                           { d.closed = true; return nil }
 func (d *deadSource) Probe(context.Context) (*source.ProbeResult, error) {
 	return nil, errDead

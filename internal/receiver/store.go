@@ -278,6 +278,26 @@ func (s *Store) List(shares []string) ([]LocalFile, error) {
 	return out, nil
 }
 
+// RemoveDir deletes a received folder with everything in it, and the
+// parent folders left empty. The top of a share is never removed.
+func (s *Store) RemoveDir(p string) error {
+	p, err := CleanPath(p)
+	if err != nil {
+		return err
+	}
+	dst := s.Local(p)
+	if err := os.RemoveAll(dst); err != nil {
+		return err
+	}
+	root := filepath.Clean(s.root)
+	for dir := filepath.Dir(dst); dir != root && strings.HasPrefix(dir, root); dir = filepath.Dir(dir) {
+		if os.Remove(dir) != nil {
+			break
+		}
+	}
+	return nil
+}
+
 // Remove deletes a received file and empty parent folders.
 func (s *Store) Remove(p string) error {
 	unlock := s.lock(p)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,15 @@ type Command struct {
 	Updated   time.Time `json:"updated"`
 }
 
+// IsDir reports a command deleting a whole folder.
+func (c *Command) IsDir() bool { return c.Type == protocol.CmdDeleteDir }
+
+// Covers reports whether the file p is deleted by the command: the file
+// itself, or any file in the folder and its subfolders.
+func (c *Command) Covers(p string) bool {
+	return p == c.Path || c.IsDir() && strings.HasPrefix(p, c.Path+"/")
+}
+
 // persisted is what survives a restart.
 type persisted struct {
 	Commands []*Command `json:"commands"`
@@ -40,7 +50,10 @@ type persisted struct {
 	WaitStart bool `json:"wait_start"`
 	// Fetch: files requested on the page; the agent sends them even while
 	// the transfer is paused or not started.
-	Fetch     []string              `json:"fetch"`
+	Fetch []string `json:"fetch"`
+	// SyncDirs: folders synchronised even while the transfer is paused or
+	// not started: their new files are added to Fetch as the agent finds them.
+	SyncDirs  []string              `json:"sync_dirs"`
 	Inventory []protocol.RemoteFile `json:"inventory"`
 	InvTime   time.Time             `json:"inventory_time"`
 	Status    protocol.AgentStatus  `json:"agent_status"`
@@ -119,25 +132,27 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-// QueueDelete adds delete commands for paths not already pending.
-func (s *State) QueueDelete(paths []string, alsoLocal bool) (int, error) {
+// QueueDelete adds delete commands for paths not already pending: files
+// with protocol.CmdDelete, whole folders with protocol.CmdDeleteDir.
+func (s *State) QueueDelete(paths []string, typ string, alsoLocal bool) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pending := map[string]bool{}
+	pending := map[protocol.Command]bool{}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
-			pending[c.Path] = true
+			pending[protocol.Command{Type: c.Type, Path: c.Path}] = true
 		}
 	}
 	now := time.Now()
 	n := 0
 	for _, p := range paths {
-		if pending[p] {
+		key := protocol.Command{Type: typ, Path: p}
+		if pending[key] {
 			continue
 		}
-		pending[p] = true
+		pending[key] = true
 		s.p.Commands = append(s.p.Commands, &Command{
-			Command:   protocol.Command{ID: newID(), Type: protocol.CmdDelete, Path: p},
+			Command:   protocol.Command{ID: newID(), Type: typ, Path: p},
 			AlsoLocal: alsoLocal, Status: StatusPending, Created: now, Updated: now,
 		})
 		n++
@@ -179,14 +194,13 @@ func (s *State) Result(r protocol.CommandResult) (*Command, error) {
 		c.Updated = time.Now()
 		if r.OK {
 			c.Status, c.Error = StatusDone, ""
-			// drop the file from the inventory right away
-			inv := s.p.Inventory[:0]
-			for _, f := range s.p.Inventory {
-				if f.Path != c.Path {
-					inv = append(inv, f)
-				}
+			// drop the file (or the folder's files) from the inventory right away
+			gone := func(p string) bool { return c.Covers(p) }
+			s.p.Inventory = slices.DeleteFunc(s.p.Inventory, func(f protocol.RemoteFile) bool { return gone(f.Path) })
+			s.p.Fetch = slices.DeleteFunc(s.p.Fetch, gone)
+			if c.IsDir() {
+				s.p.SyncDirs = slices.DeleteFunc(s.p.SyncDirs, func(d string) bool { return d == c.Path || underDir(d, c.Path) })
 			}
-			s.p.Inventory = inv
 		} else {
 			c.Status, c.Error = StatusFailed, r.Error
 		}
@@ -210,6 +224,56 @@ func (s *State) SetInventory(files []protocol.RemoteFile) error {
 		}
 	}
 	s.p.Fetch = slices.DeleteFunc(s.p.Fetch, func(p string) bool { return !waiting[p] })
+	if s.addSyncFetchLocked() > 0 {
+		s.bump()
+	}
+	return s.save()
+}
+
+// underDir reports whether the file p lies in the folder dir or below.
+func underDir(p, dir string) bool { return strings.HasPrefix(p, dir+"/") }
+
+// addSyncFetchLocked requests the files of the synchronised folders that
+// are still to be transferred. Caller holds s.mu.
+func (s *State) addSyncFetchLocked() int {
+	if len(s.p.SyncDirs) == 0 {
+		return 0
+	}
+	n := 0
+	for _, f := range s.p.Inventory {
+		if f.State == protocol.StateSent || f.State == protocol.StateFiltered || f.State == "" && f.Sent {
+			continue
+		}
+		if !slices.ContainsFunc(s.p.SyncDirs, func(d string) bool { return underDir(f.Path, d) }) || slices.Contains(s.p.Fetch, f.Path) {
+			continue
+		}
+		s.p.Fetch = append(s.p.Fetch, f.Path)
+		n++
+	}
+	return n
+}
+
+// SetSyncDir turns on (or off) the synchronisation of a folder while the
+// transfer is paused. Turning it off also withdraws the requests for its
+// files not sent yet.
+func (s *State) SetSyncDir(dir string, on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := slices.Index(s.p.SyncDirs, dir)
+	switch {
+	case on && i < 0:
+		s.p.SyncDirs = append(s.p.SyncDirs, dir)
+		slices.Sort(s.p.SyncDirs)
+		s.addSyncFetchLocked()
+	case !on && i >= 0:
+		s.p.SyncDirs = slices.Delete(s.p.SyncDirs, i, i+1)
+		s.p.Fetch = slices.DeleteFunc(s.p.Fetch, func(p string) bool {
+			return underDir(p, dir) && !slices.ContainsFunc(s.p.SyncDirs, func(d string) bool { return underDir(p, d) })
+		})
+	default:
+		return nil
+	}
+	s.bump()
 	return s.save()
 }
 
@@ -308,5 +372,6 @@ func (s *State) Snapshot() persisted {
 	}
 	cp.Inventory = append([]protocol.RemoteFile(nil), s.p.Inventory...)
 	cp.Fetch = append([]string{}, s.p.Fetch...)
+	cp.SyncDirs = append([]string{}, s.p.SyncDirs...)
 	return cp
 }

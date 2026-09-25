@@ -39,6 +39,9 @@ type Source interface {
 	Walk(ctx context.Context, skipDir func(path string) bool, fn func(File) error) error
 	Open(path string) (io.ReadSeekCloser, error)
 	Remove(path string) error
+	// RemoveAll deletes the folder path with everything in it. A missing
+	// folder is not an error; the top of a share cannot be removed.
+	RemoveAll(path string) error
 	Close() error
 	// Probe connects and lists the top of each share, without walking the
 	// whole tree: a quick availability check.
