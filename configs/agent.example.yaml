@@ -21,6 +21,14 @@ shares: ["*"]
 username: ""
 password: ""
 
+# Способ связи с приёмником:
+#   internet  — приёмник доступен из интернета (проброс порта на домашнем роутере);
+#   tailscale — через встроенный Tailscale, без проброса портов (бесплатно).
+#               Тогда в receiver_url — имя приёмника в Tailscale: https://asiair-receiver:8443
+connection: internet
+# Ключ Tailscale вместо входа через браузер (необязательно).
+tailscale_authkey: ""
+
 # Адрес приёмника (домашний ПК) и общий токен (одинаковый с receiver.yaml).
 receiver_url: "https://my-home.example.com:8443"
 token: "ВСТАВЬТЕ_ТОКЕН"

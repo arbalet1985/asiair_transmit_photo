@@ -218,7 +218,7 @@
       <h2>Подключение агента</h2>
       <div class="label">Эти данные нужно ввести в окне агента в обсерватории (вкладка «Настройки»).</div>
       <div class="label" style="margin-top:8px">Адрес</div>
-      <div class="field"><span class="value">внешний IP или имя этого компьютера (порт <b id="cPort">—</b> должен быть открыт)</span></div>
+      <div class="field"><span class="value" id="cAddr">внешний IP или имя этого компьютера (порт <b id="cPort">—</b> должен быть открыт на роутере) — или имя в Tailscale, см. ниже</span></div>
       <div class="label">Токен</div>
       <div class="field">
         <span class="value mono" id="cToken">••••••••••••</span>
@@ -233,6 +233,30 @@
           <button id="cFpCopy">Копировать</button>
         </div>
       </div>
+      <h2 style="margin-top:14px">Tailscale — связь без проброса портов</h2>
+      <label class="line"><input type="checkbox" id="tsOn"> Принимать агента через Tailscale</label>
+      <div class="line" id="tsState"></div>
+      <div class="toolbar" id="tsLoginBar" hidden>
+        <button class="primary" id="tsLogin">Войти в Tailscale…</button>
+        <button id="tsNewLink" title="Если ссылка устарела">Новая ссылка</button>
+      </div>
+      <div id="tsAddrBlock" hidden>
+        <div class="label">Адрес приёмника для агента (способ связи «Tailscale»)</div>
+        <div class="field">
+          <span class="value mono" id="tsAddr">—</span>
+          <button id="tsAddrCopy">Копировать</button>
+          <button id="tsLogout" title="Выйти из этой учётной записи Tailscale">Выйти</button>
+        </div>
+      </div>
+      <details style="margin-top:6px">
+        <summary class="muted">Ключ Tailscale вместо входа (необязательно)</summary>
+        <div class="field" style="margin-top:6px">
+          <input type="password" id="tsKey" placeholder="tskey-auth-…" style="flex:1 1 200px;min-width:0" autocomplete="off">
+          <button id="tsKeySave">Сохранить и подключить</button>
+        </div>
+        <div class="hint">Ключ создаётся на login.tailscale.com: <b>Settings → Keys → Generate auth key</b>. Он нужен, только если войти по ссылке неудобно.</div>
+      </details>
+      <div class="hint">Tailscale бесплатен для личного использования (до 6 пользователей, устройств без ограничений). Приёмник и агент входят в <b>одну и ту же</b> учётную запись Tailscale (Google, Microsoft, GitHub, Apple или e-mail) и находят друг друга по имени, даже при «сером» IP. Ставить отдельную программу Tailscale не нужно: она встроена. Обычное подключение через интернет при этом продолжает работать.</div>
     </section>
   </div>
 
@@ -603,7 +627,8 @@ function renderStatus() {
     ? "Агент ещё ни разу не выходил на связь с этим приёмником. Проверьте в окне агента поле «Ошибка» и журнал."
     : `Агент не на связи с ${fmtTime(state.last_seen)}. Ниже — то, что он сообщил в последний раз, сейчас это может быть не так. Причину покажет окно агента: поле «Ошибка» и журнал.`;
   renderAsiair(a, stale);
-  $("aSeen").textContent = stale ? "нет связи с " + fmtTime(state.last_seen) : ago(state.last_seen);
+  $("aSeen").textContent = (stale ? "нет связи с " + fmtTime(state.last_seen) : ago(state.last_seen)) +
+    (a && a.connection === "tailscale" ? " · через Tailscale" : a && a.connection === "internet" ? " · через интернет" : "");
   $("aScan").textContent = ago(a.last_scan);
   $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
@@ -647,6 +672,7 @@ function renderStatus() {
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
+  renderTailscale(state.tailscale);
   // until the agent has connected once, setup comes first
   $("setupGrid").style.order = (!state.last_seen || state.last_seen.startsWith("0001")) ? -1 : 0;
 }
@@ -774,6 +800,43 @@ $("pauseBtn").onclick = async () => {
 };
 $("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
 $("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
+
+// ---------- Tailscale ----------
+let ts = null;
+function renderTailscale(t) {
+  if (!t) return;
+  ts = t;
+  if (document.activeElement !== $("tsOn")) $("tsOn").checked = t.enabled;
+  const st = $("tsState");
+  st.className = "line" + (t.state === "error" ? " err" : "");
+  const text = {
+    off: t.enabled ? "запускается…" : "выключено",
+    starting: "подключение к Tailscale…",
+    login: t.auth_url ? "Нужно войти в Tailscale: нажмите «Войти в Tailscale…» и войдите той же учётной записью, что и в агенте." : "Нужно войти в Tailscale, ссылка готовится…",
+    running: "Подключено" + (t.user ? " как " + t.user : "") + ": имя " + t.name + (t.ip ? ", адрес " + t.ip : ""),
+    error: "Ошибка: " + (t.error || ""),
+  }[t.state] || t.state;
+  st.textContent = t.enabled || t.state !== "off" ? text : "выключено";
+  $("tsLoginBar").hidden = t.state !== "login";
+  $("tsLogin").disabled = !t.auth_url;
+  $("tsAddrBlock").hidden = t.state !== "running";
+  $("tsAddr").textContent = t.name ? `${t.name}, порт ${t.port}` + (t.ip ? ` (или ${t.ip})` : "") : "—";
+  $("tsKey").placeholder = t.authkey ? "ключ задан; введите новый, чтобы заменить" : "tskey-auth-…";
+}
+async function tsAction(body, okText) {
+  try { const r = await post("/ui/api/tailscale", body); renderTailscale(r); if (okText) toast(okText); }
+  catch (e) { alert("Ошибка: " + e.message); refresh(); }
+}
+$("tsOn").onchange = () => tsAction({ action: $("tsOn").checked ? "enable" : "disable" }, $("tsOn").checked ? "Tailscale включается" : "Tailscale выключен");
+$("tsLogin").onclick = () => ts && ts.auth_url && window.open(ts.auth_url, "_blank", "noopener");
+$("tsNewLink").onclick = () => tsAction({ action: "login" }, "Запрошена новая ссылка");
+$("tsLogout").onclick = () => confirm("Выйти из Tailscale? Агент не сможет подключиться через Tailscale, пока вы не войдёте снова.") && tsAction({ action: "logout" });
+$("tsAddrCopy").onclick = () => ts && ts.name && copyText(ts.name);
+$("tsKeySave").onclick = () => {
+  const k = $("tsKey").value.trim();
+  if (!k) return alert("Вставьте ключ tskey-auth-…");
+  tsAction({ action: "enable", authkey: k }, "Ключ сохранён").then(() => { $("tsKey").value = ""; });
+};
 
 // ---------- connection data ----------
 let conn = null, tokenShown = false;
