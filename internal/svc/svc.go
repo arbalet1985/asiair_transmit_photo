@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"github.com/kardianos/service"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/firewall"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 // App describes a program.
@@ -173,7 +176,38 @@ func ServiceControl(app App, cfgPath, action string) error {
 	if err != nil {
 		return err
 	}
-	return service.Control(s, action)
+	if err := service.Control(s, action); err != nil {
+		return err
+	}
+	if action == "install" {
+		AllowFirewall(app)
+	}
+	return nil
+}
+
+// AllowFirewall adds the inbound rule for the program (administrator
+// rights). A service cannot be asked by Windows and would be blocked
+// silently without it; the tray program is not asked again either.
+func AllowFirewall(app App) error {
+	if !firewall.Supported() {
+		return firewall.ErrUnsupported
+	}
+	exe, err := update.Executable()
+	if err != nil {
+		return err
+	}
+	if err := firewall.Allow(app.DisplayName, exe); err != nil {
+		log.Printf("Брандмауэр: %v", err)
+		return err
+	}
+	log.Printf("Брандмауэр Windows: добавлено разрешение для %s", exe)
+	return nil
+}
+
+// FirewallAllowed reports whether the program is allowed in the firewall.
+func FirewallAllowed(app App) bool {
+	exe, err := update.Executable()
+	return err == nil && firewall.Allowed(app.DisplayName, exe)
 }
 
 // Main parses the command line and runs the app.
@@ -195,6 +229,7 @@ func Main(app App) {
 		fmt.Fprintln(out, "  stop       остановить службу")
 		fmt.Fprintln(out, "  restart    перезапустить службу")
 		fmt.Fprintln(out, "  status     состояние службы")
+		fmt.Fprintln(out, "  firewall-allow  разрешить программу в брандмауэре Windows (от имени администратора)")
 		for name, c := range app.Commands {
 			fmt.Fprintf(out, "  %-10s %s\n", name, c.Help)
 		}
@@ -217,6 +252,14 @@ func Main(app App) {
 	if cmd == "gui" && app.GUI != nil {
 		if err := app.GUI(*cfgPath); err != nil {
 			log.Printf("Ошибка: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if cmd == "firewall-allow" { // run elevated by the program itself
+		if err := AllowFirewall(app); err != nil {
+			fmt.Fprintln(os.Stderr, "Ошибка:", err)
 			os.Exit(1)
 		}
 		return
@@ -280,6 +323,7 @@ func Main(app App) {
 			os.Exit(1)
 		}
 		control(s, cmd)
+		AllowFirewall(app)
 		fmt.Printf("Служба %s установлена (настройки: %s). Запуск: %s start\n", app.Name, *cfgPath, app.Name)
 	case "uninstall", "start", "stop", "restart":
 		control(s, cmd)

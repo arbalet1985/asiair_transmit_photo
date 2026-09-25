@@ -102,6 +102,11 @@ type Receiver struct {
 	// UpdateRepo is "owner/name" of the GitHub repository with the releases.
 	UpdateRepo string `yaml:"update_repo"`
 
+	// Internet: serve the agent API on Listen (reachable from the internet
+	// when the router forwards the port). Missing = true (older settings);
+	// a new receiver starts with false until a way is chosen on the page.
+	Internet *Bool `yaml:"internet"`
+
 	// TailscaleOn: the agent API is also served in the user's Tailscale
 	// network, so the agent can connect without an open port.
 	TailscaleOn Bool `yaml:"tailscale"`
@@ -127,6 +132,9 @@ type Tailscale struct {
 	// TailscaleControlURL: a Headscale server instead of Tailscale (optional).
 	TailscaleControlURL string `yaml:"tailscale_control_url"`
 }
+
+// InternetOn reports whether the agent API is served on Listen.
+func (c *Receiver) InternetOn() bool { return c.Internet == nil || bool(*c.Internet) }
 
 // UseTailscale reports whether the agent connects through Tailscale.
 func (c *Agent) UseTailscale() bool { return c.Connection == ConnTailscale }

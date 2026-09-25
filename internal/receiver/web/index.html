@@ -242,8 +242,16 @@
     <section class="panel">
       <h2>Подключение агента</h2>
       <div class="label">Эти данные нужно ввести в окне агента в обсерватории (вкладка «Настройки»).</div>
-      <div class="label" style="margin-top:8px">Адрес</div>
-      <div class="field"><span class="value" id="cAddr">внешний IP или имя этого компьютера (порт <b id="cPort">—</b> должен быть открыт на роутере) — или имя в Tailscale, см. ниже</span></div>
+      <label class="line" style="margin-top:8px"><input type="checkbox" id="netOn"> Принимать агента через интернет (порт <b id="netPort">—</b>)</label>
+      <div class="hint" id="netHint"></div>
+      <div class="line" id="fwLine" hidden style="margin-top:6px">
+        Брандмауэр Windows: <span id="fwState">—</span>
+        <button id="fwAllow" title="Добавить разрешение для приёмника; Windows попросит права администратора">Разрешить…</button>
+      </div>
+      <div id="cAddrBlock">
+        <div class="label" style="margin-top:8px">Адрес</div>
+        <div class="field"><span class="value" id="cAddr">внешний IP или имя этого компьютера (порт <b id="cPort">—</b> должен быть открыт на роутере)</span></div>
+      </div>
       <div class="label">Токен</div>
       <div class="field">
         <span class="value mono" id="cToken">••••••••••••</span>
@@ -833,6 +841,7 @@ function renderStatus() {
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
   renderTailscale(state.tailscale);
+  renderNetwork(state.network);
   // until the agent has connected once, setup comes first
   const firstRun = !state.last_seen || state.last_seen.startsWith("0001");
   $("setupWrap").style.order = firstRun ? -1 : 0;
@@ -1069,6 +1078,52 @@ if ("IntersectionObserver" in window) {
   new IntersectionObserver(([e]) => $("filesBar").classList.toggle("stuck", !e.isIntersecting && e.boundingClientRect.top < 0)).observe(probe);
 }
 
+// ---------- internet and firewall ----------
+let net = null;
+function renderNetwork(n) {
+  if (!n) return;
+  net = n;
+  if (document.activeElement !== $("netOn")) $("netOn").checked = n.internet;
+  $("netPort").textContent = n.port;
+  $("cAddrBlock").hidden = !n.internet;
+  $("netHint").className = "hint" + (n.error ? " err" : "");
+  $("netHint").textContent = n.error ? "Порт не открылся: " + n.error
+    : n.internet ? (n.listening ? "Порт открыт. На роутере пробросьте его на этот компьютер (см. инструкцию, вариант А)." : "Порт открывается…")
+    : "Выключено: порт закрыт, агент может подключаться только через Tailscale (ниже).";
+  $("fwLine").hidden = !n.fw_supported || !(n.internet || (ts && ts.enabled));
+  $("fwState").textContent = n.fw_allowed ? "разрешено ✓" : "разрешения нет — Windows может спросить сама";
+  $("fwState").className = n.fw_allowed ? "" : "err";
+  $("fwAllow").hidden = n.fw_allowed;
+}
+async function netAction(action) {
+  const r = await post("/ui/api/network", { action });
+  renderNetwork(r);
+  return r;
+}
+// Ask for the firewall rule before a port is opened, so Windows does not
+// ask by itself. Waits up to a minute for the administrator prompt.
+async function ensureFirewall(what) {
+  if (!net || !net.fw_supported || net.fw_allowed) return;
+  if (!confirm(`Чтобы Windows не спрашивала про доступ к сети, приёмнику нужно разрешение в брандмауэре (${what}).\n\nСейчас Windows попросит права администратора — нажмите «Да».\n\nПродолжить? («Отмена» — без разрешения: Windows спросит сама.)`)) return;
+  try { await netAction("firewall-allow"); } catch (e) { toast(e.message); return; }
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const st = await (await fetch("/ui/api/state")).json();
+    renderNetwork(st.network);
+    if (st.network.fw_allowed) { toast("Разрешение в брандмауэре добавлено"); return; }
+  }
+  toast("Разрешение не появилось — возможно, запрос прав отклонён");
+}
+$("netOn").onchange = async () => {
+  const on = $("netOn").checked;
+  try {
+    if (on) await ensureFirewall("приём через интернет");
+    await netAction(on ? "internet-on" : "internet-off");
+    toast(on ? "Приём через интернет включён" : "Приём через интернет выключен, порт закрыт");
+  } catch (e) { alert("Ошибка: " + e.message); refresh(); }
+};
+$("fwAllow").onclick = () => { if (net) { net.fw_allowed = false; ensureFirewall("входящие подключения агента"); } };
+
 // ---------- Tailscale ----------
 let ts = null;
 function renderTailscale(t) {
@@ -1095,7 +1150,11 @@ async function tsAction(body, okText) {
   try { const r = await post("/ui/api/tailscale", body); renderTailscale(r); if (okText) toast(okText); }
   catch (e) { alert("Ошибка: " + e.message); refresh(); }
 }
-$("tsOn").onchange = () => tsAction({ action: $("tsOn").checked ? "enable" : "disable" }, $("tsOn").checked ? "Tailscale включается" : "Tailscale выключен");
+$("tsOn").onchange = async () => {
+  const on = $("tsOn").checked;
+  if (on) await ensureFirewall("Tailscale");
+  tsAction({ action: on ? "enable" : "disable" }, on ? "Tailscale включается" : "Tailscale выключен");
+};
 $("tsLogin").onclick = () => ts && ts.auth_url && window.open(ts.auth_url, "_blank", "noopener");
 $("tsNewLink").onclick = () => tsAction({ action: "login" }, "Запрошена новая ссылка");
 $("tsLogout").onclick = () => confirm("Выйти из Tailscale? Агент не сможет подключиться через Tailscale, пока вы не войдёте снова.") && tsAction({ action: "logout" });

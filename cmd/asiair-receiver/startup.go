@@ -11,6 +11,7 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/autorun"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/firewall"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/receiver"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
 )
@@ -152,4 +153,23 @@ func serviceRemove(cfgPath string, _ []string) error {
 	}
 	log.Printf("Приёмник: служба удалена")
 	return nil
+}
+
+// firewallControl implements receiver.Firewall.
+type firewallControl struct {
+	cfgPath string
+	mode    string
+}
+
+func (f *firewallControl) Supported() bool { return firewall.Supported() }
+func (f *firewallControl) Allowed() bool   { return svc.FirewallAllowed(app) }
+
+// Allow adds the rule: directly in the service (it has the rights),
+// otherwise through an elevated copy (Windows asks for administrator rights).
+func (f *firewallControl) Allow() error {
+	if f.mode == receiver.ModeService {
+		return svc.AllowFirewall(app)
+	}
+	log.Printf("Приёмник: запрос прав администратора для правила брандмауэра")
+	return autorun.RunElevated("-config", f.cfgPath, "firewall-allow")
 }

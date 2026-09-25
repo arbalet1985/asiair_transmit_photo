@@ -64,6 +64,16 @@ type Server struct {
 
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
+	// Firewall manages the Windows firewall rule (set by the program).
+	Firewall Firewall
+	fw       fwCache
+
+	// the agent API on Listen, opened and closed from the page
+	api    *http.Server
+	netMu  sync.Mutex
+	netLn  net.Listener
+	netErr string
+
 	// Tailscale: the agent API in the user's tailnet
 	tsMu  sync.Mutex
 	ts    *tsnode.Node
@@ -119,25 +129,23 @@ func (s *Server) getToken() string {
 
 // Run serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	apiLn, err := net.Listen("tcp", s.cfg.Listen)
-	if err != nil {
-		return fmt.Errorf("API %s: %w", s.cfg.Listen, err)
-	}
+	s.api = &http.Server{Handler: s.apiHandler(), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	uiLn, err := net.Listen("tcp", s.cfg.UIListen)
 	if err != nil {
-		apiLn.Close()
 		return fmt.Errorf("веб-страница %s: %w", s.cfg.UIListen, err)
 	}
-	s.APIAddr, s.UIAddr = apiLn.Addr(), uiLn.Addr()
-
-	api := &http.Server{Handler: s.apiHandler(), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
-	ui := &http.Server{Handler: s.uiHandler(), ReadHeaderTimeout: 30 * time.Second}
-	if s.tlsCert != nil {
-		apiLn = tls.NewListener(apiLn, &tls.Config{Certificates: []tls.Certificate{*s.tlsCert}, MinVersion: tls.VersionTLS12})
-		log.Printf("Приёмник: API https://%s, отпечаток сертификата: %s", apiLn.Addr(), s.fingerprint)
+	s.UIAddr = uiLn.Addr()
+	if s.cfg.InternetOn() {
+		if err := s.startInternet(); err != nil {
+			uiLn.Close()
+			return err
+		}
 	} else {
-		log.Printf("Приёмник: API http://%s (TLS отключён)", apiLn.Addr())
+		log.Printf("Приёмник: приём агента через интернет выключен (включается на веб-странице)")
 	}
+	defer s.stopInternet()
+	api := s.api
+	ui := &http.Server{Handler: s.uiHandler(), ReadHeaderTimeout: 30 * time.Second}
 	log.Printf("Приёмник: веб-страница http://%s, фото сохраняются в %s", uiLn.Addr(), s.getStore().root)
 
 	log.Printf("Приёмник: версия %s", protocol.Version)
@@ -149,8 +157,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer s.stopTailscale()
 
-	errc := make(chan error, 2)
-	go func() { errc <- api.Serve(apiLn) }()
+	errc := make(chan error, 1)
 	go func() { errc <- ui.Serve(uiLn) }()
 	select {
 	case <-ctx.Done():
@@ -403,6 +410,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/file", s.handleUIFile)
 	mux.HandleFunc("/ui/api/connect", s.handleUIConnect)
 	mux.HandleFunc("/ui/api/tailscale", s.handleUITailscale)
+	mux.HandleFunc("/ui/api/network", s.handleUINetwork)
 	mux.HandleFunc("/ui/api/token", s.handleUINewToken)
 	mux.HandleFunc("/ui/api/dirs", s.handleUIDirs)
 	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
@@ -453,6 +461,7 @@ type uiState struct {
 	Update        updateInfo           `json:"update"`
 	Totals        uiTotals             `json:"totals"`
 	Tailscale     tsInfo               `json:"tailscale"`
+	Network       netInfo              `json:"network"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -484,6 +493,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Disk:          s.disk(),
 		Update:        s.updater.info(),
 		Tailscale:     s.tailscaleInfo(),
+		Network:       s.netInfo(),
 	}
 	writeJSON(w, out)
 }
