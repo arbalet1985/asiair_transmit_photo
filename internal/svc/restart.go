@@ -1,6 +1,8 @@
 package svc
 
 import (
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
+
 	"log"
 	"os"
 	"os/exec"
@@ -10,7 +12,7 @@ import (
 
 // restartEnv marks a process started by Restart: it waits for the old one
 // to let go of the single-instance lock and starts without showing a window.
-const restartEnv = "ASIAIR_RESTARTED"
+const restartEnv = update.RestartEnv
 
 var (
 	quitMu   sync.Mutex
@@ -56,7 +58,7 @@ func Restart() error {
 		}()
 		return nil
 	}
-	exe, err := os.Executable()
+	exe, err := update.Executable() // where the new version now is
 	if err != nil {
 		return err
 	}

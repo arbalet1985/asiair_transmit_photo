@@ -13,6 +13,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 func main() {
@@ -36,6 +37,12 @@ func main() {
 		GUI: guiMain,
 		Commands: map[string]svc.Command{
 			"check": {Help: "проверить подключение к ASIAIR и приёмнику", Run: check},
+			update.WatchCommand: {Help: "(служебная) страховка обновления: откат, если новая версия не заработала", Run: func(_ string, args []string) error {
+				if len(args) != 1 {
+					return fmt.Errorf("нужен путь к программе")
+				}
+				return update.Watch(args[0])
+			}},
 		},
 	})
 }
