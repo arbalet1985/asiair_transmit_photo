@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewer(t *testing.T) {
@@ -124,5 +125,37 @@ func TestInstall(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(exe); string(b) != "new" {
 		t.Fatal("rollback failed")
+	}
+}
+
+// A backup left by an earlier update that cannot be deleted (on Windows: a
+// copy of the old version still running) is moved aside, not in the way.
+func TestInstallStaleBackup(t *testing.T) {
+	renameDelay = time.Millisecond
+	defer func() { renameDelay = 2 * time.Second }()
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "prog.exe")
+	os.WriteFile(exe, []byte("old"), 0o755)
+	// a non-empty folder cannot be deleted with os.Remove, like a running program
+	os.MkdirAll(filepath.Join(Backup(exe), "busy"), 0o755)
+	nw := exe + ".new"
+	os.WriteFile(nw, []byte("new"), 0o755)
+	if err := Install(exe, nw); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "new" {
+		t.Fatal("not replaced")
+	}
+	if b, _ := os.ReadFile(Backup(exe)); string(b) != "old" {
+		t.Fatal("old copy missing")
+	}
+	Cleanup(exe)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "prog.exe" {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("left after cleanup: %v", names)
 	}
 }
