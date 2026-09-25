@@ -105,8 +105,10 @@ type Agent struct {
 	rescan       atomic.Bool // scan now, e.g. after a new address was found
 	discover     func(context.Context, func(string)) ([]source.Device, error)
 	newSource    func(link, user, pass string) (source.Source, error)
-	updating     bool      // guarded by mu
-	updateRetry  time.Time // guarded by mu; after a failed update
+	updating     bool             // guarded by mu
+	updateRetry  time.Time        // guarded by mu; after a failed update
+	rolledBack   *update.Rollback // this version was put back after a failed update
+	checkUpdate  bool             // just updated: tell the watchdog once the receiver answers (poll loop)
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
@@ -238,11 +240,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	log.Printf("Агент %s: ASIAIR %s → %s, ограничение скорости: %s",
 		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate))
 	if a.Restart != nil {
-		if exe, err := update.Executable(); err == nil {
-			update.Cleanup(exe) // left by the previous update
-			// the old copy may still be running for a moment after a restart
-			time.AfterFunc(time.Minute, func() { update.Cleanup(exe) })
-		}
+		a.startupUpdate()
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -899,6 +897,9 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			a.setError(err)
 		} else if prev != "" {
 			log.Printf("Агент: связь с приёмником восстановлена")
+		}
+		if err == nil {
+			a.updateWorks()
 		}
 		if err == nil && held {
 			// the receiver held the request until now: ask again right away,

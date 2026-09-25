@@ -111,11 +111,11 @@ func TestInstall(t *testing.T) {
 	if b, _ := os.ReadFile(exe); string(b) != "new" {
 		t.Fatal("not replaced")
 	}
-	if b, _ := os.ReadFile(exe + ".old"); string(b) != "old" {
+	if b, _ := os.ReadFile(Backup(exe)); string(b) != "old" {
 		t.Fatal("old copy missing")
 	}
 	Cleanup(exe)
-	if _, err := os.Stat(exe + ".old"); err == nil {
+	if _, err := os.Stat(Backup(exe)); err == nil {
 		t.Fatal("old copy not removed")
 	}
 	// a missing new file: the program stays in place

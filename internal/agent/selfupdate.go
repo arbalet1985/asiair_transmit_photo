@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
@@ -20,6 +21,10 @@ func (a *Agent) maybeUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch {
+	case a.rolledBack != nil && a.rolledBack.Version == offer.Version:
+		// this version did not work here: wait for the next one
+		a.status.Update = rollbackText(a.rolledBack)
+		return
 	case !bool(a.cfg.AutoUpdate):
 		a.status.Update = fmt.Sprintf("доступна версия %s (автообновление выключено в agent.yaml)", offer.Version)
 		return
@@ -41,11 +46,18 @@ func (a *Agent) selfUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
 	err := a.installUpdate(ctx, offer)
 	if err == nil {
 		a.setUpdate("установлена версия %s, перезапуск…", offer.Version)
+		a.startWatch(offer.Version)
 		err = a.Restart()
 		if err == nil {
 			return // a.updating stays set: the program is about to exit
 		}
-		err = fmt.Errorf("новая версия установлена, но перезапуск не удался: %w — перезапустите агент вручную", err)
+		if exe, xerr := a.exe(); xerr == nil {
+			if uerr := update.Undo(exe); uerr == nil {
+				err = fmt.Errorf("новая версия не запустилась (%w), оставлена прежняя", err)
+			} else {
+				err = fmt.Errorf("новая версия установлена, но перезапуск не удался: %w — перезапустите агент вручную", err)
+			}
+		}
 	}
 	a.mu.Lock()
 	a.updating = false
@@ -89,4 +101,97 @@ func (a *Agent) installUpdate(ctx context.Context, offer *protocol.UpdateOffer) 
 		return err
 	}
 	return nil
+}
+
+// Deadlines for the new version to report to the receiver, after which the
+// watchdog puts the old version back. A service is started again by the
+// service manager only after 30 s.
+var (
+	healthDeadline        = 3 * time.Minute
+	healthDeadlineService = 6 * time.Minute
+)
+
+// startWatch starts the watchdog that rolls the update back if the new
+// version does not work. Without it the update still goes on.
+func (a *Agent) startWatch(version string) {
+	exe, err := a.exe()
+	if err != nil {
+		return
+	}
+	d := healthDeadline
+	if svc.IsService() {
+		d = healthDeadlineService
+	}
+	if v, err := time.ParseDuration(os.Getenv("ASIAIR_UPDATE_TIMEOUT")); err == nil && v > 0 {
+		d = v // tests
+	}
+	err = update.StartWatch(exe, update.Pending{
+		From: protocol.Version, To: version, Deadline: time.Now().Add(d),
+		Service: svc.IsService(), Args: os.Args[1:],
+	})
+	if err != nil {
+		log.Printf("Агент: обновление: страховка (откат) не запущена: %v", err)
+	}
+}
+
+func (a *Agent) exe() (string, error) {
+	if a.Exe != "" {
+		return a.Exe, nil
+	}
+	return update.Executable()
+}
+
+// startupUpdate runs when the agent starts: after an update it reports to
+// the watchdog; otherwise it removes what earlier updates left behind.
+func (a *Agent) startupUpdate() {
+	exe, err := a.exe()
+	if err != nil {
+		return
+	}
+	if rb := update.ReadRollback(exe); rb != nil && rb.From == protocol.Version {
+		a.mu.Lock()
+		a.rolledBack = rb
+		a.status.Update = rollbackText(rb)
+		a.mu.Unlock()
+		log.Printf("Агент: %s", rollbackText(rb))
+	}
+	if update.Started(exe, protocol.Version) {
+		a.checkUpdate = true
+		log.Printf("Агент: новая версия %s запущена, проверка связи с приёмником…", protocol.Version)
+		return
+	}
+	a.cleanupLater(exe)
+}
+
+// updateWorks is called after a successful exchange with the receiver.
+func (a *Agent) updateWorks() {
+	if !a.checkUpdate {
+		return
+	}
+	a.checkUpdate = false
+	exe, err := a.exe()
+	if err != nil {
+		return
+	}
+	update.Healthy(exe, protocol.Version)
+	log.Printf("Агент: версия %s работает, старая копия больше не нужна", protocol.Version)
+	a.cleanupLater(exe)
+}
+
+// cleanupLater removes the old copy; the watchdog may still run from it for
+// a moment, so it is tried a few times.
+func (a *Agent) cleanupLater(exe string) {
+	update.Cleanup(exe)
+	for _, d := range []time.Duration{10 * time.Second, time.Minute, 5 * time.Minute} {
+		time.AfterFunc(d, func() {
+			if update.ReadPending(exe) == nil {
+				update.Cleanup(exe)
+			}
+		})
+	}
+}
+
+func rollbackText(rb *update.Rollback) string {
+	return fmt.Sprintf("обновление до %s не удалось (%s), %s возвращена версия %s; эта версия больше не ставится, ждём следующую",
+		rb.Version, rb.Reason, rb.Time.Local().Format("02.01 15:04"), rb.From)
 }

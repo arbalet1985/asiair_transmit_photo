@@ -257,8 +257,10 @@ func FileSHA256(name string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Executable returns the path of the running program.
-func Executable() (string, error) {
+// The path of the program as it was started. Taken once: after Install
+// renamed the running file, the system reports the new name of the old
+// program (Linux does), not the path where the new version now is.
+var startExe, startExeErr = func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -267,13 +269,16 @@ func Executable() (string, error) {
 		exe = r
 	}
 	return exe, nil
-}
+}()
+
+// Executable returns the path the running program was started from.
+func Executable() (string, error) { return startExe, startExeErr }
 
 // Install replaces the program exe with the file newFile. Windows cannot
 // overwrite a running program but can rename it: the old one is kept as
-// "<exe>.old" and removed on the next start (Cleanup).
+// Backup(exe) and removed once the new version works (Cleanup).
 func Install(exe, newFile string) error {
-	old := exe + ".old"
+	old := Backup(exe)
 	os.Remove(old)
 	if err := os.Rename(exe, old); err != nil {
 		return fmt.Errorf("не удалось заменить %s: %w (нет прав на запись в папку программы?)", exe, err)
@@ -282,12 +287,13 @@ func Install(exe, newFile string) error {
 		os.Rename(old, exe) // roll back
 		return fmt.Errorf("не удалось заменить %s: %w", exe, err)
 	}
+	os.Chmod(exe, 0o755) // a downloaded file is not executable on Linux
 	return nil
 }
 
 // Cleanup removes what an earlier update left next to the program.
 func Cleanup(exe string) {
-	for _, p := range []string{exe + ".old", exe + ".new", exe + ".new.part"} {
+	for _, p := range []string{exe + ".old", Backup(exe), exe + ".bad", exe + ".new", exe + ".new.part"} {
 		os.Remove(p)
 	}
 }

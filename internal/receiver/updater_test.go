@@ -17,6 +17,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/agent"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 func freePort(t *testing.T) string {
@@ -100,7 +101,7 @@ func TestAgentUpdate(t *testing.T) {
 	if b, _ := os.ReadFile(exe); string(b) != string(newExe) {
 		t.Fatalf("program not replaced: %q", b)
 	}
-	if b, _ := os.ReadFile(exe + ".old"); string(b) != "MZ old agent" {
+	if b, _ := os.ReadFile(update.Backup(exe)); string(b) != "MZ old agent" {
 		t.Fatalf("old copy: %q", b)
 	}
 }
