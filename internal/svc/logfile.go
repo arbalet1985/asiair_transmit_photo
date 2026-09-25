@@ -193,13 +193,19 @@ func (r *RotatingLog) maybeCleanup(t time.Time) {
 	go r.cleanup(t)
 }
 
-// cleanup compresses the days older than CompressAfter and deletes the
-// ones older than Keep (by the time of their last line).
+// cleanup runs cleanupLocked unless a cleanup is already running.
 func (r *RotatingLog) cleanup(t time.Time) {
 	if !r.cleaning.TryLock() {
 		return
 	}
 	defer r.cleaning.Unlock()
+	r.cleanupLocked(t)
+}
+
+// cleanupLocked compresses the days older than CompressAfter and deletes
+// the ones older than Keep (by the time of their last line). Caller holds
+// r.cleaning.
+func (r *RotatingLog) cleanupLocked(t time.Time) {
 	p := currentPolicy()
 	dir := filepath.Dir(r.path)
 	ext := filepath.Ext(r.path)
