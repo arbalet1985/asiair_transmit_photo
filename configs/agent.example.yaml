@@ -44,7 +44,7 @@ extensions: [".fit", ".fits", ".jpg", ".png", ".tif", ".xisf"]
 exclude: ["Thumbnail"]
 
 scan_interval: 1m     # как часто проверять новые файлы
-poll_interval: 15s    # как часто спрашивать приёмник о командах удаления
+poll_interval: 15s    # как часто сообщать приёмнику состояние (команды приходят сразу)
 min_file_age: 30s     # файл отправляется, только если не менялся столько времени
 
 state_file: agent-state.json

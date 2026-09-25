@@ -27,6 +27,24 @@ func freeAddr(t *testing.T) string {
 	return l.Addr().String()
 }
 
+// background runs fn (a receiver or agent Run) and makes the test wait for
+// it to end before its temporary folders are removed: the test cancels its
+// context on return, then this cleanup waits.
+func background(t *testing.T, fn func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			t.Error("still running 20 s after the test")
+		}
+	})
+}
+
 func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -85,7 +103,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	background(t, func() { srv.Run(ctx) })
 	startTransfer(t, uiAddr)
 
 	acfg := &config.Agent{
@@ -104,7 +122,7 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go a.Run(ctx)
+	background(t, func() { a.Run(ctx) })
 
 	dest := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "Light", "M31")
 	waitFor(t, "files to arrive", 10*time.Second, func() bool {
@@ -216,7 +234,7 @@ func TestPause(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	background(t, func() { srv.Run(ctx) })
 
 	a, err := New(&config.Agent{
 		ASIAIR: "dir:" + asiair, ReceiverURL: "https://" + rcfg.Listen, Token: "secret",
@@ -228,7 +246,7 @@ func TestPause(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.SetPaused(true)
-	go a.Run(ctx)
+	background(t, func() { a.Run(ctx) })
 
 	// paused from the start: nothing is sent
 	waitFor(t, "scan", 5*time.Second, func() bool { return a.Status().QueueFiles == 1 })
@@ -337,7 +355,7 @@ func TestFetchWhilePaused(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	background(t, func() { srv.Run(ctx) })
 
 	a, err := New(&config.Agent{
 		ASIAIR: "dir:" + asiair, ReceiverURL: "https://" + rcfg.Listen, Token: "secret",
@@ -348,7 +366,7 @@ func TestFetchWhilePaused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go a.Run(ctx)
+	background(t, func() { a.Run(ctx) })
 	waitFor(t, "queue", 5*time.Second, func() bool { st := a.Status(); return st.WaitStart && st.QueueFiles == 2 })
 
 	resp, err := http.Post("http://"+rcfg.UIListen+"/ui/api/fetch", "application/json",
@@ -412,7 +430,7 @@ func TestDiskFull(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	background(t, func() { srv.Run(ctx) })
 	startTransfer(t, uiAddr)
 
 	a, err := New(&config.Agent{
@@ -423,7 +441,7 @@ func TestDiskFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go a.Run(ctx)
+	background(t, func() { a.Run(ctx) })
 
 	waitFor(t, "agent paused for disk space", 5*time.Second, func() bool {
 		st := a.Status()

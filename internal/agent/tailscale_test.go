@@ -37,7 +37,7 @@ func TestEndToEndTailscale(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	background(t, func() { srv.Run(ctx) })
 	startTransfer(t, uiAddr)
 
 	_, port, _ := net.SplitHostPort(listen)
@@ -57,7 +57,7 @@ func TestEndToEndTailscale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go a.Run(ctx)
+	background(t, func() { a.Run(ctx) })
 
 	dest := filepath.Join(rcfg.DestDir, "EMMC Images", "Autorun", "Light", "M31", "Light_M31_0001.fit")
 	waitFor(t, "file over Tailscale", 90*time.Second, func() bool {

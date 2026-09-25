@@ -52,10 +52,34 @@ type State struct {
 	mu   sync.Mutex
 	file string
 	p    persisted
+
+	// rev changes whenever something the agent must learn changes; changed
+	// is closed then, waking the held sync requests.
+	rev     uint64
+	changed chan struct{}
+}
+
+// bump marks a change for the agent. Caller holds s.mu.
+func (s *State) bump() {
+	s.rev++
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+// Changed returns a channel closed on the next change, or nil when the
+// state is already newer than rev.
+func (s *State) Changed(rev uint64) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rev != s.rev {
+		return nil
+	}
+	return s.changed
 }
 
 func LoadState(file string, defaultRate *int64) (*State, error) {
-	s := &State{file: file}
+	// a fresh rev after a restart never matches what an agent saw before
+	s := &State{file: file, rev: uint64(time.Now().UnixNano()), changed: make(chan struct{})}
 	if b, err := os.ReadFile(file); err == nil {
 		if err := json.Unmarshal(b, &s.p); err != nil {
 			return nil, err
@@ -115,6 +139,9 @@ func (s *State) QueueDelete(paths []string, alsoLocal bool) (int, error) {
 		})
 		n++
 	}
+	if n > 0 {
+		s.bump()
+	}
 	return n, s.save()
 }
 
@@ -124,7 +151,7 @@ func (s *State) Sync(st protocol.AgentStatus) protocol.SyncResponse {
 	defer s.mu.Unlock()
 	s.p.Status = st
 	s.p.LastSeen = time.Now()
-	resp := protocol.SyncResponse{MaxRate: s.p.MaxRate, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
+	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
 		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
@@ -195,6 +222,9 @@ func (s *State) RequestFetch(paths []string, on bool) (int, error) {
 			n++
 		}
 	}
+	if n > 0 {
+		s.bump()
+	}
 	return n, s.save()
 }
 
@@ -213,6 +243,7 @@ func (s *State) SetRate(bps *int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.p.MaxRate = bps
+	s.bump()
 	return s.save()
 }
 
@@ -225,6 +256,7 @@ func (s *State) SetPaused(p bool) error {
 	if !p {
 		s.p.WaitStart = false
 	}
+	s.bump()
 	return s.save()
 }
 
@@ -253,6 +285,7 @@ func (s *State) Cancel(id string) error {
 		}
 	}
 	s.p.Commands = cmds
+	s.bump()
 	return s.save()
 }
 

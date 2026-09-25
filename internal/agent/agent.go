@@ -73,6 +73,9 @@ type Agent struct {
 	lastSync time.Time
 	syncErr  string
 
+	syncRev    uint64             // state of the receiver seen last (poll loop only)
+	cancelSync context.CancelFunc // ends the held sync request; guarded by mu
+
 	uploadDone atomic.Int64
 
 	// pause: no uploads while set; scanning and commands from the receiver go on.
@@ -282,6 +285,7 @@ func (a *Agent) SetPaused(p bool) {
 	a.mu.Unlock()
 	if changed {
 		a.applyPause(p, "в окне агента")
+		a.kickSync()
 	}
 }
 
@@ -872,9 +876,12 @@ func (p *progressReader) Read(b []byte) (int, error) {
 
 func (a *Agent) pollLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		err := a.poll(ctx)
+		held, err := a.poll(ctx)
 		if ctx.Err() != nil {
 			return
+		}
+		if errors.Is(err, errKicked) {
+			continue // local change: report it at once
 		}
 		a.mu.Lock()
 		prev := a.syncErr
@@ -893,7 +900,27 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		} else if prev != "" {
 			log.Printf("Агент: связь с приёмником восстановлена")
 		}
+		if err == nil && held {
+			// the receiver held the request until now: ask again right away,
+			// with a short pause so a busy receiver is not flooded
+			sleep(ctx, 100*time.Millisecond)
+			continue
+		}
 		sleep(ctx, a.cfg.PollInterval.D())
+	}
+}
+
+// errKicked: the held sync request was ended to report a local change.
+var errKicked = errors.New("sync restarted")
+
+// kickSync ends a held sync request so the receiver learns a local change
+// (e.g. the pause in the agent window) at once.
+func (a *Agent) kickSync() {
+	a.mu.Lock()
+	cancel := a.cancelSync
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -934,13 +961,36 @@ func (a *Agent) Status() protocol.AgentStatus {
 	return st
 }
 
-func (a *Agent) poll(ctx context.Context) error {
+// poll exchanges the status for commands. held reports that the receiver
+// supports long polling, so the next poll can follow at once.
+func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	st := a.Status()
 
-	var resp protocol.SyncResponse
-	if err := a.cl.postJSON(ctx, "/api/sync", protocol.SyncRequest{Status: st}, &resp); err != nil {
-		return err
+	// the receiver holds the request until something changes for the agent
+	req := protocol.SyncRequest{Status: st, Rev: a.syncRev}
+	if a.syncRev != 0 {
+		req.WaitMS = int(max(a.cfg.PollInterval.D(), time.Second) / time.Millisecond)
 	}
+	sctx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancelSync = cancel
+	a.mu.Unlock()
+	var resp protocol.SyncResponse
+	err = a.cl.postJSON(sctx, "/api/sync", req, &resp)
+	a.mu.Lock()
+	a.cancelSync = nil
+	a.mu.Unlock()
+	kicked := sctx.Err() != nil && ctx.Err() == nil
+	cancel()
+	if kicked {
+		return false, errKicked
+	}
+	if err != nil {
+		a.syncRev = 0
+		return false, err
+	}
+	a.syncRev = resp.Rev
+	held = resp.Rev != 0
 	rate := a.localRate
 	if resp.MaxRate != nil {
 		rate = *resp.MaxRate
@@ -955,7 +1005,7 @@ func (a *Agent) poll(ctx context.Context) error {
 	a.setRemotePaused(resp.Paused, resp.WaitStart)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {
-			return nil
+			return held, nil
 		}
 		res := protocol.CommandResult{ID: c.ID, OK: true}
 		switch c.Type {
@@ -967,10 +1017,10 @@ func (a *Agent) poll(ctx context.Context) error {
 			res.OK, res.Error = false, "неизвестная команда "+c.Type
 		}
 		if err := a.cl.postJSON(ctx, "/api/result", res, nil); err != nil {
-			return err
+			return held, err
 		}
 	}
-	return nil
+	return held, nil
 }
 
 func (a *Agent) deleteFile(p string) error {
