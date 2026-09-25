@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASIAIR — приём фото</title>
+<meta name="theme-color" content="#2ea05a">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ASIAIR">
 <style>
   :root {
     --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6a7384; --border: #dde1e7;
@@ -120,6 +127,58 @@
   .filters.active #fReset { border-color: var(--accent); color: var(--accent); }
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
+  /* opened remotely (phone): the settings of the home computer stay there */
+  body.remote #setupWrap { display: none; }
+  #logoutBtn { margin-left: auto; }
+  .urls a { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+
+  /* ---------- phone ---------- */
+  @media (max-width: 700px) {
+    body { font-size: 15px; }
+    header { padding: 10px 12px; gap: 6px 8px; }
+    header h1 { font-size: 15px; flex-basis: 100%; }
+    #destDir, #hdrVersion { display: none; }
+    main { padding: 10px 8px 24px; gap: 10px; }
+    .panel { padding: 12px; border-radius: 10px; }
+    .grid { grid-template-columns: 1fr; gap: 10px; }
+    button { min-height: 40px; padding: 6px 14px; }
+    button.fetch { min-height: 32px; padding: 0 10px; font-size: 13px; }
+    /* 16px keeps iOS from zooming into the field */
+    input[type=text], input[type=search], input[type=password], input[type=date], select { min-height: 40px; font-size: 16px; }
+    input[type=search] { flex: 1 1 100%; }
+    input[type=checkbox], input[type=radio] { width: 20px; height: 20px; vertical-align: middle; }
+    .filesbar { position: static; margin: 0 0 6px; padding: 0; border-bottom: 0; }
+    .toolbar { gap: 6px; }
+    .toolbar .spacer { display: none; }
+    .kv { gap: 4px 10px; }
+    .fbar { width: 80px; }
+    /* the file list: every file is a small card */
+    .tablewrap { overflow: visible; }
+    #filesTable thead { display: none; }
+    #filesTable, #filesTable tbody { display: block; }
+    #filesTable tr.folder { display: flex; align-items: center; gap: 8px; padding: 8px 6px; background: var(--row); border-radius: 8px; margin-top: 10px; }
+    #filesTable tr.folder td { display: block; padding: 0; border: 0; background: none; }
+    #filesTable tr.folder td.name { flex: 1; min-width: 0; font-size: 14px; }
+    #filesTable tr.folder td.name .fbar { display: block; width: auto; margin: 6px 0 2px; }
+    #filesTable tr.folder td.name button { margin: 6px 6px 0 0; }
+    #filesTable tr.file { display: grid; grid-template-columns: 32px 1fr auto; grid-template-areas: "cb name name" "cb date size" "cb status remote";
+      gap: 2px 8px; padding: 8px 6px; border-bottom: 1px solid var(--border); align-items: center; }
+    #filesTable tr.file td { display: block; padding: 0; border: 0; white-space: normal; }
+    #filesTable tr.file td:nth-child(1) { grid-area: cb; align-self: start; padding-top: 2px; }
+    #filesTable tr.file td:nth-child(2) { grid-area: name; font-weight: 500; }
+    #filesTable tr.file td:nth-child(3) { grid-area: size; font-size: 13px; color: var(--muted); }
+    #filesTable tr.file td:nth-child(4) { grid-area: date; font-size: 13px; color: var(--muted); }
+    #filesTable tr.file td:nth-child(5) { grid-area: status; }
+    #filesTable tr.file td:nth-child(6) { grid-area: remote; text-align: right; }
+    #filesTable tr.file:hover td { background: none; }
+    #cmds td { white-space: normal; }
+    dialog { width: calc(100vw - 16px); max-height: calc(100vh - 32px); overflow: auto; padding: 14px; }
+    #viewer { width: 100vw; height: 100vh; height: 100dvh; max-height: none; border-radius: 0; border: 0; overflow: hidden; }
+    .vbar { padding: 6px 8px; gap: 6px; }
+    .vbar .title { flex-basis: 100%; order: -1; font-size: 13px; }
+    .vside { max-height: 35%; }
+    #toast { left: 12px; right: 12px; bottom: 12px; text-align: center; }
+  }
 </style>
 </head>
 <body>
@@ -133,6 +192,7 @@
   <span class="badge off" id="hdrDisk" hidden>мало места на диске</span>
   <span class="badge off" id="hdrAsiair" hidden>ASIAIR недоступен</span>
   <span class="muted" id="destDir"></span>
+  <button id="logoutBtn" hidden title="Выйти на этом телефоне">Выйти</button>
 </header>
 <main>
   <div class="grid">
@@ -291,6 +351,24 @@
       </details>
       <div class="hint">Tailscale бесплатен для личного использования (до 6 пользователей, устройств без ограничений). Приёмник и агент входят в <b>одну и ту же</b> учётную запись Tailscale (Google, Microsoft, GitHub, Apple или e-mail) и находят друг друга по имени, даже при «сером» IP. Ставить отдельную программу Tailscale не нужно: она встроена. Обычное подключение через интернет при этом продолжает работать.</div>
     </section>
+    <section class="panel" id="remotePanel">
+      <h2>Доступ с телефона</h2>
+      <div class="hint" style="margin-top:0">Эта страница на телефоне или другом компьютере: передача, пауза, просмотр и удаление кадров. Вход по паролю. Настройки этого компьютера (папки, служба, токен, сеть) с телефона не меняются.</div>
+      <div class="label" style="margin-top:10px">Пароль для входа</div>
+      <div class="field">
+        <input type="password" id="rmPass" placeholder="не меньше 8 символов" autocomplete="new-password" style="flex:1 1 200px;min-width:0">
+        <button class="primary" id="rmPassSave">Сохранить</button>
+      </div>
+      <div class="hint" id="rmPassHint" style="margin-top:0"></div>
+      <label class="line" style="display:block;margin-top:12px"><input type="checkbox" id="rmNet"> Через интернет — порт <b id="rmPort">—</b>, тот же, что для агента</label>
+      <div class="hint urls" id="rmNetHint"></div>
+      <label class="line" style="display:block;margin-top:12px"><input type="checkbox" id="rmTs"> Через Tailscale</label>
+      <div class="hint urls" id="rmTsHint"></div>
+      <div class="toolbar" style="margin-top:12px">
+        <span class="muted" id="rmSessions"></span>
+        <button id="rmLogoutAll" title="Все телефоны и браузеры войдут заново по паролю">Выйти на всех телефонах</button>
+      </div>
+    </section>
   </div>
   </div>
 
@@ -338,7 +416,7 @@
     </div>
     <div class="toolbar" id="syncBar" hidden></div>
     <div class="tablewrap">
-      <table>
+      <table id="filesTable">
         <thead><tr>
           <th><input type="checkbox" id="selAll" title="Выбрать все видимые"></th>
           <th>Имя</th><th class="num">Размер</th><th>Дата</th><th>Статус</th><th>ASIAIR</th>
@@ -390,7 +468,7 @@
       </div>
       <h3>Кадр</h3>
       <dl class="kv" id="vInfo"></dl>
-      <div class="hint">← → листать, Delete — отметить, щелчок по кадру — увеличить, Esc — закрыть.</div>
+      <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру — увеличить, Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
     </div>
   </div>
@@ -879,6 +957,7 @@ function renderStatus() {
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
   renderTailscale(state.tailscale);
+  renderRemote(state.remote_access);
   renderNetwork(state.network);
   // until the agent has connected once, setup comes first
   const firstRun = !state.last_seen || state.last_seen.startsWith("0001");
@@ -967,8 +1046,10 @@ $("upTokenSave").onclick = async () => {
 async function refresh() {
   try {
     const r = await fetch("/ui/api/state");
+    if (r.status === 401) { location.replace("/login"); return; }
     if (!r.ok) throw new Error(r.statusText);
     state = await r.json();
+    startLocal();
     state.files = state.files || [];
     state.commands = state.commands || [];
     // drop selections that no longer apply
@@ -1197,7 +1278,7 @@ $("setupToggle").onclick = () => {
 }
 loadFilters();
 for (const c of store.get("collapsed", [])) collapsed.add(c);
-setFiltersFolded(store.get("filtersFolded", false));
+setFiltersFolded(store.get("filtersFolded", matchMedia("(max-width: 700px)").matches)); // folded on a phone
 $("filtersToggle").onclick = () => {
   const f = !$("filesBar").classList.contains("folded");
   setFiltersFolded(f);
@@ -1295,6 +1376,61 @@ $("tsKeySave").onclick = () => {
   const k = $("tsKey").value.trim();
   if (!k) return alert("Вставьте ключ tskey-auth-…");
   tsAction({ action: "enable", authkey: k }, "Ключ сохранён").then(() => { $("tsKey").value = ""; });
+};
+
+// ---------- access from a phone ----------
+const isRemote = () => !!(state && state.remote_access && state.remote_access.remote);
+let rm = null;
+function renderRemote(r) {
+  if (!r || r.remote) return;
+  rm = r;
+  $("rmPort").textContent = r.port;
+  $("rmPassHint").textContent = r.password_set ? "Пароль задан. Новый пароль заменит его, и все телефоны войдут заново."
+    : "Пароль не задан: с телефона пока войти нельзя.";
+  $("rmPassHint").className = "hint" + (r.password_set ? "" : " err");
+  for (const [id, on] of [["rmNet", r.internet], ["rmTs", r.tailscale]]) if (document.activeElement !== $(id)) $(id).checked = on;
+  const link = u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`;
+  let h = "", err = false;
+  if (!r.internet) h = "Выключено.";
+  else if (!r.internet_up) { h = "Порт закрыт: включите «Принимать агента через интернет» в блоке «Подключение агента»."; err = true; }
+  else h = `На телефоне откройте <b>https://&lt;внешний адрес&gt;:${r.port}/</b> — тот же адрес, что в настройках агента. Телефон предупредит о самоподписанном сертификате: это нормально, подтвердите один раз. Добавить на главный экран можно как ярлык (откроется в браузере).`;
+  $("rmNetHint").innerHTML = h;
+  $("rmNetHint").className = "hint urls" + (err ? " err" : "");
+  h = ""; err = false;
+  if (!r.tailscale) h = "Выключено.";
+  else if (!r.ts_running) { h = "Tailscale приёмника не подключён: включите его в блоке «Подключение агента»."; err = true; }
+  else if (r.ts_url) h = `На телефоне с приложением Tailscale (та же учётная запись) откройте ${link(r.ts_url)}. Страницу можно установить на главный экран как приложение: меню браузера → «Установить приложение» / «На экран „Домой“».`;
+  else {
+    h = `Работает ${link("http://" + r.ts_name + "/")} (на телефоне нужно приложение Tailscale с той же учётной записью).`;
+    if (r.ts_error) h += `<br>Чтобы был адрес https и страницу можно было установить как приложение: ${r.ts_error.replace(/</g, "&lt;")}. Приёмник проверяет это раз в 2 минуты.`;
+    else h += "<br>Адрес https готовится…";
+  }
+  $("rmTsHint").innerHTML = h;
+  $("rmTsHint").className = "hint urls" + (err ? " err" : "");
+  $("rmSessions").textContent = r.sessions ? `Вошли: ${r.sessions} (телефоны и браузеры)` : "Никто не вошёл";
+  $("rmLogoutAll").disabled = !r.sessions;
+}
+async function rmAction(body, okText) {
+  try { renderRemote(await post("/ui/api/remote", body)); if (okText) toast(okText); return true; }
+  catch (e) { alert("Ошибка: " + e.message); refresh(); return false; }
+}
+$("rmPassSave").onclick = async () => {
+  const p = $("rmPass").value;
+  if (p.length < 8) return alert("Пароль должен быть не короче 8 символов");
+  if (rm && rm.password_set && rm.sessions && !confirm("Заменить пароль? Все телефоны должны будут войти заново.")) return;
+  if (await rmAction({ action: "password", password: p }, "Пароль сохранён")) $("rmPass").value = "";
+};
+for (const [id, what] of [["rmNet", "internet"], ["rmTs", "tailscale"]]) {
+  $(id).onchange = async e => {
+    const on = e.target.checked;
+    if (on && rm && !rm.password_set) { e.target.checked = false; return alert("Сначала задайте пароль для входа."); }
+    await rmAction({ action: what + (on ? "-on" : "-off") }, on ? "Доступ с телефона включён" : "Доступ с телефона выключен");
+  };
+}
+$("rmLogoutAll").onclick = () => confirm("Выйти на всех телефонах и браузерах? Войти снова можно по паролю.") && rmAction({ action: "logout-all" }, "Выполнен выход на всех телефонах");
+$("logoutBtn").onclick = async () => {
+  try { await post("/logout"); } catch (e) {}
+  location.replace("/login");
 };
 
 // ---------- connection data ----------
@@ -1583,6 +1719,17 @@ $("vReset").onclick = () => {
   $("vShadow").value = -2.8; $("vBg").value = 0.25; $("vWhite").value = 1;
   computeStretch();
 };
+// on a phone: swipe left or right to go to the next or previous frame
+{
+  let t0 = null;
+  $("vImgBox").addEventListener("touchstart", e => { t0 = e.touches.length === 1 && !V.zoom ? e.touches[0] : null; }, { passive: true });
+  $("vImgBox").addEventListener("touchend", e => {
+    if (!t0) return;
+    const t = e.changedTouches[0], dx = t.clientX - t0.clientX, dy = t.clientY - t0.clientY;
+    t0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) step(dx < 0 ? 1 : -1);
+  }, { passive: true });
+}
 $("viewer").addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" && e.target.type === "range") return;
   if (e.key === "ArrowLeft") { step(-1); e.preventDefault(); }
@@ -1633,12 +1780,25 @@ $("suRemove").onclick = async () => {
   if (!confirm("Удалить службу приёмника?" + (su && su.mode === "service" ? "\n\nПриёмник остановится, и эта страница перестанет открываться до запуска asiair-receiver.exe." : ""))) return;
   if (await suAction("remove-service") && su.mode === "service") { suRemoved = true; renderStartup(); }
 };
-setInterval(loadStartup, 3000);
-loadStartup();
+// what only the page on the home computer shows: after the first state,
+// when it is known whether the page is open remotely
+let localStarted = false;
+function startLocal() {
+  const remote = isRemote();
+  document.body.classList.toggle("remote", remote);
+  $("logoutBtn").hidden = !remote;
+  if (localStarted || remote) return;
+  localStarted = true;
+  loadConn();
+  loadStartup();
+  setInterval(() => { if (!document.hidden) loadStartup(); }, 3000);
+}
 
-loadConn();
+if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
 refresh();
-setInterval(refresh, 5000);
+// nothing is fetched while the page is in the background (phone battery, mobile data)
+setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
 </body>
 </html>

@@ -117,6 +117,15 @@ type Receiver struct {
 	TailscaleOn Bool `yaml:"tailscale"`
 	Tailscale   `yaml:",inline"`
 
+	// The web page from a phone or another computer, with a password:
+	// RemoteInternet on the agent port (Listen) from the internet,
+	// RemoteTailscale in the user's tailnet.
+	RemoteInternet  Bool `yaml:"remote_internet"`
+	RemoteTailscale Bool `yaml:"remote_tailscale"`
+	// RemotePassword is the hash of the password for the remote page
+	// (set on the page; see receiver.HashPassword).
+	RemotePassword string `yaml:"remote_password"`
+
 	// Path of the file the configuration was loaded from.
 	Path string `yaml:"-"`
 }

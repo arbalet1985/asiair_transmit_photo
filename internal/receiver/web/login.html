@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2ea05a">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ASIAIR">
+<title>ASIAIR — вход</title>
+<style>
+  :root { --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6a7384; --border: #dde1e7; --accent: #2f6fde; --danger: #c83737; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12151b; --panel: #1b2029; --text: #e3e7ee; --muted: #8d96a6; --border: #2c333f; --accent: #5b92f0; --danger: #e86161; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  form { width: min(360px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .head { display: flex; gap: 12px; align-items: center; margin-bottom: 18px; }
+  .head img { width: 44px; height: 44px; border-radius: 10px; }
+  h1 { font-size: 18px; margin: 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  input { width: 100%; font: inherit; color: inherit; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+  button { width: 100%; margin-top: 12px; font: inherit; font-weight: 600; padding: 12px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; }
+  .err { color: var(--danger); margin-top: 10px; min-height: 1.4em; font-size: 14px; }
+</style>
+</head>
+<body>
+<form id="f">
+  <div class="head">
+    <img src="/icon-192.png" alt="">
+    <div><h1>ASIAIR — приём фото</h1><div class="muted">вход с телефона</div></div>
+  </div>
+  <input type="password" id="pw" placeholder="Пароль" autocomplete="current-password" required autofocus>
+  <button id="go">Войти</button>
+  <div class="err" id="err"></div>
+  <div class="muted">Пароль задаётся на странице приёмника на домашнем компьютере, в блоке «Доступ с телефона».</div>
+</form>
+<script>
+if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
+document.getElementById("f").onsubmit = async e => {
+  e.preventDefault();
+  const btn = document.getElementById("go"), err = document.getElementById("err");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const r = await fetch("/login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: document.getElementById("pw").value }) });
+    if (r.ok) { location.replace("/"); return; }
+    err.textContent = (await r.text()).trim() || "Не удалось войти";
+  } catch (x) { err.textContent = "Нет связи с приёмником"; }
+  btn.disabled = false;
+};
+</script>
+</body>
+</html>

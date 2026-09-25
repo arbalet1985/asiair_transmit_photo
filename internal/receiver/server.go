@@ -27,7 +27,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 )
 
-//go:embed web/index.html
+//go:embed web/index.html web/login.html web/manifest.webmanifest web/sw.js web/*.png
 var webFS embed.FS
 
 // Server is the receiver service.
@@ -79,6 +79,14 @@ type Server struct {
 	ts    *tsnode.Node
 	tsSrv *http.Server
 	tsErr string
+
+	// remote access to the page (remote.go)
+	remoteMu  sync.Mutex // guards cfg.Remote* and the fields below
+	sess      *sessions
+	lim       *limiter
+	tsWebStop context.CancelFunc // the page on ports 443/80 of the node runs
+	tsWebURL  string             // https address in the tailnet, when it works
+	tsWebErr  string
 }
 
 func New(cfg *config.Receiver) (*Server, error) {
@@ -100,7 +108,8 @@ func New(cfg *config.Receiver) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6),
-		reserve: reserve, minFree: cfg.MinFree, stopping: make(chan struct{})}
+		reserve: reserve, minFree: cfg.MinFree, stopping: make(chan struct{}),
+		sess: loadSessions(filepath.Join(cfg.DataDir, "sessions.json")), lim: newLimiter()}
 	s.updater = newUpdater(s)
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
@@ -129,7 +138,7 @@ func (s *Server) getToken() string {
 
 // Run serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	s.api = &http.Server{Handler: s.apiHandler(), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+	s.api = &http.Server{Handler: s.agentPortHandler("internet"), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	uiLn, err := net.Listen("tcp", s.cfg.UIListen)
 	if err != nil {
 		return fmt.Errorf("веб-страница %s: %w", s.cfg.UIListen, err)
@@ -390,9 +399,15 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 
 // ---------- web page ----------
 
+// uiHandler is the page on this computer (ui_listen).
 func (s *Server) uiHandler() http.Handler {
+	return s.uiAuth(jsonPosts(s.uiMux()))
+}
+
+// uiMux serves the page and its API, here and remotely (remoteHandler).
+func (s *Server) uiMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", gzipped(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
@@ -400,9 +415,14 @@ func (s *Server) uiHandler() http.Handler {
 		b, _ := webFS.ReadFile("web/index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Write(b)
-	})
-	mux.HandleFunc("/ui/api/state", s.handleUIState)
+	}))
+	for _, p := range publicFiles {
+		mux.HandleFunc(p, s.handleStatic)
+	}
+	mux.HandleFunc("/ui/api/remote", s.handleUIRemote)
+	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
@@ -421,8 +441,23 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
 	mux.HandleFunc("/ui/api/destdir", s.handleUIDestDir)
 	mux.HandleFunc("/ui/api/startup", s.handleUIStartup)
-	mux.HandleFunc("/ui/preview", s.handleUIPreview)
-	return s.uiAuth(mux)
+	mux.HandleFunc("/ui/preview", gzipped(s.handleUIPreview))
+	return mux
+}
+
+// jsonPosts refuses state-changing requests that are not JSON: browsers
+// cannot send those cross-site without a CORS preflight, which we never allow.
+func jsonPosts(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if mt != "application/json" {
+				http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) uiAuth(next http.Handler) http.Handler {
@@ -433,15 +468,6 @@ func (s *Server) uiAuth(next http.Handler) http.Handler {
 				subtle.ConstantTimeCompare([]byte(p), []byte(s.cfg.UIPassword)) != 1 {
 				w.Header().Set("WWW-Authenticate", `Basic realm="ASIAIR receiver", charset="UTF-8"`)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		// State-changing requests must be JSON: browsers cannot send that
-		// cross-site without a CORS preflight, which we never allow.
-		if r.Method == http.MethodPost {
-			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			if mt != "application/json" {
-				http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
 				return
 			}
 		}
@@ -468,6 +494,7 @@ type uiState struct {
 	Totals        uiTotals             `json:"totals"`
 	Tailscale     tsInfo               `json:"tailscale"`
 	Network       netInfo              `json:"network"`
+	RemoteAccess  remoteInfo           `json:"remote_access"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -501,6 +528,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Update:        s.updater.info(),
 		Tailscale:     s.tailscaleInfo(),
 		Network:       s.netInfo(),
+		RemoteAccess:  s.remoteInfo(r),
 	}
 	writeJSON(w, out)
 }

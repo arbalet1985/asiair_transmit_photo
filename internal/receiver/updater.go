@@ -340,6 +340,10 @@ func (s *Server) handleUIUpdate(w http.ResponseWriter, r *http.Request) {
 	case "install":
 		u.trigger(true)
 	case "settings":
+		if isRemote(r) {
+			http.Error(w, "доступно только на компьютере с приёмником", http.StatusForbidden)
+			return
+		}
 		values := map[string]string{}
 		if req.Auto != nil {
 			values["auto_update"] = fmt.Sprint(*req.Auto)
