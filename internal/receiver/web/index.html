@@ -98,6 +98,19 @@
   .xfer h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
   .xfer .line { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
   .progress.total > div { background: var(--ok); }
+  .setupbar { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+  .setupbar button { border: 0; background: none; padding: 0; font-weight: 600; font-size: 14px; color: var(--text); }
+  .setupbar button:hover { color: var(--accent); }
+  #setupWrap.folded #setupGrid { display: none; }
+  .panel > h2.fold:first-child { cursor: pointer; user-select: none; }
+  .panel > h2.fold:first-child::before { content: "▾ "; color: var(--muted); }
+  .panel.folded > h2.fold:first-child::before { content: "▸ "; }
+  .panel.folded > h2.fold:first-child { margin-bottom: 0; }
+  .panel.folded { align-self: start; }
+  .panel.folded > :not(:first-child) { display: none !important; }
+  input[type=date] { border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; font: inherit; color: inherit; }
+  .filters label { color: var(--muted); }
+  .filters.active #fReset { border-color: var(--accent); color: var(--accent); }
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
 </style>
@@ -155,6 +168,11 @@
     </section>
   </div>
 
+  <div id="setupWrap">
+  <div class="setupbar">
+    <button id="setupToggle" title="Свернуть или развернуть все настройки">▾ Настройки</button>
+    <span class="muted" id="setupSummary"></span>
+  </div>
   <div class="grid" id="setupGrid">
     <section class="panel">
       <h2>Папка для снимков</h2>
@@ -259,6 +277,7 @@
       <div class="hint">Tailscale бесплатен для личного использования (до 6 пользователей, устройств без ограничений). Приёмник и агент входят в <b>одну и ту же</b> учётную запись Tailscale (Google, Microsoft, GitHub, Apple или e-mail) и находят друг друга по имени, даже при «сером» IP. Ставить отдельную программу Tailscale не нужно: она встроена. Обычное подключение через интернет при этом продолжает работать.</div>
     </section>
   </div>
+  </div>
 
   <section class="panel">
     <h2>Файлы</h2>
@@ -273,9 +292,24 @@
         <option value="localonly">Только у меня</option>
       </select>
       <label title="Миниатюры, журналы и другие файлы, которые агент по настройкам не передаёт"><input type="checkbox" id="showFiltered"> Показать непередаваемые</label>
+    </div>
+    <div class="toolbar filters" id="filters">
+      <select id="fShare" title="Хранилище ASIAIR"><option value="">Все хранилища</option></select>
+      <select id="fType" title="Тип файлов"><option value="">Все типы</option></select>
+      <label>с <input type="date" id="fFrom" title="Снятые с этой даты"></label>
+      <label>по <input type="date" id="fTo" title="Снятые по эту дату включительно"></label>
+      <button id="fLastNight" title="Кадры последней ночи: с полудня накануне до полудня">Последняя ночь</button>
+      <button id="fReset" title="Показать все файлы">Сбросить фильтры</button>
+    </div>
+    <div class="toolbar">
+      <button id="collapseAll" title="Свернуть все папки">▸ Свернуть все</button>
+      <button id="expandAll" title="Развернуть все папки">▾ Развернуть все</button>
+      <button id="selFound" title="Отметить все файлы, которые сейчас показаны (с учётом фильтров, в том числе в свёрнутых папках)">Выбрать все найденные</button>
+      <button id="selNone" hidden>Снять выбор</button>
       <span class="spacer"></span>
       <span class="muted" id="selInfo"></span>
-      <button id="fetchBtn" hidden title="Передать выбранные файлы, не снимая паузу">Скачать выбранные</button>
+      <button class="primary" id="fetchBtn" hidden>Скачать выбранные</button>
+      <button class="danger" id="delReceived" title="Удалить на ASIAIR все показанные файлы, которые уже получены и сверены (с учётом фильтров). Копии на этом компьютере остаются.">Удалить полученные на ASIAIR</button>
       <label><input type="checkbox" id="alsoLocal"> удалить и у себя</label>
       <button class="danger" id="delBtn" disabled>Удалить на ASIAIR</button>
     </div>
@@ -361,6 +395,7 @@
 const $ = id => document.getElementById(id);
 const selected = new Set();
 const collapsed = new Set();
+function saveCollapsed() { store.set("collapsed", [...collapsed]); }
 let state = null;
 
 function fmtBytes(n) {
@@ -398,12 +433,93 @@ function el(tag, props, ...kids) {
   return e;
 }
 
+// ---------- filters ----------
+// kept in the browser, so the page opens with the same view
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("asiair." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("asiair." + k, JSON.stringify(v)); } catch (e) {} },
+};
+const typeGroups = [
+  ["fits", "FITS", [".fit", ".fits", ".fts"]],
+  ["jpg", "JPG", [".jpg", ".jpeg"]],
+  ["png", "PNG", [".png"]],
+  ["tif", "TIFF", [".tif", ".tiff"]],
+  ["xisf", "XISF", [".xisf"]],
+];
+function fileType(name) {
+  const n = name.toLowerCase();
+  for (const [id, , exts] of typeGroups) if (exts.some(e => n.endsWith(e))) return id;
+  return "other";
+}
+const shareOf = p => p.split("/")[0];
+function shareLabel(sh) {
+  const l = sh.toLowerCase();
+  if (l === "emmc images" || l.startsWith("emmc")) return "Внутренняя память (" + sh + ")";
+  if (l === "udisk" || l.includes("usb")) return "Флешка (" + sh + ")";
+  if (/(^|[^a-z])(sd|tf)([^a-z]|$)|card/.test(l)) return "SD-карта (" + sh + ")";
+  return sh;
+}
+// day boundaries in local time; "по" includes the whole day
+const dayStart = d => d ? new Date(d + "T00:00:00").getTime() : null;
+const dayEnd = d => d ? new Date(d + "T00:00:00").getTime() + 86400000 : null;
+const filterIds = ["filter", "show", "fShare", "fType", "fFrom", "fTo"];
+function saveFilters() {
+  const v = {};
+  for (const id of filterIds) v[id] = $(id).value;
+  v.showFiltered = $("showFiltered").checked;
+  store.set("filters", v);
+}
+function loadFilters() {
+  const v = store.get("filters", {});
+  for (const id of filterIds) if (v[id] !== undefined) {
+    const e = $(id);
+    if (e.tagName === "SELECT" && ![...e.options].some(o => o.value === v[id])) e.append(el("option", { value: v[id], textContent: v[id] }));
+    e.value = v[id];
+  }
+  $("showFiltered").checked = !!v.showFiltered;
+}
+function filtersActive() {
+  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fType").value || $("fFrom").value || $("fTo").value);
+}
+// fill the storage and type lists from the files, with counts
+function renderFilterOptions() {
+  const fill = (sel, first, items) => {
+    const cur = sel.value;
+    const opts = [el("option", { value: "", textContent: first })];
+    for (const [v, t] of items) opts.push(el("option", { value: v, textContent: t }));
+    if (cur && !items.some(([v]) => v === cur)) opts.push(el("option", { value: cur, textContent: cur + " (нет файлов)" }));
+    sel.replaceChildren(...opts);
+    sel.value = cur;
+  };
+  const shares = new Map(), types = new Map();
+  for (const f of state.files) {
+    if (f.status === "filtered" && !$("showFiltered").checked) continue;
+    shares.set(shareOf(f.path), (shares.get(shareOf(f.path)) || 0) + 1);
+    const t = fileType(f.name);
+    types.set(t, (types.get(t) || 0) + 1);
+  }
+  fill($("fShare"), "Все хранилища", [...shares].sort((a, b) => a[0].localeCompare(b[0])).map(([sh, n]) => [sh, `${shareLabel(sh)} — ${n}`]));
+  const tl = typeGroups.filter(([id]) => types.has(id)).map(([id, label]) => [id, `${label} — ${types.get(id)}`]);
+  if (types.has("other")) tl.push(["other", `Другие — ${types.get("other")}`]);
+  fill($("fType"), "Все типы", tl);
+  $("filters").classList.toggle("active", filtersActive());
+}
+
 function visibleFiles() {
   const q = $("filter").value.trim().toLowerCase();
   const mode = $("show").value, showFiltered = $("showFiltered").checked;
+  const share = $("fShare").value, type = $("fType").value;
+  const from = dayStart($("fFrom").value), to = dayEnd($("fTo").value);
   return state.files.filter(f => {
     if (q && !f.path.toLowerCase().includes(q)) return false;
     if (f.status === "filtered" && !showFiltered) return false;
+    if (share && shareOf(f.path) !== share) return false;
+    if (type && fileType(f.name) !== type) return false;
+    if (from !== null || to !== null) {
+      const t = new Date(f.mtime).getTime();
+      if (from !== null && t < from) return false;
+      if (to !== null && t >= to) return false;
+    }
     switch (mode) {
       case "remote": return f.remote;
       case "both": return f.remote && f.local;
@@ -505,7 +621,7 @@ function renderFiles() {
       const toFetch = inFolder.filter(x => canFetch(x) && !requested.has(x.path)).map(x => x.path);
       if (paused && toFetch.length) head.append(miniButton(`⤓ Скачать папку (${toFetch.length})`, "Передать файлы папки, не снимая паузу", () => fetchFiles(toFetch)));
       const tr = el("tr", { className: "folder" }, el("td", {}, cb), head);
-      tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); renderFiles(); };
+      tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); saveCollapsed(); renderFiles(); };
       tb.append(tr);
     }
     if (collapsed.has(folder)) continue;
@@ -533,14 +649,25 @@ function renderFiles() {
   $("selInfo").textContent = sel.length ? `выбрано: ${sel.length} (${fmtBytes(selSize)})` : "";
   $("delBtn").disabled = sel.length === 0;
   const selFetch = state.files.filter(f => selected.has(f.path) && canFetch(f) && !requested.has(f.path)).map(f => f.path);
-  $("fetchBtn").hidden = !paused || !selFetch.length;
-  $("fetchBtn").textContent = `Скачать выбранные (${selFetch.length})`;
+  $("fetchBtn").hidden = !selFetch.length;
+  $("fetchBtn").textContent = paused ? `Скачать выбранные (${selFetch.length})` : `Скачать выбранные первыми (${selFetch.length})`;
+  $("fetchBtn").title = paused ? "Передать выбранные файлы, не снимая паузу" : "Передать выбранные файлы раньше остальных";
   $("fetchBtn").onclick = () => fetchFiles(selFetch);
+  $("selNone").hidden = sel.length === 0;
+  const rec = receivedToDelete();
+  $("delReceived").textContent = `Удалить полученные на ASIAIR (${rec.length})`;
+  $("delReceived").disabled = rec.length === 0;
+  const found = files.filter(f => f.remote && !f.pending);
+  $("selFound").textContent = `Выбрать все найденные (${found.length})`;
+  $("selFound").disabled = found.length === 0;
   const vis = files.filter(f => f.remote && !f.pending);
   $("selAll").checked = vis.length > 0 && vis.every(f => selected.has(f.path));
   const nr = state.files.filter(f => f.remote && f.status !== "filtered").length, nl = state.files.filter(f => f.local).length;
   const nf = state.files.filter(f => f.status === "filtered").length;
-  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length}. На ASIAIR: ${nr}, получено: ${nl}` +
+  const folders = new Set(files.map(f => f.folder));
+  $("collapseAll").disabled = [...folders].every(x => collapsed.has(x));
+  $("expandAll").disabled = ![...folders].some(x => collapsed.has(x));
+  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length} (${fmtBytes(files.reduce((a, f) => a + f.size, 0))}). На ASIAIR: ${nr}, получено: ${nl}` +
     (nf ? `, непередаваемых: ${nf}` : "") + `. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
 }
 
@@ -674,7 +801,9 @@ function renderStatus() {
   renderUpdate(state.update || {}, state.agent || {});
   renderTailscale(state.tailscale);
   // until the agent has connected once, setup comes first
-  $("setupGrid").style.order = (!state.last_seen || state.last_seen.startsWith("0001")) ? -1 : 0;
+  const firstRun = !state.last_seen || state.last_seen.startsWith("0001");
+  $("setupWrap").style.order = firstRun ? -1 : 0;
+  renderSetupSummary(firstRun);
 }
 
 let minFreeEdited = false;
@@ -765,30 +894,80 @@ async function refresh() {
     // drop selections that no longer apply
     const ok = new Set(state.files.filter(f => f.remote && !f.pending).map(f => f.path));
     for (const p of [...selected]) if (!ok.has(p)) selected.delete(p);
-    renderStatus(); renderFiles(); renderCmds();
+    renderStatus(); renderFilterOptions(); renderFiles(); renderCmds();
   } catch (e) {
     $("agentBadge").className = "badge off";
     $("agentBadge").textContent = "нет связи с приёмником";
   }
 }
 
-$("filter").oninput = () => state && renderFiles();
-$("show").onchange = () => state && renderFiles();
-$("showFiltered").onchange = () => state && renderFiles();
+function filtersChanged() { saveFilters(); if (state) { renderFilterOptions(); renderFiles(); } }
+for (const id of filterIds) $(id).addEventListener(id === "filter" ? "input" : "change", filtersChanged);
+$("showFiltered").onchange = filtersChanged;
+$("fReset").onclick = () => {
+  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fType").value = ""; $("fFrom").value = ""; $("fTo").value = "";
+  filtersChanged();
+};
+// the last night: from noon of the day before until noon (by the newest frame)
+$("fLastNight").onclick = () => {
+  if (!state || !state.files.length) return;
+  const newest = Math.max(...state.files.map(f => new Date(f.mtime).getTime()));
+  const d = new Date(newest - 12 * 3600000); // the evening the night began
+  const iso = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  $("fFrom").value = iso(d);
+  $("fTo").value = iso(new Date(d.getTime() + 86400000));
+  filtersChanged();
+};
+$("collapseAll").onclick = () => { for (const f of visibleFiles()) collapsed.add(f.folder); saveCollapsed(); renderFiles(); };
+$("expandAll").onclick = () => { collapsed.clear(); saveCollapsed(); renderFiles(); };
+$("selFound").onclick = () => { for (const f of visibleFiles()) if (f.remote && !f.pending) selected.add(f.path); renderFiles(); };
+$("selNone").onclick = () => { selected.clear(); renderFiles(); };
 $("selAll").onchange = e => {
   for (const f of visibleFiles()) if (f.remote && !f.pending) e.target.checked ? selected.add(f.path) : selected.delete(f.path);
   renderFiles();
 };
-$("delBtn").onclick = async () => {
-  const paths = [...selected];
-  const also = $("alsoLocal").checked;
-  if (!confirm(`Удалить ${paths.length} файл(ов) на ASIAIR${also ? " и на этом компьютере" : ""}? Это действие необратимо.`)) return;
+// files shown now (filters apply) that are received and verified, still on the ASIAIR
+function receivedToDelete() {
+  return state ? visibleFiles().filter(f => f.status === "received" && f.remote && !f.pending) : [];
+}
+// what is about to be deleted: count, size, per storage
+function deleteSummary(files) {
+  const by = new Map();
+  for (const f of files) {
+    const sh = shareOf(f.path), v = by.get(sh) || { n: 0, b: 0 };
+    v.n++; v.b += f.remote_size || f.size;
+    by.set(sh, v);
+  }
+  const total = files.reduce((a, f) => a + (f.remote_size || f.size), 0);
+  const lines = [...by].map(([sh, v]) => `  • ${shareLabel(sh)}: ${v.n} файл(ов), ${fmtBytes(v.b)}`);
+  return { total, lines };
+}
+async function queueDelete(paths, also) {
   try {
     const r = await post("/ui/api/delete", { paths, also_local: also });
-    selected.clear();
+    for (const p of paths) selected.delete(p);
     toast(`В очереди на удаление: ${r.queued}`);
     refresh();
   } catch (e) { alert("Ошибка: " + e.message); }
+}
+$("delBtn").onclick = async () => {
+  const files = state.files.filter(f => selected.has(f.path));
+  const also = $("alsoLocal").checked;
+  const { total, lines } = deleteSummary(files);
+  const notYet = files.filter(f => f.status !== "received");
+  let msg = `Будет удалено на ASIAIR: ${files.length} файл(ов), ${fmtBytes(total)}` + (also ? " — и на этом компьютере" : "") + `\n${lines.join("\n")}`;
+  if (notYet.length && !also) msg += `\n\n⚠ ${notYet.length} из них ещё НЕ получены этим компьютером (${fmtBytes(notYet.reduce((a, f) => a + f.size, 0))}) — после удаления их не останется нигде.`;
+  msg += "\n\nЭто действие необратимо. Удалить?";
+  if (confirm(msg)) queueDelete(files.map(f => f.path), also);
+};
+$("delReceived").onclick = async () => {
+  const files = receivedToDelete();
+  if (!files.length) return;
+  const { total, lines } = deleteSummary(files);
+  let msg = `Будет удалено на ASIAIR: ${files.length} файл(ов), ${fmtBytes(total)} — только те, что уже получены и сверены.\n${lines.join("\n")}\n\nКопии на этом компьютере останутся.`;
+  if (filtersActive()) msg += "\nУчтены фильтры: удаляются только показанные сейчас файлы.";
+  msg += "\n\nЭто действие необратимо. Удалить?";
+  if (confirm(msg)) queueDelete(files.map(f => f.path), false);
 };
 $("rateApply").onclick = async () => {
   try { await post("/ui/api/rate", { rate: $("rateInput").value || "0" }); toast("Ограничение применится при следующей связи с агентом"); refresh(); }
@@ -800,6 +979,50 @@ $("pauseBtn").onclick = async () => {
 };
 $("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
 $("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
+
+// ---------- folding the settings ----------
+function setSetupFolded(f) {
+  $("setupWrap").classList.toggle("folded", f);
+  $("setupToggle").textContent = (f ? "▸" : "▾") + " Настройки";
+}
+let setupFoldInit = false;
+function renderSetupSummary(firstRun) {
+  // no choice saved yet: open on the first run, folded afterwards
+  if (!setupFoldInit) {
+    setupFoldInit = true;
+    setSetupFolded(store.get("setupFolded", !firstRun));
+  }
+  const d = state.disk || {}, t = state.tailscale || {}, u = state.update || {};
+  const parts = [];
+  if (state.dest_dir) parts.push("папка " + state.dest_dir);
+  if (d.total) parts.push(`свободно ${fmtBytes(d.free)}` + (d.full ? " (мало!)" : ""));
+  if (t.enabled) parts.push("Tailscale: " + (t.state === "running" ? "подключён" : t.state === "login" ? "нужно войти" : t.state));
+  if (u.version) parts.push("приёмник " + (u.version === "dev" ? "dev" : "v" + u.version) + (u.latest && u.latest !== u.version ? ", есть обновление" : ""));
+  $("setupSummary").textContent = $("setupWrap").classList.contains("folded") ? parts.join(" · ") : "";
+}
+$("setupToggle").onclick = () => {
+  const f = !$("setupWrap").classList.contains("folded");
+  setSetupFolded(f);
+  store.set("setupFolded", f);
+  if (state) renderSetupSummary(false);
+};
+// every settings and status panel folds by its title
+{
+  const folded = new Set(store.get("foldedPanels", []));
+  document.querySelectorAll("main > .grid > .panel > h2:first-child, #setupGrid > .panel > h2:first-child").forEach(h => {
+    const key = h.textContent.trim();
+    h.classList.add("fold");
+    h.title = "Свернуть или развернуть";
+    if (folded.has(key)) h.parentElement.classList.add("folded");
+    h.onclick = () => {
+      const on = h.parentElement.classList.toggle("folded");
+      on ? folded.add(key) : folded.delete(key);
+      store.set("foldedPanels", [...folded]);
+    };
+  });
+}
+loadFilters();
+for (const c of store.get("collapsed", [])) collapsed.add(c);
 
 // ---------- Tailscale ----------
 let ts = null;
