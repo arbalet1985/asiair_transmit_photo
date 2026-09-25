@@ -29,6 +29,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/ratelimit"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
@@ -50,6 +51,7 @@ type Agent struct {
 	cfg       *config.Agent
 	src       source.Source
 	cl        *client
+	ts        *tsnode.Node // Tailscale connection to the receiver, or nil
 	lim       *ratelimit.Limiter
 	localRate int64
 
@@ -109,13 +111,31 @@ func New(cfg *config.Agent) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	cl, err := newClient(cfg.ReceiverURL, cfg.Token, cfg.ReceiverFingerprint)
+	var node *tsnode.Node
+	var dial DialFunc
+	if cfg.UseTailscale() {
+		node, err = tsnode.Start(tsnode.Config{
+			Dir:        cfg.TailscaleDir,
+			Hostname:   cfg.TailscaleHostname,
+			AuthKey:    cfg.TailscaleAuthKey,
+			ControlURL: cfg.TailscaleControlURL,
+		})
+		if err != nil {
+			src.Close()
+			return nil, err
+		}
+		dial = node.Dial
+	}
+	cl, err := newClient(cfg.ReceiverURL, cfg.Token, cfg.ReceiverFingerprint, dial)
 	if err != nil {
+		if node != nil {
+			node.Close()
+		}
 		return nil, err
 	}
 	rate, _ := config.ParseRate(cfg.MaxRate)
 	a := &Agent{
-		cfg: cfg, src: src, cl: cl,
+		cfg: cfg, src: src, cl: cl, ts: node,
 		lim: ratelimit.New(rate), localRate: rate,
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
@@ -125,13 +145,49 @@ func New(cfg *config.Agent) (*Agent, error) {
 	a.status.Version = protocol.Version
 	a.status.OS = runtime.GOOS + "/" + runtime.GOARCH
 	a.status.ASIAIR = cfg.ASIAIR
+	a.status.Connection = cfg.Connection
 	a.status.Rate = rate
 	a.initDiscovery()
 	cl.onPin = a.pinFingerprint
 	if err := a.loadState(); err != nil {
+		a.Close()
 		return nil, fmt.Errorf("файл состояния %s: %w", cfg.StateFile, err)
 	}
 	return a, nil
+}
+
+// Close releases what New started; Run calls it when it ends.
+func (a *Agent) Close() {
+	a.source().Close()
+	if a.ts != nil {
+		a.ts.Close()
+	}
+}
+
+// Tailscale returns the state of the Tailscale connection (nil when the
+// agent connects over the internet).
+func (a *Agent) Tailscale() *tsnode.Status {
+	if a.ts == nil {
+		return nil
+	}
+	st := a.ts.Status()
+	return &st
+}
+
+// TailscaleLogin asks for a fresh login link.
+func (a *Agent) TailscaleLogin(ctx context.Context) error {
+	if a.ts == nil {
+		return errors.New("Tailscale не используется")
+	}
+	return a.ts.Login(ctx)
+}
+
+// Dial is the connection used for the receiver: Tailscale or nil (the usual network).
+func (a *Agent) Dial() DialFunc {
+	if a.ts == nil {
+		return nil
+	}
+	return a.ts.Dial
 }
 
 func (a *Agent) loadState() error {
@@ -193,7 +249,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 	a.transferLoop(ctx)
 	wg.Wait()
-	a.source().Close()
+	a.Close()
 	return nil
 }
 

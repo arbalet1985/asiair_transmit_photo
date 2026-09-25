@@ -12,6 +12,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 )
 
 func main() {
@@ -73,7 +74,34 @@ func check(path string, _ []string) error {
 	}
 
 	fmt.Printf("Приёмник: %s\n", cfg.ReceiverURL)
-	if err := agent.CheckReceiver(ctx, cfg.ReceiverURL, cfg.Token, cfg.ReceiverFingerprint); err != nil {
+	var dial agent.DialFunc
+	if cfg.UseTailscale() {
+		// the login is shared with the agent: do not run both at once
+		node, err := tsnode.Start(tsnode.Config{Dir: cfg.TailscaleDir, Hostname: cfg.TailscaleHostname,
+			AuthKey: cfg.TailscaleAuthKey, ControlURL: cfg.TailscaleControlURL, Logf: func(string, ...any) {}})
+		if err != nil {
+			return err
+		}
+		defer node.Close()
+		shown := ""
+		for st := node.Status(); st.State != tsnode.StateRunning; st = node.Status() {
+			if st.State == tsnode.StateLogin && st.AuthURL != "" && st.AuthURL != shown {
+				fmt.Printf("Tailscale: войдите по ссылке: %s\n", st.AuthURL)
+				shown = st.AuthURL
+			}
+			if st.State == tsnode.StateError {
+				return fmt.Errorf("Tailscale: %s", st.Error)
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("Tailscale: %s", node.Status().Text())
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		fmt.Printf("Tailscale: %s\n", node.Status().Text())
+		dial = node.Dial
+	}
+	if err := agent.CheckReceiver(ctx, cfg.ReceiverURL, cfg.Token, cfg.ReceiverFingerprint, dial); err != nil {
 		return fmt.Errorf("приёмник: %w", err)
 	}
 	fmt.Println("Приёмник: OK")

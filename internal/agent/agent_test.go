@@ -167,31 +167,31 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	// wrong token is rejected
-	c, _ := newClient(acfg.ReceiverURL, "wrong", acfg.ReceiverFingerprint)
+	c, _ := newClient(acfg.ReceiverURL, "wrong", acfg.ReceiverFingerprint, nil)
 	if err := c.postJSON(context.Background(), "/api/sync", map[string]any{}, nil); err == nil {
 		t.Fatal("wrong token accepted")
 	}
 	// wrong certificate is rejected
-	c, _ = newClient(acfg.ReceiverURL, "secret", strings.Repeat("00", 32))
+	c, _ = newClient(acfg.ReceiverURL, "secret", strings.Repeat("00", 32), nil)
 	if err := c.postJSON(context.Background(), "/api/sync", map[string]any{}, nil); err == nil ||
 		!strings.Contains(err.Error(), "отпечаток") {
 		t.Fatalf("wrong fingerprint accepted: %v", err)
 	}
 	// the settings form offers the new fingerprint from the error
 	var fe *FingerprintError
-	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "secret", strings.Repeat("00", 32)); !errors.As(err, &fe) || fe.Got != srv.Fingerprint() {
+	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "secret", strings.Repeat("00", 32), nil); !errors.As(err, &fe) || fe.Got != srv.Fingerprint() {
 		t.Fatalf("no fingerprint error: %v", err)
 	}
 
 	// helpers used by the settings form
-	fp, err := FetchFingerprint(context.Background(), acfg.ReceiverURL)
+	fp, err := FetchFingerprint(context.Background(), acfg.ReceiverURL, nil)
 	if err != nil || fp != srv.Fingerprint() {
 		t.Fatalf("FetchFingerprint = %q, %v; want %q", fp, err, srv.Fingerprint())
 	}
-	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "secret", fp); err != nil {
+	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "secret", fp, nil); err != nil {
 		t.Fatalf("CheckReceiver: %v", err)
 	}
-	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "bad", fp); err == nil || !strings.Contains(err.Error(), "токен") {
+	if err := CheckReceiver(context.Background(), acfg.ReceiverURL, "bad", fp, nil); err == nil || !strings.Contains(err.Error(), "токен") {
 		t.Fatalf("CheckReceiver with bad token: %v", err)
 	}
 	if res, err := a.src.Probe(context.Background()); err != nil || len(res.Shares) != 1 || res.Shares[0].Entries != 2 {

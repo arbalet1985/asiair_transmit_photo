@@ -30,7 +30,10 @@ type client struct {
 	onPin  func(string) // called when an empty fingerprint is learnt on first contact
 }
 
-func newClient(base, token, fingerprint string) (*client, error) {
+// DialFunc connects to the receiver (Tailscale); nil = the usual network.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+func newClient(base, token, fingerprint string, dial DialFunc) (*client, error) {
 	u, err := url.Parse(strings.TrimRight(config.NormalizeReceiverURL(base), "/"))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("receiver_url %q: ожидается https://адрес:порт", base)
@@ -52,6 +55,9 @@ func newClient(base, token, fingerprint string) (*client, error) {
 		ResponseHeaderTimeout: 2 * time.Minute,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConnsPerHost:   4,
+	}
+	if dial != nil {
+		tr.Proxy, tr.DialContext = nil, dial
 	}
 	c.http = &http.Client{Transport: tr}
 	return c, nil
@@ -152,8 +158,9 @@ func httpErr(resp *http.Response) error {
 }
 
 // CheckReceiver verifies that the receiver is reachable and accepts the token.
-func CheckReceiver(ctx context.Context, receiverURL, token, fingerprint string) error {
-	c, err := newClient(receiverURL, token, fingerprint)
+// dial is the Tailscale connection of the running agent, or nil.
+func CheckReceiver(ctx context.Context, receiverURL, token, fingerprint string, dial DialFunc) error {
+	c, err := newClient(receiverURL, token, fingerprint, dial)
 	if err != nil {
 		return err
 	}
@@ -169,21 +176,24 @@ func CheckReceiver(ctx context.Context, receiverURL, token, fingerprint string) 
 
 // FetchFingerprint connects to an https receiver and returns the SHA-256
 // fingerprint of its certificate, so the user can confirm and pin it.
-func FetchFingerprint(ctx context.Context, receiverURL string) (string, error) {
+func FetchFingerprint(ctx context.Context, receiverURL string, dial DialFunc) (string, error) {
 	u, err := url.Parse(config.NormalizeReceiverURL(receiverURL))
 	if err != nil || u.Scheme != "https" {
 		return "", errors.New("отпечаток есть только у https-адреса")
 	}
-	d := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 20 * time.Second},
-		Config:    &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 20 * time.Second}).DialContext
 	}
-	conn, err := d.DialContext(ctx, "tcp", u.Host)
+	raw, err := dial(ctx, "tcp", u.Host)
 	if err != nil {
 		return "", err
 	}
+	conn := tls.Client(raw, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12, ServerName: u.Hostname()})
 	defer conn.Close()
-	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if err := conn.HandshakeContext(ctx); err != nil {
+		return "", err
+	}
+	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		return "", errors.New("приёмник не прислал сертификат")
 	}

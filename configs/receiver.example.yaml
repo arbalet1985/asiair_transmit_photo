@@ -39,4 +39,8 @@ min_free: "5%"
 auto_update: true
 update_token: ""
 
+# Принимать агента через встроенный Tailscale (без проброса портов, бесплатно).
+# Удобнее включить галочкой на веб-странице (блок «Подключение агента»).
+tailscale: false
+
 log_file: asiair-receiver.log

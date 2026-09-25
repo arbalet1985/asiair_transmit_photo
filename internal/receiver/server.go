@@ -24,6 +24,7 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 )
 
 //go:embed web/index.html
@@ -60,6 +61,12 @@ type Server struct {
 	updater *updater
 
 	previews *previewCache
+
+	// Tailscale: the agent API in the user's tailnet
+	tsMu  sync.Mutex
+	ts    *tsnode.Node
+	tsSrv *http.Server
+	tsErr string
 }
 
 func New(cfg *config.Receiver) (*Server, error) {
@@ -133,6 +140,12 @@ func (s *Server) Run(ctx context.Context) error {
 
 	log.Printf("Приёмник: версия %s", protocol.Version)
 	go s.updater.run(ctx)
+	if s.cfg.TailscaleOn {
+		if err := s.startTailscale(); err != nil {
+			log.Printf("Приёмник: Tailscale не запущен: %v", err)
+		}
+	}
+	defer s.stopTailscale()
 
 	errc := make(chan error, 2)
 	go func() { errc <- api.Serve(apiLn) }()
@@ -368,6 +381,7 @@ func (s *Server) uiHandler() http.Handler {
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
 	mux.HandleFunc("/ui/api/connect", s.handleUIConnect)
+	mux.HandleFunc("/ui/api/tailscale", s.handleUITailscale)
 	mux.HandleFunc("/ui/api/token", s.handleUINewToken)
 	mux.HandleFunc("/ui/api/dirs", s.handleUIDirs)
 	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
@@ -417,6 +431,7 @@ type uiState struct {
 	Disk          diskInfo             `json:"disk"`
 	Update        updateInfo           `json:"update"`
 	Totals        uiTotals             `json:"totals"`
+	Tailscale     tsInfo               `json:"tailscale"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -447,6 +462,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		DestDir:       store.root,
 		Disk:          s.disk(),
 		Update:        s.updater.info(),
+		Tailscale:     s.tailscaleInfo(),
 	}
 	writeJSON(w, out)
 }

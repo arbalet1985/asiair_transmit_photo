@@ -25,6 +25,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 )
 
 const (
@@ -112,6 +113,8 @@ type window struct {
 
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
 	lblTotal, lblVersion                                                 *walk.Label
+	lblTSCaption, lblTS                                                  *walk.Label
+	btnTSLogin                                                           *walk.PushButton
 	btnPause                                                             *walk.PushButton
 	actPause                                                             *walk.Action
 	progress, totalBar                                                   *walk.ProgressBar
@@ -120,6 +123,8 @@ type window struct {
 	logModel                                                             *logModel
 	tabs                                                                 *walk.TabWidget
 	form                                                                 settingsForm
+
+	tsNotified string // login link already announced in the tray
 
 	ready    bool // set after the window is built; checkbox handlers ignore the initial state
 	quitting bool
@@ -266,6 +271,15 @@ func (w *window) create() error {
 								Children: []Widget{
 									Label{Text: "ASIAIR:"}, Label{AssignTo: &w.lblASIAIR, Text: "—"},
 									Label{Text: "Приёмник:"}, Label{AssignTo: &w.lblReceiver, Text: "—"},
+									Label{AssignTo: &w.lblTSCaption, Text: "Tailscale:", Visible: false},
+									Composite{
+										Layout: HBox{MarginsZero: true},
+										Children: []Widget{
+											Label{AssignTo: &w.lblTS, Text: "—", Visible: false},
+											PushButton{AssignTo: &w.btnTSLogin, Text: "Войти в Tailscale…", Visible: false, OnClicked: w.tailscaleLogin},
+											HSpacer{},
+										},
+									},
 									Label{Text: "Передаётся:"}, Label{AssignTo: &w.lblFile, Text: "—"},
 									Label{Text: ""}, ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
 									Label{Text: "Скорость:"}, Label{AssignTo: &w.lblSpeed, Text: "—"},
@@ -511,6 +525,7 @@ func (w *window) update() {
 			l.SetText("—")
 		}
 		setShort(w.lblErr, msg, maxStatus)
+		w.updateTailscale(nil)
 		w.progress.SetValue(0)
 		w.totalBar.SetValue(0)
 		w.setTray(StateStopped, "ASIAIR Agent — "+msg)
@@ -518,6 +533,7 @@ func (w *window) update() {
 	}
 	st := a.Status()
 	lastSync, syncErr := a.Receiver()
+	w.updateTailscale(a)
 	setShort(w.lblVersion, versionText(st.Update), maxStatus)
 
 	switch {
@@ -600,4 +616,39 @@ func trayState(st protocol.AgentStatus, syncErr string) (string, string) {
 			filepath.Base(st.Uploading), pct, st.QueueFiles)
 	}
 	return StateIdle, fmt.Sprintf("ASIAIR Agent — на связи, отправлено %d", st.SentFiles)
+}
+
+// updateTailscale shows the Tailscale row when the agent connects through it.
+func (w *window) updateTailscale(a *agent.Agent) {
+	var st *tsnode.Status
+	if a != nil {
+		st = a.Tailscale()
+	}
+	w.lblTSCaption.SetVisible(st != nil)
+	w.lblTS.SetVisible(st != nil)
+	w.btnTSLogin.SetVisible(st != nil && st.State == tsnode.StateLogin)
+	if st == nil {
+		return
+	}
+	text := st.Text()
+	if st.State == tsnode.StateLogin {
+		text += " той же учётной записью, что и на приёмнике"
+	}
+	setShort(w.lblTS, text, maxStatus)
+	w.btnTSLogin.SetEnabled(st.AuthURL != "")
+	if st.State == tsnode.StateLogin && st.AuthURL != "" && st.AuthURL != w.tsNotified {
+		w.tsNotified = st.AuthURL
+		w.ni.ShowInfo("ASIAIR Agent", "Войдите в Tailscale: откройте окно агента и нажмите «Войти в Tailscale…»")
+	}
+}
+
+// tailscaleLogin opens the Tailscale login page in the browser.
+func (w *window) tailscaleLogin() {
+	a, _ := w.run.state()
+	if a == nil || a.Tailscale() == nil {
+		return
+	}
+	if u := a.Tailscale().AuthURL; u != "" {
+		svc.OpenBrowser(u)
+	}
 }

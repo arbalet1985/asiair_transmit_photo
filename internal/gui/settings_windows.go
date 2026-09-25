@@ -17,6 +17,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/netcheck"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 )
 
 // Placeholder values from the example configuration: shown as empty fields.
@@ -33,7 +34,38 @@ type settingsForm struct {
 	asiairResult, receiverResult *walk.Label
 	testASIAIR, testReceiver     *walk.PushButton
 	findASIAIR, chooseUSB        *walk.PushButton
+	conn                         *walk.ComboBox
+	tsKey                        *walk.LineEdit
+	hostHint, tsHint             *walk.Label
 	scheme                       string // "https" unless receiver_url says otherwise
+}
+
+// connection kinds in the order of the "Способ связи" list
+var connKinds = []string{config.ConnInternet, config.ConnTailscale}
+
+const (
+	hostHintInternet  = "внешний IP или имя, например 93.184.216.34 или home.example.com"
+	hostHintTailscale = "имя приёмника в Tailscale (обычно asiair-receiver) или его адрес 100.x.x.x"
+)
+
+func (f *settingsForm) connection() string {
+	if i := f.conn.CurrentIndex(); i >= 0 && i < len(connKinds) {
+		return connKinds[i]
+	}
+	return config.ConnInternet
+}
+
+// onConnChanged adapts the hints to the chosen connection.
+func (w *window) onConnChanged() {
+	f := &w.form
+	ts := f.connection() == config.ConnTailscale
+	if ts {
+		f.hostHint.SetText(hostHintTailscale)
+	} else {
+		f.hostHint.SetText(hostHintInternet)
+	}
+	f.tsKey.SetEnabled(ts)
+	f.tsHint.SetEnabled(ts)
 }
 
 var (
@@ -91,10 +123,17 @@ func (w *window) settingsPage(minimized bool) []Widget {
 			Title:  "Компьютер, куда скачиваются снимки (приёмник)",
 			Layout: Grid{Columns: 3, Spacing: 4},
 			Children: []Widget{
+				Label{Text: "Способ связи:"},
+				ComboBox{AssignTo: &f.conn, Model: []string{
+					"Через интернет (порт открыт на роутере)",
+					"Через Tailscale (без проброса портов, бесплатно)",
+				}, CurrentIndex: 0, OnCurrentIndexChanged: w.onConnChanged},
+				Label{},
+
 				Label{Text: "Адрес:"},
-				LineEdit{AssignTo: &f.host, ToolTipText: "Внешний IP-адрес или имя компьютера с asiair-receiver"},
+				LineEdit{AssignTo: &f.host, ToolTipText: "Внешний IP-адрес или имя компьютера с asiair-receiver, либо его имя в Tailscale"},
 				PushButton{AssignTo: &f.testReceiver, Text: "Проверить", OnClicked: w.testReceiver},
-				Label{}, hint("внешний IP или имя, например 93.184.216.34 или home.example.com"), Label{},
+				Label{}, Label{AssignTo: &f.hostHint, Text: hostHintInternet, TextColor: colorDim}, Label{},
 
 				Label{Text: "Порт:"},
 				NumberEdit{AssignTo: &f.port, Decimals: 0, MinValue: 1, MaxValue: 65535,
@@ -105,6 +144,12 @@ func (w *window) settingsPage(minimized bool) []Widget {
 				LineEdit{AssignTo: &f.token, ToolTipText: "Тот же, что token в receiver.yaml"},
 				Label{},
 				Label{}, hint("тот же, что token в receiver.yaml (команда: asiair-receiver token)"), Label{},
+
+				Label{Text: "Ключ Tailscale:"},
+				LineEdit{AssignTo: &f.tsKey, PasswordMode: true, ToolTipText: "Необязательно: tskey-auth-… из login.tailscale.com → Settings → Keys"},
+				Label{},
+				Label{}, Label{AssignTo: &f.tsHint, TextColor: colorDim,
+					Text: "необязательно: без ключа агент покажет кнопку «Войти в Tailscale» на вкладке «Состояние»"}, Label{},
 
 				Label{Text: "Отпечаток сертификата:"},
 				LineEdit{AssignTo: &f.fingerprint, ToolTipText: "Заполняется автоматически при проверке"},
@@ -166,6 +211,12 @@ func (w *window) loadForm() {
 	f.port.SetValue(float64(port))
 	f.token.SetText(clean(c.Token))
 	f.fingerprint.SetText(c.ReceiverFingerprint)
+	f.conn.SetCurrentIndex(0)
+	if c.UseTailscale() {
+		f.conn.SetCurrentIndex(1)
+	}
+	f.tsKey.SetText(c.TailscaleAuthKey)
+	w.onConnChanged()
 }
 
 func (w *window) receiverURL() (string, error) {
@@ -389,6 +440,24 @@ func (w *window) testReceiver() {
 	}
 	token := strings.TrimSpace(f.token.Text())
 	fp := strings.TrimSpace(f.fingerprint.Text())
+	// Tailscale: the check goes through the connection of the running agent
+	var dial agent.DialFunc
+	if f.connection() == config.ConnTailscale {
+		a, _ := w.run.state()
+		var st *tsnode.Status
+		if a != nil {
+			st = a.Tailscale()
+		}
+		switch {
+		case st == nil:
+			setResult(f.receiverResult, false, "Tailscale ещё не включён: нажмите «Сохранить и применить», затем войдите в Tailscale на вкладке «Состояние».")
+			return
+		case st.State != tsnode.StateRunning:
+			setResult(f.receiverResult, false, "Tailscale: "+st.Text()+". Войдите на вкладке «Состояние» и проверьте снова.")
+			return
+		}
+		dial = a.Dial()
+	}
 	f.testReceiver.SetEnabled(false)
 	f.receiverResult.SetTextColor(colorDim)
 	f.receiverResult.SetText("Проверка " + u + "…")
@@ -396,19 +465,21 @@ func (w *window) testReceiver() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		// first: does anything answer on the receiver port at all
-		r := netcheck.Check(ctx, config.ReceiverHostPort(u), 10*time.Second)
-		if !r.OK() {
-			w.mw.Synchronize(func() {
-				f.testReceiver.SetEnabled(true)
-				w.netFailed(f.receiverResult, "Приёмник", r, r.Advice("receiver"))
-			})
-			return
+		if dial == nil {
+			r := netcheck.Check(ctx, config.ReceiverHostPort(u), 10*time.Second)
+			if !r.OK() {
+				w.mw.Synchronize(func() {
+					f.testReceiver.SetEnabled(true)
+					w.netFailed(f.receiverResult, "Приёмник", r, r.Advice("receiver"))
+				})
+				return
+			}
+			log.Printf("Проверка приёмника: %s", r.Summary())
 		}
-		log.Printf("Проверка приёмника: %s", r.Summary())
 		var newFP string
 		var err error
 		if fp == "" && strings.HasPrefix(u, "https://") {
-			newFP, err = agent.FetchFingerprint(ctx, u)
+			newFP, err = agent.FetchFingerprint(ctx, u, dial)
 		}
 		w.mw.Synchronize(func() {
 			if err != nil {
@@ -439,7 +510,7 @@ func (w *window) testReceiver() {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
-				err := agent.CheckReceiver(ctx, u, token, fp)
+				err := agent.CheckReceiver(ctx, u, token, fp, dial)
 				w.mw.Synchronize(func() {
 					f.testReceiver.SetEnabled(true)
 					var fe *agent.FingerprintError
@@ -489,6 +560,8 @@ func (w *window) saveSettings() {
 		"receiver_url":         u,
 		"token":                strings.TrimSpace(f.token.Text()),
 		"receiver_fingerprint": strings.TrimSpace(f.fingerprint.Text()),
+		"connection":           f.connection(),
+		"tailscale_authkey":    strings.TrimSpace(f.tsKey.Text()),
 	})
 	if err != nil {
 		walk.MsgBox(w.mw, "ASIAIR Agent", "Настройки не сохранены: "+err.Error(), walk.MsgBoxIconError)

@@ -53,6 +53,8 @@ type AgentStatus struct {
 	Update    string `json:"update,omitempty"`
 	ASIAIR    string `json:"asiair"`
 	Connected bool   `json:"connected"`
+	// Connection to the receiver: "internet" or "tailscale" (empty in old agents).
+	Connection string `json:"connection,omitempty"`
 	// ASIAIRError: why the last scan of the ASIAIR failed ("" when it worked).
 	ASIAIRError string `json:"asiair_error,omitempty"`
 	// Searching: the agent is looking for the ASIAIR in the local network.

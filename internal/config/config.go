@@ -38,6 +38,11 @@ type Agent struct {
 
 	ReceiverURL string `yaml:"receiver_url"`
 	Token       string `yaml:"token"`
+	// Connection to the receiver: "internet" (default: the receiver address
+	// is reachable from the internet) or "tailscale" (both programs join the
+	// user's Tailscale network; no open port needed).
+	Connection string `yaml:"connection"`
+	Tailscale  `yaml:",inline"`
 	// SHA-256 fingerprint of the receiver's self-signed certificate.
 	ReceiverFingerprint string `yaml:"receiver_fingerprint"`
 
@@ -54,6 +59,9 @@ type Agent struct {
 
 	// AutoUpdate: install new versions handed out by the receiver. Default true.
 	AutoUpdate Bool `yaml:"auto_update"`
+
+	// TailscaleDir keeps the Tailscale login of the agent (next to agent.yaml).
+	TailscaleDir string `yaml:"-"`
 
 	// Path of the file the configuration was loaded from; the agent writes
 	// back what it finds out itself (new ASIAIR address, certificate).
@@ -94,9 +102,34 @@ type Receiver struct {
 	// UpdateRepo is "owner/name" of the GitHub repository with the releases.
 	UpdateRepo string `yaml:"update_repo"`
 
+	// TailscaleOn: the agent API is also served in the user's Tailscale
+	// network, so the agent can connect without an open port.
+	TailscaleOn Bool `yaml:"tailscale"`
+	Tailscale   `yaml:",inline"`
+
 	// Path of the file the configuration was loaded from.
 	Path string `yaml:"-"`
 }
+
+// Connection kinds of the agent.
+const (
+	ConnInternet  = "internet"
+	ConnTailscale = "tailscale"
+)
+
+// Tailscale settings shared by the agent and the receiver.
+type Tailscale struct {
+	// TailscaleHostname is the name in the tailnet. Defaults:
+	// "asiair-agent" and "asiair-receiver".
+	TailscaleHostname string `yaml:"tailscale_hostname"`
+	// TailscaleAuthKey joins without the interactive login (optional).
+	TailscaleAuthKey string `yaml:"tailscale_authkey"`
+	// TailscaleControlURL: a Headscale server instead of Tailscale (optional).
+	TailscaleControlURL string `yaml:"tailscale_control_url"`
+}
+
+// UseTailscale reports whether the agent connects through Tailscale.
+func (c *Agent) UseTailscale() bool { return c.Connection == ConnTailscale }
 
 // Bool is a yes/no setting; it also accepts quoted values ("true", 'false'),
 // as written by the settings forms.
@@ -188,6 +221,16 @@ func LoadAgent(path string) (*Agent, error) {
 	if _, err := ParseRate(c.MaxRate); err != nil {
 		return nil, err
 	}
+	switch c.Connection = strings.ToLower(strings.TrimSpace(c.Connection)); c.Connection {
+	case "", "direct", "internet":
+		c.Connection = ConnInternet
+	case ConnTailscale:
+	default:
+		return nil, fmt.Errorf("connection: %q — ожидается internet или tailscale", c.Connection)
+	}
+	if c.TailscaleHostname == "" {
+		c.TailscaleHostname = "asiair-agent"
+	}
 	for i, e := range c.Extensions {
 		e = strings.ToLower(e)
 		if !strings.HasPrefix(e, ".") {
@@ -199,6 +242,7 @@ func LoadAgent(path string) (*Agent, error) {
 	c.ReceiverURL = NormalizeReceiverURL(c.ReceiverURL)
 	c.StateFile = resolve(path, c.StateFile)
 	c.LogFile = resolve(path, c.LogFile)
+	c.TailscaleDir = resolve(path, "tailscale")
 	return c, nil
 }
 
@@ -225,6 +269,9 @@ func LoadReceiver(path string) (*Receiver, error) {
 		if _, err := ParseRate(c.MaxRate); err != nil {
 			return nil, err
 		}
+	}
+	if c.TailscaleHostname == "" {
+		c.TailscaleHostname = "asiair-receiver"
 	}
 	c.Path = path
 	c.DestDir = resolve(path, c.DestDir)
