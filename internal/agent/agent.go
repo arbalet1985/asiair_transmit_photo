@@ -964,6 +964,13 @@ func (a *Agent) Status() protocol.AgentStatus {
 // poll exchanges the status for commands. held reports that the receiver
 // supports long polling, so the next poll can follow at once.
 func (a *Agent) poll(ctx context.Context) (held bool, err error) {
+	// Register the cancel first, then take the status: a local change made
+	// after this point ends the held request (kickSync), one made before it
+	// is already in the status sent.
+	sctx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancelSync = cancel
+	a.mu.Unlock()
 	st := a.Status()
 
 	// the receiver holds the request until something changes for the agent
@@ -971,10 +978,6 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	if a.syncRev != 0 {
 		req.WaitMS = int(max(a.cfg.PollInterval.D(), time.Second) / time.Millisecond)
 	}
-	sctx, cancel := context.WithCancel(ctx)
-	a.mu.Lock()
-	a.cancelSync = cancel
-	a.mu.Unlock()
 	var resp protocol.SyncResponse
 	err = a.cl.postJSON(sctx, "/api/sync", req, &resp)
 	a.mu.Lock()
