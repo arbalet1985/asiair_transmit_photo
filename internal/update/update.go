@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -274,16 +275,49 @@ var startExe, startExeErr = func() (string, error) {
 // Executable returns the path the running program was started from.
 func Executable() (string, error) { return startExe, startExeErr }
 
+// An antivirus may hold a freshly written or started program for a moment:
+// renaming is tried again for a while before the update gives up.
+var (
+	renameTries = 6
+	renameDelay = 2 * time.Second
+)
+
+// renameRetry is os.Rename, tried again while the file is busy.
+func renameRetry(from, to string) error {
+	var err error
+	for i := 0; i < renameTries; i++ {
+		if i > 0 {
+			time.Sleep(renameDelay)
+		}
+		if err = os.Rename(from, to); err == nil || errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return err
+}
+
+// moveAside gets a file that cannot be deleted out of the way. Windows
+// refuses to delete a program that is running (e.g. a copy of an old
+// version left running) but lets it be renamed; Cleanup deletes it later.
+func moveAside(p string) {
+	if err := os.Remove(p); err == nil || errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	os.Rename(p, fmt.Sprintf("%s.%d%s", p, time.Now().UnixNano(), deletedSuffix))
+}
+
+const deletedSuffix = ".del"
+
 // Install replaces the program exe with the file newFile. Windows cannot
 // overwrite a running program but can rename it: the old one is kept as
 // Backup(exe) and removed once the new version works (Cleanup).
 func Install(exe, newFile string) error {
 	old := Backup(exe)
-	os.Remove(old)
-	if err := os.Rename(exe, old); err != nil {
-		return fmt.Errorf("не удалось заменить %s: %w (нет прав на запись в папку программы?)", exe, err)
+	moveAside(old)
+	if err := renameRetry(exe, old); err != nil {
+		return fmt.Errorf("не удалось заменить %s: %w (файл занят другой программой — антивирусом или ещё одной копией приёмника или агента, — либо нет прав на запись в папку программы)", exe, err)
 	}
-	if err := os.Rename(newFile, exe); err != nil {
+	if err := renameRetry(newFile, exe); err != nil {
 		os.Rename(old, exe) // roll back
 		return fmt.Errorf("не удалось заменить %s: %w", exe, err)
 	}
@@ -295,5 +329,15 @@ func Install(exe, newFile string) error {
 func Cleanup(exe string) {
 	for _, p := range []string{exe + ".old", Backup(exe), exe + ".bad", exe + ".new", exe + ".new.part"} {
 		os.Remove(p)
+	}
+	// copies moved aside by Install, once they are no longer running
+	entries, _ := os.ReadDir(filepath.Dir(exe))
+	for _, e := range entries {
+		n := e.Name()
+		for _, base := range []string{filepath.Base(exe) + ".old", filepath.Base(Backup(exe))} {
+			if strings.HasPrefix(n, base+".") && strings.HasSuffix(n, deletedSuffix) {
+				os.RemoveAll(filepath.Join(filepath.Dir(exe), n))
+			}
+		}
 	}
 }
