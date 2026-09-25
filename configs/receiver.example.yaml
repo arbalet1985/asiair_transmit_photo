@@ -47,6 +47,14 @@ update_token: ""
 # Удобнее включить галочкой на веб-странице (блок «Подключение агента»).
 tailscale: false
 
+# Страница с телефона (вход по паролю). Удобнее включить на веб-странице,
+# блок «Доступ с телефона»: там же задаётся пароль (здесь хранится только его хеш).
+#   remote_internet  — через интернет, на порту listen (тот же, что для агента);
+#   remote_tailscale — через Tailscale: https://asiair-receiver.<сеть>.ts.net
+remote_internet: false
+remote_tailscale: false
+remote_password: ""
+
 log_file: asiair-receiver.log
 # Журнал каждый день начинается заново; прошлые дни лежат рядом
 # (asiair-receiver-2026-09-25.log), через log_compress_after сжимаются в .gz,

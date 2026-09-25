@@ -195,6 +195,38 @@ func (n *Node) Listen(addr string) (net.Listener, error) {
 	return n.srv.Listen("tcp", addr)
 }
 
+// ErrNoHTTPS: HTTPS certificates are not enabled for the tailnet.
+var ErrNoHTTPS = errors.New("в панели Tailscale не включены сертификаты HTTPS: login.tailscale.com → DNS → включите MagicDNS и HTTPS Certificates")
+
+// ListenTLS accepts HTTPS connections from the tailnet with a certificate
+// for the node's name (e.g. asiair-receiver.tail1234.ts.net), issued via
+// Tailscale. It needs a running node and HTTPS enabled for the tailnet.
+func (n *Node) ListenTLS(addr string) (ln net.Listener, domain string, err error) {
+	if n.Status().State != StateRunning {
+		return nil, "", errors.New("Tailscale ещё не подключён")
+	}
+	domains := n.srv.CertDomains()
+	if len(domains) == 0 {
+		return nil, "", ErrNoHTTPS
+	}
+	ln, err = n.srv.ListenTLS("tcp", addr)
+	if err != nil {
+		return nil, "", err
+	}
+	return ln, domains[0], nil
+}
+
+// CheckCert gets (or renews) the HTTPS certificate of the domain from
+// Tailscale; the first one may take a minute to be issued.
+func (n *Node) CheckCert(ctx context.Context, domain string) error {
+	lc, err := n.srv.LocalClient()
+	if err != nil {
+		return err
+	}
+	_, _, err = lc.CertPair(ctx, domain)
+	return err
+}
+
 // Login starts a new interactive login (a fresh link).
 func (n *Node) Login(ctx context.Context) error {
 	lc, err := n.srv.LocalClient()

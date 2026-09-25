@@ -67,7 +67,7 @@ func (s *Server) startTailscale() error {
 	if s.tlsCert != nil {
 		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{*s.tlsCert}, MinVersion: tls.VersionTLS12})
 	}
-	srv := &http.Server{Handler: s.apiHandler(), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := &http.Server{Handler: s.agentPortHandler("tailscale"), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			log.Printf("Приёмник: Tailscale: %v", err)
@@ -75,11 +75,13 @@ func (s *Server) startTailscale() error {
 	}()
 	s.ts, s.tsSrv = n, srv
 	log.Printf("Приёмник: Tailscale включён, имя %s, порт %s", s.cfg.TailscaleHostname, s.apiPort())
+	go s.startTSWeb() // needs s.tsMu, held here
 	return nil
 }
 
 // stopTailscale leaves the tailnet (the login is kept for the next start).
 func (s *Server) stopTailscale() {
+	s.stopTSWeb()
 	s.tsMu.Lock()
 	n, srv := s.ts, s.tsSrv
 	s.ts, s.tsSrv = nil, nil

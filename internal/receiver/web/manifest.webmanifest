@@ -1,0 +1,15 @@
+{
+  "name": "ASIAIR — приём фото",
+  "short_name": "ASIAIR",
+  "description": "Снимки с ASIAIR: передача, просмотр, удаление",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#12151b",
+  "theme_color": "#2ea05a",
+  "lang": "ru",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
