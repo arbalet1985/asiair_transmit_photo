@@ -329,7 +329,12 @@ func (s *SMB) Open(p string) (io.ReadSeekCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return f, nil
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return newReadAhead(f, f, st.Size()), nil
 }
 
 func (s *SMB) Remove(p string) error {
