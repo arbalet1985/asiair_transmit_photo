@@ -180,3 +180,21 @@ func TestDeleteFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWantedExtensions(t *testing.T) {
+	for _, tc := range []struct {
+		ext, excl []string
+		want      map[string]bool
+	}{
+		{[]string{".fit", ".jpg"}, []string{".jpg"}, map[string]bool{"a.fit": true, "a.JPG": false, "a.png": false}},
+		{nil, []string{".jpg", ".txt"}, map[string]bool{"a.fit": true, "a.jpg": false, "log.TXT": false, "noext": true}},
+		{nil, nil, map[string]bool{"a.txt": true}},
+	} {
+		a := &Agent{cfg: &config.Agent{Extensions: tc.ext, ExcludeExtensions: tc.excl}}
+		for name, want := range tc.want {
+			if got := a.wanted("EMMC Images/Light/" + name); got != want {
+				t.Errorf("ext %v, excl %v: wanted(%s) = %v", tc.ext, tc.excl, name, got)
+			}
+		}
+	}
+}

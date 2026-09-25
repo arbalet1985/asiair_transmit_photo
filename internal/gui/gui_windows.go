@@ -223,9 +223,11 @@ func Run(cfgPath string) error {
 
 func (w *window) setupLog() {
 	logFile := svc.DefaultLogFile(appName)
-	if cfg, err := config.LoadAgent(w.cfgPath); err == nil && cfg.LogFile != "" {
-		logFile = cfg.LogFile
+	c := config.PeekAgent(w.cfgPath) // the log opens even while the settings are incomplete
+	if c.LogFile != "" {
+		logFile = config.ResolvePath(w.cfgPath, c.LogFile)
 	}
+	svc.SetLogRetention(c.LogKeep.D(), c.LogCompressAfter.D())
 	out := io.Writer(w.logs)
 	if f, err := svc.OpenLog(logFile); err == nil {
 		out = io.MultiWriter(f, w.logs)
@@ -452,8 +454,8 @@ func (w *window) togglePause() {
 
 func (w *window) openLog() {
 	logFile := svc.DefaultLogFile(appName)
-	if cfg, err := config.LoadAgent(w.cfgPath); err == nil && cfg.LogFile != "" {
-		logFile = cfg.LogFile
+	if c := config.PeekAgent(w.cfgPath); c.LogFile != "" {
+		logFile = config.ResolvePath(w.cfgPath, c.LogFile)
 	}
 	exec.Command("notepad.exe", logFile).Start()
 }

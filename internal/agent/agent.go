@@ -486,16 +486,11 @@ func (a *Agent) transferLoop(ctx context.Context) {
 }
 
 func (a *Agent) wanted(p string) bool {
-	if len(a.cfg.Extensions) == 0 {
-		return true
-	}
 	ext := strings.ToLower(path.Ext(p))
-	for _, e := range a.cfg.Extensions {
-		if ext == e {
-			return true
-		}
+	if slices.Contains(a.cfg.ExcludeExtensions, ext) {
+		return false
 	}
-	return false
+	return len(a.cfg.Extensions) == 0 || slices.Contains(a.cfg.Extensions, ext)
 }
 
 // excluded reports whether a file lies in an excluded folder (by name or

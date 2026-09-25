@@ -33,6 +33,9 @@ type Agent struct {
 
 	// Extensions to synchronise (lower case, with dot). Empty = all files.
 	Extensions []string `yaml:"extensions"`
+	// ExcludeExtensions are never synchronised, even when Extensions is
+	// empty (all files) or lists them.
+	ExcludeExtensions []string `yaml:"exclude_extensions"`
 	// Path prefixes (inside a share) that are skipped, e.g. "Thumbnail".
 	Exclude []string `yaml:"exclude"`
 
@@ -56,6 +59,7 @@ type Agent struct {
 
 	StateFile string `yaml:"state_file"`
 	LogFile   string `yaml:"log_file"`
+	Logs      `yaml:",inline"`
 
 	// AutoUpdate: install new versions handed out by the receiver. Default true.
 	AutoUpdate Bool `yaml:"auto_update"`
@@ -92,6 +96,7 @@ type Receiver struct {
 	// "500MB", "5%" or "0" (no reserve). Default DefaultMinFree.
 	MinFree string `yaml:"min_free"`
 	LogFile string `yaml:"log_file"`
+	Logs    `yaml:",inline"`
 
 	// AutoUpdate: download new releases from GitHub, update the receiver
 	// and hand the new agent to the agent. Default true.
@@ -114,6 +119,26 @@ type Receiver struct {
 
 	// Path of the file the configuration was loaded from.
 	Path string `yaml:"-"`
+}
+
+// Logs: how long the log files are kept. The log is started anew every
+// day; older days are compressed, then deleted.
+type Logs struct {
+	// LogKeep: days older than this are deleted ("7d"; 0 = never).
+	LogKeep Duration `yaml:"log_keep"`
+	// LogCompressAfter: days older than this are compressed to .gz ("3d";
+	// 0 = at once).
+	LogCompressAfter Duration `yaml:"log_compress_after"`
+}
+
+// Default log retention.
+const (
+	DefaultLogKeep          = 7 * 24 * time.Hour
+	DefaultLogCompressAfter = 3 * 24 * time.Hour
+)
+
+func logDefaults() Logs {
+	return Logs{LogKeep: Duration(DefaultLogKeep), LogCompressAfter: Duration(DefaultLogCompressAfter)}
 }
 
 // Connection kinds of the agent.
@@ -159,12 +184,35 @@ func (b *Bool) UnmarshalYAML(n *yaml.Node) error {
 type Duration time.Duration
 
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
-	v, err := time.ParseDuration(n.Value)
+	v, err := ParseDuration(n.Value)
 	if err != nil {
-		return fmt.Errorf("bad duration %q: %w", n.Value, err)
+		return err
 	}
 	*d = Duration(v)
 	return nil
+}
+
+// ParseDuration understands Go durations ("90s", "1h30m") and days in
+// front of them: "7d", "1d12h".
+func ParseDuration(s string) (time.Duration, error) {
+	orig := s
+	s = strings.TrimSpace(strings.ToLower(s))
+	var days time.Duration
+	if i := strings.IndexByte(s, 'd'); i >= 0 {
+		n, err := strconv.ParseFloat(s[:i], 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("bad duration %q", orig)
+		}
+		days = time.Duration(n * float64(24*time.Hour))
+		if s = s[i+1:]; s == "" {
+			return days, nil
+		}
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("bad duration %q: %w", orig, err)
+	}
+	return days + v, nil
 }
 
 func (d Duration) D() time.Duration { return time.Duration(d) }
@@ -181,6 +229,9 @@ func load(path string, v any) error {
 	}
 	return nil
 }
+
+// ResolvePath makes a path from the settings file cfgPath absolute.
+func ResolvePath(cfgPath, p string) string { return resolve(cfgPath, p) }
 
 // resolve makes p absolute relative to the directory of the config file.
 func resolve(base, p string) string {
@@ -208,6 +259,7 @@ func agentDefaults() *Agent {
 		StateFile:    "agent-state.json",
 		Extensions:   []string{".fit", ".fits", ".fts", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".xisf"},
 		Exclude:      []string{"Thumbnail"},
+		Logs:         logDefaults(),
 	}
 }
 
@@ -239,19 +291,30 @@ func LoadAgent(path string) (*Agent, error) {
 	if c.TailscaleHostname == "" {
 		c.TailscaleHostname = "asiair-agent"
 	}
-	for i, e := range c.Extensions {
-		e = strings.ToLower(e)
-		if !strings.HasPrefix(e, ".") {
-			e = "." + e
-		}
-		c.Extensions[i] = e
-	}
+	c.Extensions = normExts(c.Extensions)
+	c.ExcludeExtensions = normExts(c.ExcludeExtensions)
 	c.Path = path
 	c.ReceiverURL = NormalizeReceiverURL(c.ReceiverURL)
 	c.StateFile = resolve(path, c.StateFile)
 	c.LogFile = resolve(path, c.LogFile)
 	c.TailscaleDir = resolve(path, "tailscale")
 	return c, nil
+}
+
+// normExts makes extensions lower case with a dot: "FIT" -> ".fit".
+func normExts(list []string) []string {
+	var out []string
+	for _, e := range list {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" || e == "." {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // LoadReceiver reads and validates the receiver configuration.
@@ -263,6 +326,7 @@ func LoadReceiver(path string) (*Receiver, error) {
 		DataDir:    "receiver-data",
 		MinFree:    DefaultMinFree,
 		AutoUpdate: true,
+		Logs:       logDefaults(),
 	}
 	if err := load(path, c); err != nil {
 		return nil, err

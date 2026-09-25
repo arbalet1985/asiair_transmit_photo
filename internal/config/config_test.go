@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseRate(t *testing.T) {
@@ -39,7 +40,7 @@ func TestExampleConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.ASIAIR == "" || a.ScanInterval.D().Minutes() != 1 || len(a.Shares) != 1 {
+	if a.ASIAIR == "" || a.ScanInterval.D().Minutes() != 1 || len(a.Shares) != 1 || a.LogKeep.D() != DefaultLogKeep || a.LogCompressAfter.D() != DefaultLogCompressAfter {
 		t.Fatalf("agent example: %+v", a)
 	}
 	r, err := LoadReceiver("../../configs/receiver.example.yaml")
@@ -92,5 +93,20 @@ func TestBool(t *testing.T) {
 	os.WriteFile(p, []byte("token: x\nauto_update: maybe\n"), 0o644)
 	if _, err := LoadReceiver(p); err == nil {
 		t.Error("bad bool accepted")
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	for s, want := range map[string]time.Duration{
+		"7d": 7 * 24 * time.Hour, "1d12h": 36 * time.Hour, "0": 0, "90s": 90 * time.Second, " 3D ": 72 * time.Hour, "0.5d": 12 * time.Hour,
+	} {
+		if got, err := ParseDuration(s); err != nil || got != want {
+			t.Errorf("%q: %v, %v", s, got, err)
+		}
+	}
+	for _, s := range []string{"d", "-1d", "7x", "1d2"} {
+		if _, err := ParseDuration(s); err == nil {
+			t.Errorf("%q accepted", s)
+		}
 	}
 }
