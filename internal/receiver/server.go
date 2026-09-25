@@ -62,6 +62,8 @@ type Server struct {
 
 	previews *previewCache
 
+	stopping chan struct{} // closed when Run ends: held sync requests answer at once
+
 	// Tailscale: the agent API in the user's tailnet
 	tsMu  sync.Mutex
 	ts    *tsnode.Node
@@ -88,7 +90,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6),
-		reserve: reserve, minFree: cfg.MinFree}
+		reserve: reserve, minFree: cfg.MinFree, stopping: make(chan struct{})}
 	s.updater = newUpdater(s)
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
@@ -154,6 +156,7 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	case err = <-errc:
 	}
+	close(s.stopping)
 	// Listeners close at once; an upload in progress gets a moment to
 	// finish and is then cut (the agent resumes it later).
 	sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -308,10 +311,28 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// maxHold limits how long a sync request is held open.
+const maxHold = 60 * time.Second
+
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	var req protocol.SyncRequest
 	if !readJSON(w, r, &req) {
 		return
+	}
+	// long polling: answer when something for the agent changes
+	if req.WaitMS > 0 && req.Rev != 0 {
+		if ch := s.state.Changed(req.Rev); ch != nil {
+			s.state.Sync(req.Status) // the page sees the fresh status meanwhile
+			t := time.NewTimer(min(time.Duration(req.WaitMS)*time.Millisecond, maxHold))
+			defer t.Stop()
+			select {
+			case <-ch:
+			case <-t.C:
+			case <-r.Context().Done():
+				return
+			case <-s.stopping:
+			}
+		}
 	}
 	resp := s.state.Sync(req.Status)
 	resp.DiskFull = s.disk().Full

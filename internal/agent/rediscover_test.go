@@ -158,14 +158,14 @@ func TestFingerprintOnFirstContact(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.Run(ctx)
+	background(t, func() { srv.Run(ctx) })
 
 	cfg := writeAgentConfig(t, tmp, "asiair: 'dir:"+asiair+"'\nreceiver_url: 'https://"+rcfg.Listen+"'\ntoken: 'secret'\nstate_file: state.json\nscan_interval: 200ms\npoll_interval: 200ms\n")
 	a, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go a.Run(ctx)
+	background(t, func() { a.Run(ctx) })
 	waitFor(t, "fingerprint saved", 5*time.Second, func() bool {
 		c, err := config.LoadAgent(cfg.Path)
 		return err == nil && normFP(c.ReceiverFingerprint) == normFP(srv.Fingerprint())

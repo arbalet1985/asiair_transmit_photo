@@ -98,10 +98,19 @@ type FailedFile struct {
 
 type SyncRequest struct {
 	Status AgentStatus `json:"status"`
+	// Long polling: with Rev from the previous answer and WaitMS > 0 the
+	// receiver holds the request until something for the agent changes
+	// (a command, pause, rate, files requested) or WaitMS passes. Receivers
+	// that do not know it answer at once without Rev.
+	Rev    uint64 `json:"rev,omitempty"`
+	WaitMS int    `json:"wait_ms,omitempty"`
 }
 
 // SyncResponse carries pending commands and the rate limit set on the receiver.
 type SyncResponse struct {
+	// Rev identifies the state the answer reflects; sent back in the next
+	// SyncRequest. Zero from receivers without long polling.
+	Rev      uint64    `json:"rev,omitempty"`
 	Commands []Command `json:"commands"`
 	// MaxRate in bytes/s; nil = use the agent's own setting, 0 = unlimited.
 	MaxRate *int64 `json:"max_rate"`
