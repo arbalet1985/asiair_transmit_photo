@@ -57,6 +57,9 @@ type State struct {
 	// is closed then, waking the held sync requests.
 	rev     uint64
 	changed chan struct{}
+
+	session string // agent run and request number of the status kept
+	seq     uint64
 }
 
 // bump marks a change for the agent. Caller holds s.mu.
@@ -146,10 +149,14 @@ func (s *State) QueueDelete(paths []string, alsoLocal bool) (int, error) {
 }
 
 // Sync records the agent status and returns what the agent should do.
-func (s *State) Sync(st protocol.AgentStatus) protocol.SyncResponse {
+func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.p.Status = st
+	// keep the newest status: an older request may be handled after a newer one
+	if req.Session == "" || req.Session != s.session || req.Seq >= s.seq {
+		s.p.Status = req.Status
+		s.session, s.seq = req.Session, req.Seq
+	}
 	s.p.LastSeen = time.Now()
 	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
 		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}}

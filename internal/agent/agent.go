@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -73,8 +74,10 @@ type Agent struct {
 	lastSync time.Time
 	syncErr  string
 
-	syncRev    uint64             // state of the receiver seen last (poll loop only)
-	cancelSync context.CancelFunc // ends the held sync request; guarded by mu
+	syncRev     uint64             // state of the receiver seen last (poll loop only)
+	syncSession string             // random per run: the receiver orders statuses by it and syncSeq
+	syncSeq     uint64             // poll loop only
+	cancelSync  context.CancelFunc // ends the held sync request; guarded by mu
 
 	uploadDone atomic.Int64
 
@@ -145,7 +148,8 @@ func New(cfg *config.Agent) (*Agent, error) {
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
 		partial: map[string]int64{}, fetch: map[string]bool{},
-		wake: make(chan struct{}, 1),
+		wake:        make(chan struct{}, 1),
+		syncSession: newSession(),
 	}
 	a.status.Version = protocol.Version
 	a.status.OS = runtime.GOOS + "/" + runtime.GOARCH
@@ -975,7 +979,8 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	st := a.Status()
 
 	// the receiver holds the request until something changes for the agent
-	req := protocol.SyncRequest{Status: st, Rev: a.syncRev}
+	a.syncSeq++
+	req := protocol.SyncRequest{Status: st, Rev: a.syncRev, Session: a.syncSession, Seq: a.syncSeq}
 	if a.syncRev != 0 {
 		req.WaitMS = int(max(a.cfg.PollInterval.D(), time.Second) / time.Millisecond)
 	}
@@ -1061,4 +1066,10 @@ func (a *Agent) deleteFile(p string) error {
 	a.saveState()
 	a.mu.Unlock()
 	return nil
+}
+
+func newSession() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

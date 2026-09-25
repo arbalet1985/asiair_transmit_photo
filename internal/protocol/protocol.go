@@ -104,6 +104,11 @@ type SyncRequest struct {
 	// that do not know it answer at once without Rev.
 	Rev    uint64 `json:"rev,omitempty"`
 	WaitMS int    `json:"wait_ms,omitempty"`
+	// Session (random per agent run) and Seq (growing per request) let the
+	// receiver ignore a status that arrives after a newer one: a request
+	// the agent gave up may still reach the receiver late.
+	Session string `json:"session,omitempty"`
+	Seq     uint64 `json:"seq,omitempty"`
 }
 
 // SyncResponse carries pending commands and the rate limit set on the receiver.

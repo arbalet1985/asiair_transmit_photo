@@ -101,30 +101,30 @@ func TestStateWaitStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := s.Sync(protocol.AgentStatus{}); !r.WaitStart || !r.Paused {
+	if r := s.Sync(protocol.SyncRequest{}); !r.WaitStart || !r.Paused {
 		t.Fatalf("new receiver must wait for start: %+v", r)
 	}
 	if err := s.SetPaused(true); err != nil {
 		t.Fatal(err)
 	}
-	if r := s.Sync(protocol.AgentStatus{}); !r.WaitStart || !r.Paused {
+	if r := s.Sync(protocol.SyncRequest{}); !r.WaitStart || !r.Paused {
 		t.Fatalf("pause must not start: %+v", r)
 	}
 	if err := s.SetPaused(false); err != nil {
 		t.Fatal(err)
 	}
-	if r := s.Sync(protocol.AgentStatus{}); r.WaitStart || r.Paused {
+	if r := s.Sync(protocol.SyncRequest{}); r.WaitStart || r.Paused {
 		t.Fatalf("start: %+v", r)
 	}
 	// the choice survives a restart
 	s, _ = LoadState(file, nil)
-	if r := s.Sync(protocol.AgentStatus{}); r.WaitStart || r.Paused {
+	if r := s.Sync(protocol.SyncRequest{}); r.WaitStart || r.Paused {
 		t.Fatalf("after restart: %+v", r)
 	}
 	// a state file from an older version (no wait_start) keeps transferring
 	os.WriteFile(file, []byte(`{"commands":[],"max_rate":null}`), 0o644)
 	s, _ = LoadState(file, nil)
-	if r := s.Sync(protocol.AgentStatus{}); r.WaitStart || r.Paused {
+	if r := s.Sync(protocol.SyncRequest{}); r.WaitStart || r.Paused {
 		t.Fatalf("old state: %+v", r)
 	}
 }
@@ -137,7 +137,7 @@ func TestStateFetch(t *testing.T) {
 	if n, _ := s.RequestFetch([]string{"a", "b", "a"}, true); n != 2 {
 		t.Fatalf("added %d", n)
 	}
-	if r := s.Sync(protocol.AgentStatus{}); len(r.Fetch) != 2 {
+	if r := s.Sync(protocol.SyncRequest{}); len(r.Fetch) != 2 {
 		t.Fatalf("sync: %v", r.Fetch)
 	}
 	s.RequestFetch([]string{"b"}, false)
