@@ -94,16 +94,6 @@ func DefaultLogFile(name string) string {
 	return filepath.Join(exeDir(), name+".log")
 }
 
-// OpenLog opens (and rotates when large) a log file for appending.
-func OpenLog(file string) (io.Writer, error) {
-	os.MkdirAll(filepath.Dir(file), 0o755)
-	if st, err := os.Stat(file); err == nil && st.Size() > 20<<20 {
-		os.Remove(file + ".old")
-		os.Rename(file, file+".old")
-	}
-	return os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-}
-
 // setupLog writes the log to the console (when interactive) and to a file.
 func setupLog(file string) {
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -116,11 +106,11 @@ func setupLog(file string) {
 		return
 	}
 	if IsService() {
-		log.SetOutput(f)
 		// a service has no console: send crash reports to the log too
-		if lf, ok := f.(*os.File); ok {
-			debug.SetCrashOutput(lf, debug.CrashOptions{})
-		}
+		crash := func(lf *os.File) { debug.SetCrashOutput(lf, debug.CrashOptions{}) }
+		crash(f.File())
+		f.OnRotate = crash
+		log.SetOutput(f)
 	} else {
 		log.SetOutput(teeWriter{f, os.Stderr})
 	}

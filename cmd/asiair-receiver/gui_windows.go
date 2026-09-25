@@ -41,8 +41,11 @@ func guiMain(cfgPath string) error {
 
 	p, err := prepare(cfgPath, receiver.ModeTray)
 	logFile := svc.DefaultLogFile(app.Name)
-	if p != nil && p.cfg.LogFile != "" {
-		logFile = p.cfg.LogFile
+	if p != nil {
+		if p.cfg.LogFile != "" {
+			logFile = p.cfg.LogFile
+		}
+		svc.SetLogRetention(p.cfg.LogKeep.D(), p.cfg.LogCompressAfter.D())
 	}
 	if f, lerr := svc.OpenLog(logFile); lerr == nil {
 		log.SetOutput(io.MultiWriter(f))

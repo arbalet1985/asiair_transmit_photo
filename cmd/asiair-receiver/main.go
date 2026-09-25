@@ -88,6 +88,7 @@ func main() {
 			}
 			return nil, logFile, err
 		}
+		svc.SetLogRetention(p.cfg.LogKeep.D(), p.cfg.LogCompressAfter.D())
 		p.control.quit = func() { exitSoon() }
 		run := func(ctx context.Context) error {
 			if p.created && svc.Interactive() {

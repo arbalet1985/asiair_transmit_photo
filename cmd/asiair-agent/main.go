@@ -27,6 +27,7 @@ func main() {
 			if err != nil {
 				return nil, "", err
 			}
+			svc.SetLogRetention(cfg.LogKeep.D(), cfg.LogCompressAfter.D())
 			a, err := agent.New(cfg)
 			if err != nil {
 				return nil, cfg.LogFile, err

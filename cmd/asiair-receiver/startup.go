@@ -107,8 +107,11 @@ func exitSoon() {
 // helperLog sends the log of the hidden elevated helper to the receiver log.
 func helperLog(cfgPath string) {
 	logFile := svc.DefaultLogFile(app.Name)
-	if cfg, err := config.LoadReceiver(cfgPath); err == nil && cfg.LogFile != "" {
-		logFile = cfg.LogFile
+	if cfg, err := config.LoadReceiver(cfgPath); err == nil {
+		if cfg.LogFile != "" {
+			logFile = cfg.LogFile
+		}
+		svc.SetLogRetention(cfg.LogKeep.D(), cfg.LogCompressAfter.D())
 	}
 	if f, err := svc.OpenLog(logFile); err == nil {
 		log.SetOutput(f)
