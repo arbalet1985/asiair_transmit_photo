@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ var guestAttempts = [][2]string{{"guest", ""}, {".", "123456789"}}
 type SMB struct {
 	host     string
 	shares   []string
+	auto     bool // shares are listed on the device: every disk share is walked
 	user     string
 	password string
 	domain   string
@@ -35,6 +37,7 @@ type SMB struct {
 	mounts  map[string]*smb2.Share
 
 	lastSkip string // last logged "share skipped" message, to avoid repeating it
+	lastList string // last logged share list
 	login    string // how the current session logged in
 }
 
@@ -44,17 +47,90 @@ func NewSMB(l *Link, defaultShares []string, user, password, domain string) *SMB
 	if _, _, err := net.SplitHostPort(host); err != nil {
 		host = net.JoinHostPort(host, "445")
 	}
-	shares := l.Shares
-	if len(shares) == 0 {
-		shares = defaultShares
-	}
-	if len(shares) == 0 {
-		shares = []string{DefaultShare}
-	}
+	shares, auto := resolveShares(l.Shares, defaultShares)
 	if l.Username != "" {
 		user, password = l.Username, l.Password
 	}
-	return &SMB{host: host, shares: shares, user: user, password: password, domain: domain}
+	return &SMB{host: host, shares: shares, auto: auto, user: user, password: password, domain: domain}
+}
+
+// resolveShares decides which shares to walk. A share named in the link is
+// used alone, except the ASIAIR internal memory ("EMMC Images", which the
+// device search puts into the link): that one stands for the whole ASIAIR.
+// With no share given, or "*" in the list, or the list of older versions
+// (["EMMC Images", "Udisk"]), all disk shares of the device are walked:
+// eMMC, SD card, USB stick, whatever the firmware calls them.
+func resolveShares(linkShares, defaultShares []string) (shares []string, auto bool) {
+	if len(linkShares) > 0 && !(len(linkShares) == 1 && strings.EqualFold(linkShares[0], DefaultShare)) {
+		return linkShares, false
+	}
+	var list []string
+	for _, sh := range defaultShares {
+		if sh = strings.TrimSpace(sh); sh != "" {
+			list = append(list, sh)
+		}
+	}
+	if len(list) == 0 || hasShare(list, AllShares) || isLegacyDefault(list) {
+		return fallbackShares, true
+	}
+	return list, false
+}
+
+// AllShares in the "shares" setting means every disk share of the device.
+const AllShares = "*"
+
+// fallbackShares are walked in the automatic mode when the device does not
+// tell its share list.
+var fallbackShares = []string{DefaultShare, USBShare}
+
+func isLegacyDefault(list []string) bool {
+	return len(list) == 2 && hasShare(list, DefaultShare) && hasShare(list, USBShare)
+}
+
+// shareNames returns the shares to walk: the fixed list, or in the automatic
+// mode the disk shares the device has right now (an SD card or a USB stick
+// can appear and disappear).
+func (s *SMB) shareNames() []string {
+	if !s.auto {
+		return s.shares
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.session == nil {
+		return s.shares
+	}
+	names, err := s.session.ListSharenames()
+	var out []string
+	for _, n := range names {
+		if n != "" && !strings.HasSuffix(n, "$") {
+			out = append(out, n)
+		}
+	}
+	if err != nil || len(out) == 0 {
+		msg := fmt.Sprintf("ASIAIR: список шар не получен (%v), обход: %s", err, strings.Join(s.shares, ", "))
+		if msg != s.lastList {
+			log.Print(msg)
+			s.lastList = msg
+		}
+		return s.shares
+	}
+	sortShares(out)
+	if msg := "ASIAIR: шары: " + strings.Join(out, ", "); msg != s.lastList {
+		log.Print(msg)
+		s.lastList = msg
+	}
+	return out
+}
+
+// sortShares puts the internal memory first, the rest by name.
+func sortShares(names []string) {
+	sort.SliceStable(names, func(i, j int) bool {
+		a, b := strings.EqualFold(names[i], DefaultShare), strings.EqualFold(names[j], DefaultShare)
+		if a != b {
+			return a
+		}
+		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+	})
 }
 
 func (s *SMB) dial(ctx context.Context, user, pass string) (net.Conn, *smb2.Session, error) {
@@ -170,7 +246,8 @@ func (s *SMB) Walk(ctx context.Context, skipDir func(string) bool, fn func(File)
 		return err
 	}
 	var errs []error
-	for _, name := range s.shares {
+	shares := s.shareNames()
+	for _, name := range shares {
 		m, err := s.share(ctx, name)
 		if err != nil {
 			// e.g. "Udisk" when no USB stick is inserted
@@ -184,7 +261,7 @@ func (s *SMB) Walk(ctx context.Context, skipDir func(string) bool, fn func(File)
 			return err
 		}
 	}
-	if len(errs) == len(s.shares) {
+	if len(errs) == len(shares) {
 		s.reset()
 		return errors.Join(errs...)
 	}
@@ -286,7 +363,8 @@ func (s *SMB) Probe(ctx context.Context) (*ProbeResult, error) {
 	}
 	res := &ProbeResult{Login: login}
 	ok := false
-	for _, name := range s.shares {
+	shares := s.shareNames()
+	for _, name := range shares {
 		sp := ShareProbe{Name: name}
 		m, err := s.share(ctx, name)
 		if err == nil {
@@ -300,7 +378,7 @@ func (s *SMB) Probe(ctx context.Context) (*ProbeResult, error) {
 	}
 	if !ok {
 		s.reset()
-		return res, fmt.Errorf("ни одна шара не доступна (%s)", strings.Join(s.shares, ", "))
+		return res, fmt.Errorf("ни одна шара не доступна (%s)", strings.Join(shares, ", "))
 	}
 	return res, nil
 }

@@ -127,3 +127,34 @@ func TestReplaceHost(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveShares(t *testing.T) {
+	cases := []struct {
+		link, def []string
+		want      []string
+		auto      bool
+	}{
+		{nil, nil, fallbackShares, true},
+		{nil, []string{"EMMC Images", "Udisk"}, fallbackShares, true},
+		{nil, []string{"*"}, fallbackShares, true},
+		{[]string{"EMMC Images"}, nil, fallbackShares, true},
+		{[]string{"EMMC Images"}, []string{"EMMC Images"}, []string{"EMMC Images"}, false},
+		{[]string{"Udisk"}, nil, []string{"Udisk"}, false},
+		{[]string{"Astrostation"}, []string{"*"}, []string{"Astrostation"}, false},
+		{nil, []string{"EMMC Images", "TF"}, []string{"EMMC Images", "TF"}, false},
+	}
+	for _, c := range cases {
+		got, auto := resolveShares(c.link, c.def)
+		if auto != c.auto || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("resolveShares(%q, %q) = %q, %v; want %q, %v", c.link, c.def, got, auto, c.want, c.auto)
+		}
+	}
+}
+
+func TestSortShares(t *testing.T) {
+	got := []string{"Udisk", "SD Images", "EMMC Images"}
+	sortShares(got)
+	if want := []string{"EMMC Images", "SD Images", "Udisk"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sortShares = %q; want %q", got, want)
+	}
+}

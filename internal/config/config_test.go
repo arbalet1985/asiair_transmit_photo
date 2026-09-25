@@ -39,7 +39,7 @@ func TestExampleConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.ASIAIR == "" || a.ScanInterval.D().Minutes() != 1 || len(a.Shares) != 2 {
+	if a.ASIAIR == "" || a.ScanInterval.D().Minutes() != 1 || len(a.Shares) != 1 {
 		t.Fatalf("agent example: %+v", a)
 	}
 	r, err := LoadReceiver("../../configs/receiver.example.yaml")
