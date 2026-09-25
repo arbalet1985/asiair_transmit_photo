@@ -110,3 +110,46 @@ func TestDeleteDirResult(t *testing.T) {
 		t.Fatalf("after delete: %+v, fetch %v", snap.Inventory, snap.Fetch)
 	}
 }
+
+// A synchronised folder requests its files, including ones found later,
+// until the synchronisation is turned off.
+func TestSyncDir(t *testing.T) {
+	s, err := LoadState(filepath.Join(t.TempDir(), "state.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetInventory([]protocol.RemoteFile{
+		{Path: "EMMC Images/Light/M31/a.fit", State: protocol.StateQueued},
+		{Path: "EMMC Images/Light/M31/b.fit", State: protocol.StateSent},
+		{Path: "EMMC Images/Light/M31/t.txt", State: protocol.StateFiltered},
+		{Path: "EMMC Images/Light/M31 old/c.fit", State: protocol.StateQueued},
+	})
+	rev := s.Sync(protocol.SyncRequest{}).Rev
+	if err := s.SetSyncDir("EMMC Images/Light/M31", true); err != nil {
+		t.Fatal(err)
+	}
+	if s.Changed(rev) != nil {
+		t.Fatal("the agent was not woken")
+	}
+	fetch := func() []string { return s.Sync(protocol.SyncRequest{}).Fetch }
+	if f := fetch(); len(f) != 1 || f[0] != "EMMC Images/Light/M31/a.fit" {
+		t.Fatalf("fetch: %v", f)
+	}
+	// a new frame in a subfolder is requested as soon as the agent lists it
+	s.SetInventory([]protocol.RemoteFile{
+		{Path: "EMMC Images/Light/M31/a.fit", State: protocol.StateSent},
+		{Path: "EMMC Images/Light/M31/n/d.fit", State: protocol.StateWriting},
+		{Path: "EMMC Images/Light/M31 old/c.fit", State: protocol.StateQueued},
+	})
+	if f := fetch(); len(f) != 1 || f[0] != "EMMC Images/Light/M31/n/d.fit" {
+		t.Fatalf("fetch after new frame: %v", f)
+	}
+	// a file requested by hand elsewhere stays when the folder is turned off
+	s.RequestFetch([]string{"EMMC Images/Light/M31 old/c.fit"}, true)
+	if err := s.SetSyncDir("EMMC Images/Light/M31", false); err != nil {
+		t.Fatal(err)
+	}
+	if f := fetch(); len(f) != 1 || f[0] != "EMMC Images/Light/M31 old/c.fit" || len(s.Snapshot().SyncDirs) != 0 {
+		t.Fatalf("fetch after off: %v", f)
+	}
+}
