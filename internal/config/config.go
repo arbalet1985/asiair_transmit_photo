@@ -195,6 +195,7 @@ func LoadAgent(path string) (*Agent, error) {
 		c.Extensions[i] = e
 	}
 	c.Path = path
+	c.ReceiverURL = NormalizeReceiverURL(c.ReceiverURL)
 	c.StateFile = resolve(path, c.StateFile)
 	c.LogFile = resolve(path, c.LogFile)
 	return c, nil

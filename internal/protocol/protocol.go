@@ -50,9 +50,13 @@ type AgentStatus struct {
 	Version string `json:"version"`
 	OS      string `json:"os,omitempty"` // GOOS/GOARCH, e.g. "windows/amd64"
 	// Update: what the self-update is doing, e.g. "скачивается 1.2.0" or an error.
-	Update     string    `json:"update,omitempty"`
-	ASIAIR     string    `json:"asiair"`
-	Connected  bool      `json:"connected"`
+	Update    string `json:"update,omitempty"`
+	ASIAIR    string `json:"asiair"`
+	Connected bool   `json:"connected"`
+	// ASIAIRError: why the last scan of the ASIAIR failed ("" when it worked).
+	ASIAIRError string `json:"asiair_error,omitempty"`
+	// Searching: the agent is looking for the ASIAIR in the local network.
+	Searching  bool      `json:"searching,omitempty"`
 	LastScan   time.Time `json:"last_scan"`
 	LastError  string    `json:"last_error,omitempty"`
 	Uploading  string    `json:"uploading,omitempty"`

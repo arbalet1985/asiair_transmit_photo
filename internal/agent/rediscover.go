@@ -61,10 +61,18 @@ func (a *Agent) scanFailed(ctx context.Context) {
 		return
 	}
 	a.lastDiscover = time.Now()
+	a.setSearching(true)
 	go func() {
 		defer a.discovering.Store(false)
+		defer a.setSearching(false)
 		a.rediscover(ctx)
 	}()
+}
+
+func (a *Agent) setSearching(on bool) {
+	a.mu.Lock()
+	a.status.Searching = on
+	a.mu.Unlock()
 }
 
 // wantKind guesses from the settings what kind of device the link is for.

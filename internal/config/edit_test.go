@@ -84,3 +84,20 @@ func TestUpdateAgentFile(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNormalizeReceiverURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://home.example.ru":      "https://home.example.ru:8443",
+		"https://home.example.ru/":     "https://home.example.ru:8443/",
+		"https://home.example.ru:9000": "https://home.example.ru:9000",
+		"http://10.0.0.5":              "http://10.0.0.5:8443",
+		" https://212.104.67.93:8443 ": "https://212.104.67.93:8443",
+	} {
+		if got := NormalizeReceiverURL(in); got != want {
+			t.Errorf("NormalizeReceiverURL(%q) = %q; want %q", in, got, want)
+		}
+	}
+	if got := ReceiverHostPort("https://home.example.ru"); got != "home.example.ru:8443" {
+		t.Fatal(got)
+	}
+}
