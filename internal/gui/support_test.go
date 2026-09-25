@@ -99,3 +99,12 @@ func TestAgentIconDiffers(t *testing.T) {
 		t.Fatalf("shapes do not differ: agent %v, receiver %v", a.RGBAAt(3, 3), r.RGBAAt(3, 3))
 	}
 }
+
+func TestTwoLines(t *testing.T) {
+	if got := TwoLines("AA:BB:CC:DD:EE:FF:00:11"); got != "AA:BB:CC:DD:\nEE:FF:00:11" {
+		t.Fatal(got)
+	}
+	if got := TwoLines("abc"); got != "abc" {
+		t.Fatal(got)
+	}
+}

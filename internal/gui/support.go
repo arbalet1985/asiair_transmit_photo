@@ -242,6 +242,17 @@ func formatETA(sec float64) string {
 	return fmt.Sprintf("~%d ч %d мин", m/60, m%60)
 }
 
+// TwoLines splits a long fingerprint "AB:CD:…" in the middle so that a
+// message box does not cut it.
+func TwoLines(fp string) string {
+	parts := strings.Split(fp, ":")
+	if len(parts) < 8 {
+		return fp
+	}
+	h := len(parts) / 2
+	return strings.Join(parts[:h], ":") + ":\n" + strings.Join(parts[h:], ":")
+}
+
 // versionText shows the program version and what the update is doing.
 func versionText(update string) string {
 	v := protocol.Version
