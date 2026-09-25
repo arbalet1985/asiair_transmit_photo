@@ -26,8 +26,11 @@ type tsInfo struct {
 
 // apiPort is the port of the agent API, also used in the tailnet.
 func (s *Server) apiPort() string {
-	if s.APIAddr != nil {
-		if _, p, err := net.SplitHostPort(s.APIAddr.String()); err == nil {
+	s.netMu.Lock()
+	addr := s.APIAddr
+	s.netMu.Unlock()
+	if addr != nil {
+		if _, p, err := net.SplitHostPort(addr.String()); err == nil {
 			return p
 		}
 	}

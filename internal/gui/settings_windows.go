@@ -14,10 +14,13 @@ import (
 	. "github.com/lxn/walk/declarative"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/agent"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/autorun"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/firewall"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/netcheck"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 // Placeholder values from the example configuration: shown as empty fields.
@@ -568,8 +571,38 @@ func (w *window) saveSettings() {
 		return
 	}
 	log.Printf("Настройки сохранены в %s", w.cfgPath)
+	if f.connection() == config.ConnTailscale {
+		w.offerFirewall()
+	}
 	w.tabs.SetCurrentIndex(0)
 	w.restart()
+}
+
+// firewallRule is the name of the agent rule (the service display name).
+const firewallRule = "ASIAIR Photo Agent"
+
+// offerFirewall adds the agent to the Windows firewall before Tailscale
+// opens its network port, so Windows does not ask by itself.
+func (w *window) offerFirewall() {
+	exe, err := update.Executable()
+	if err != nil || !firewall.Supported() || firewall.Allowed(firewallRule, exe) {
+		return
+	}
+	if walk.MsgBox(w.mw, "Брандмауэр Windows",
+		"Для Tailscale агент открывает сетевой порт, и Windows может спросить, разрешить ли ему доступ к сети.\n\n"+
+			"Добавить разрешение сейчас? Windows попросит права администратора.\n\n"+
+			"«Нет» — ничего страшного: агент работает и без разрешения, Windows просто спросит сама.",
+		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+		return
+	}
+	if err := autorun.RunElevated("-config", w.cfgPath, "firewall-allow"); err != nil {
+		log.Printf("Брандмауэр: %v", err)
+		return
+	}
+	// the elevated copy adds the rule; give it a moment before Tailscale starts
+	for i := 0; i < 20 && !firewall.Allowed(firewallRule, exe); i++ {
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // applyAgentConfig shows in the form what the agent saved by itself, so a
