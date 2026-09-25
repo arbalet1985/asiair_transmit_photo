@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -546,7 +547,7 @@ func (a *Agent) scan(ctx context.Context) error {
 	seen := make(map[string]seenInfo, len(files))
 	var queue, kept []source.File
 	for _, f := range files {
-		if a.deleted[f.Path] {
+		if a.isDeleted(f.Path) {
 			continue // removed while the scan was running
 		}
 		present[f.Path] = true
@@ -600,6 +601,7 @@ func (a *Agent) scan(ctx context.Context) error {
 	a.queue = queue
 	a.updateQueueStatus()
 	a.status.LastError = ""
+	filtered = slices.DeleteFunc(filtered, func(f source.File) bool { return a.isDeleted(f.Path) })
 	inv := a.inventoryLocked(filtered, now)
 	a.mu.Unlock()
 
@@ -680,7 +682,7 @@ func (a *Agent) next(onlyFetch bool) (source.File, bool) {
 			break
 		}
 		for _, f := range a.queue {
-			if a.deleted[f.Path] || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
+			if a.isDeleted(f.Path) || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
 				continue
 			}
 			if t, ok := a.retryAt[f.Path]; ok && now.Before(t) {
@@ -1018,8 +1020,8 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 		}
 		res := protocol.CommandResult{ID: c.ID, OK: true}
 		switch c.Type {
-		case protocol.CmdDelete:
-			if err := a.deleteFile(c.Path); err != nil {
+		case protocol.CmdDelete, protocol.CmdDeleteDir:
+			if err := a.deletePath(c.Path, c.Type == protocol.CmdDeleteDir); err != nil {
 				res.OK, res.Error = false, err.Error()
 			}
 		default:
@@ -1032,36 +1034,88 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	return held, nil
 }
 
-func (a *Agent) deleteFile(p string) error {
+// isDeleted reports whether the file, or a folder it lies in, was deleted
+// during this run. Caller holds a.mu.
+func (a *Agent) isDeleted(p string) bool {
+	for len(a.deleted) > 0 && strings.Contains(p, "/") {
+		if a.deleted[p] {
+			return true
+		}
+		p = path.Dir(p)
+	}
+	return false
+}
+
+// deletePath removes a file, or with dir a folder with everything in it,
+// from the ASIAIR and forgets it.
+func (a *Agent) deletePath(p string, dir bool) error {
 	if _, _, err := source.SplitPath(p); err != nil {
 		return err
 	}
+	// p itself, or with dir everything under it
+	under := func(q string) bool { return q == p || dir && strings.HasPrefix(q, p+"/") }
+	what := "удалён"
+	if dir {
+		what = "удалена папка"
+	}
 	a.mu.Lock()
-	a.deleted[p] = true
+	var marked []string
+	mark := func(q string) {
+		if under(q) && !a.deleted[q] {
+			a.deleted[q] = true
+			marked = append(marked, q)
+		}
+	}
+	mark(p)
+	for _, f := range a.files {
+		mark(f.Path)
+	}
 	a.mu.Unlock()
-	err := a.source().Remove(p)
+	var err error
+	if dir {
+		err = a.source().RemoveAll(p)
+	} else {
+		err = a.source().Remove(p)
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		err = nil // already gone
 	}
 	if err != nil {
+		// with a folder some files may be gone already: the next scan tells
 		a.mu.Lock()
-		delete(a.deleted, p)
+		for _, q := range marked {
+			delete(a.deleted, q)
+		}
 		a.mu.Unlock()
 		log.Printf("Агент: не удалось удалить %s на ASIAIR: %v", p, err)
 		return err
 	}
-	log.Printf("Агент: удалён на ASIAIR: %s", p)
+	log.Printf("Агент: %s на ASIAIR: %s", what, p)
 	a.mu.Lock()
-	delete(a.sent, p)
-	delete(a.seen, p)
+	for q := range a.sent {
+		if under(q) {
+			delete(a.sent, q)
+		}
+	}
+	for q := range a.seen {
+		if under(q) {
+			delete(a.seen, q)
+		}
+	}
+	for q := range a.partial {
+		if under(q) {
+			delete(a.partial, q)
+		}
+	}
 	kept := a.files[:0]
 	for _, f := range a.files {
-		if f.Path != p {
+		if under(f.Path) {
+			a.dequeue(f.Path)
+		} else {
 			kept = append(kept, f)
 		}
 	}
 	a.files = kept
-	delete(a.partial, p)
 	a.dequeue(p)
 	a.saveState()
 	a.mu.Unlock()

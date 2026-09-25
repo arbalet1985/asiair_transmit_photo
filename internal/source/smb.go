@@ -353,6 +353,22 @@ func (s *SMB) Remove(p string) error {
 	return err
 }
 
+func (s *SMB) RemoveAll(p string) error {
+	share, rest, err := SplitPath(p)
+	if err != nil {
+		return err
+	}
+	m, err := s.share(context.Background(), share)
+	if err != nil {
+		return err
+	}
+	err = m.RemoveAll(smbPath(rest))
+	if err != nil && isConnErr(err) {
+		s.reset()
+	}
+	return err
+}
+
 func (s *SMB) Close() error {
 	s.reset()
 	return nil

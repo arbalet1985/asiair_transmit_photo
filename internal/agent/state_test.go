@@ -102,7 +102,7 @@ func TestInventoryStatesAndTotals(t *testing.T) {
 	}
 
 	// deleting a file removes it from the totals
-	if err := a.deleteFile(fa.Path); err != nil {
+	if err := a.deletePath(fa.Path, false); err != nil {
 		t.Fatal(err)
 	}
 	a.mu.Lock()
@@ -129,5 +129,54 @@ func TestExcluded(t *testing.T) {
 		if got := a.excluded(p); got != want {
 			t.Errorf("excluded(%q) = %v, want %v", p, got, want)
 		}
+	}
+}
+
+func TestDeleteFolder(t *testing.T) {
+	tmp := t.TempDir()
+	asiair := filepath.Join(tmp, "EMMC Images")
+	writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "M31", "a.fit"), 100)
+	writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "M31", "2026-09-24", "b.fit"), 100)
+	writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "M31", "log.txt"), 10)
+	writeRandom(t, filepath.Join(asiair, "Autorun", "Light", "M31 old", "c.fit"), 100)
+	os.MkdirAll(filepath.Join(asiair, "Autorun", "Light", "M31", "empty"), 0o755)
+
+	cfg := &config.Agent{
+		ASIAIR: "dir:" + asiair, ReceiverURL: "http://127.0.0.1:1", Token: "x", MaxRate: "0",
+		StateFile: filepath.Join(tmp, "state.json"), Extensions: []string{".fit"},
+	}
+	a, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.scan(context.Background())
+
+	for _, bad := range []string{"EMMC Images", "EMMC Images/", "EMMC Images/Autorun/.."} {
+		if err := a.deletePath(bad, true); err == nil {
+			t.Fatalf("deleted %q", bad)
+		}
+	}
+	if err := a.deletePath("EMMC Images/Autorun/Light/M31", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(asiair, "Autorun", "Light", "M31")); !os.IsNotExist(err) {
+		t.Fatal("folder not deleted")
+	}
+	if _, err := os.Stat(filepath.Join(asiair, "Autorun", "Light", "M31 old", "c.fit")); err != nil {
+		t.Fatal("a folder with a similar name was deleted:", err)
+	}
+	a.mu.Lock()
+	var left []string
+	for _, f := range a.files {
+		left = append(left, f.Path)
+	}
+	queued := len(a.queue)
+	a.mu.Unlock()
+	if len(left) != 1 || left[0] != "EMMC Images/Autorun/Light/M31 old/c.fit" || queued != 1 {
+		t.Fatalf("files after delete: %v, queued %d", left, queued)
+	}
+	// a folder that is already gone is not an error
+	if err := a.deletePath("EMMC Images/Autorun/Light/M31", true); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -26,7 +26,7 @@ func TestStateChangedWakesSync(t *testing.T) {
 		}
 	}
 	for name, change := range map[string]func(){
-		"delete": func() { s.QueueDelete([]string{"EMMC Images/a.fit"}, false) },
+		"delete": func() { s.QueueDelete([]string{"EMMC Images/a.fit"}, protocol.CmdDelete, false) },
 		"pause":  func() { s.SetPaused(true) },
 		"rate":   func() { s.SetRate(nil) },
 		"fetch":  func() { s.RequestFetch([]string{"EMMC Images/b.fit"}, true) },
@@ -46,7 +46,7 @@ func TestStateChangedWakesSync(t *testing.T) {
 	}
 	// the same delete again, or a result, changes nothing for the agent
 	ch := s.Changed(rev)
-	s.QueueDelete([]string{"EMMC Images/a.fit"}, false)
+	s.QueueDelete([]string{"EMMC Images/a.fit"}, protocol.CmdDelete, false)
 	if closed(ch) {
 		t.Fatal("a duplicate delete woke the agent")
 	}
@@ -67,5 +67,46 @@ func TestSyncKeepsNewestStatus(t *testing.T) {
 	s.Sync(protocol.SyncRequest{Session: "b", Seq: 1, Status: protocol.AgentStatus{LocalPause: false}})
 	if s.Snapshot().Status.LocalPause {
 		t.Fatal("status of a new agent run ignored")
+	}
+}
+
+// Deleting a folder drops everything under it, and only that.
+func TestDeleteDirResult(t *testing.T) {
+	s, err := LoadState(filepath.Join(t.TempDir(), "state.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := []protocol.RemoteFile{
+		{Path: "EMMC Images/Light/M31/a.fit"},
+		{Path: "EMMC Images/Light/M31/night/b.fit"},
+		{Path: "EMMC Images/Light/M31 old/c.fit"},
+	}
+	s.SetInventory(inv)
+	s.RequestFetch([]string{"EMMC Images/Light/M31/a.fit"}, true)
+	// a file and a folder with the same path are different commands
+	s.QueueDelete([]string{"EMMC Images/Light/M31"}, protocol.CmdDelete, false)
+	if n, _ := s.QueueDelete([]string{"EMMC Images/Light/M31"}, protocol.CmdDeleteDir, true); n != 1 {
+		t.Fatalf("queued %d", n)
+	}
+	snap := s.Snapshot()
+	files, _ := buildFiles(nil, snap.Inventory, snap.Commands, protocol.AgentStatus{}, true, nil)
+	for _, f := range files {
+		if want := f.Path != "EMMC Images/Light/M31 old/c.fit"; f.Pending != want {
+			t.Fatalf("%s: pending %v", f.Path, f.Pending)
+		}
+	}
+	var id string
+	for _, c := range snap.Commands {
+		if c.Type == protocol.CmdDeleteDir {
+			id = c.ID
+		}
+	}
+	c, err := s.Result(protocol.CommandResult{ID: id, OK: true})
+	if err != nil || c == nil || !c.IsDir() || !c.AlsoLocal {
+		t.Fatalf("result: %+v, %v", c, err)
+	}
+	snap = s.Snapshot()
+	if len(snap.Inventory) != 1 || snap.Inventory[0].Path != "EMMC Images/Light/M31 old/c.fit" || len(snap.Fetch) != 0 {
+		t.Fatalf("after delete: %+v, fetch %v", snap.Inventory, snap.Fetch)
 	}
 }

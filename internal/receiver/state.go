@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,15 @@ type Command struct {
 	Error     string    `json:"error,omitempty"`
 	Created   time.Time `json:"created"`
 	Updated   time.Time `json:"updated"`
+}
+
+// IsDir reports a command deleting a whole folder.
+func (c *Command) IsDir() bool { return c.Type == protocol.CmdDeleteDir }
+
+// Covers reports whether the file p is deleted by the command: the file
+// itself, or any file in the folder and its subfolders.
+func (c *Command) Covers(p string) bool {
+	return p == c.Path || c.IsDir() && strings.HasPrefix(p, c.Path+"/")
 }
 
 // persisted is what survives a restart.
@@ -119,25 +129,27 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-// QueueDelete adds delete commands for paths not already pending.
-func (s *State) QueueDelete(paths []string, alsoLocal bool) (int, error) {
+// QueueDelete adds delete commands for paths not already pending: files
+// with protocol.CmdDelete, whole folders with protocol.CmdDeleteDir.
+func (s *State) QueueDelete(paths []string, typ string, alsoLocal bool) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pending := map[string]bool{}
+	pending := map[protocol.Command]bool{}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
-			pending[c.Path] = true
+			pending[protocol.Command{Type: c.Type, Path: c.Path}] = true
 		}
 	}
 	now := time.Now()
 	n := 0
 	for _, p := range paths {
-		if pending[p] {
+		key := protocol.Command{Type: typ, Path: p}
+		if pending[key] {
 			continue
 		}
-		pending[p] = true
+		pending[key] = true
 		s.p.Commands = append(s.p.Commands, &Command{
-			Command:   protocol.Command{ID: newID(), Type: protocol.CmdDelete, Path: p},
+			Command:   protocol.Command{ID: newID(), Type: typ, Path: p},
 			AlsoLocal: alsoLocal, Status: StatusPending, Created: now, Updated: now,
 		})
 		n++
@@ -179,14 +191,10 @@ func (s *State) Result(r protocol.CommandResult) (*Command, error) {
 		c.Updated = time.Now()
 		if r.OK {
 			c.Status, c.Error = StatusDone, ""
-			// drop the file from the inventory right away
-			inv := s.p.Inventory[:0]
-			for _, f := range s.p.Inventory {
-				if f.Path != c.Path {
-					inv = append(inv, f)
-				}
-			}
-			s.p.Inventory = inv
+			// drop the file (or the folder's files) from the inventory right away
+			gone := func(p string) bool { return c.Covers(p) }
+			s.p.Inventory = slices.DeleteFunc(s.p.Inventory, func(f protocol.RemoteFile) bool { return gone(f.Path) })
+			s.p.Fetch = slices.DeleteFunc(s.p.Fetch, gone)
 		} else {
 			c.Status, c.Error = StatusFailed, r.Error
 		}

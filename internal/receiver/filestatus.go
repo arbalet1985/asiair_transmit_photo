@@ -87,8 +87,17 @@ func buildFiles(local []LocalFile, inv []protocol.RemoteFile, cmds []*Command,
 		state[rf.Path] = st
 	}
 	for _, c := range cmds {
-		if c.Status == StatusPending {
+		if c.Status != StatusPending {
+			continue
+		}
+		if !c.IsDir() {
 			if f, ok := byPath[c.Path]; ok {
+				f.Pending = true
+			}
+			continue
+		}
+		for _, f := range files {
+			if c.Covers(f.Path) {
 				f.Pending = true
 			}
 		}

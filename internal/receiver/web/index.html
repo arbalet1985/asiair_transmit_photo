@@ -394,6 +394,19 @@
     </div>
   </div>
 </dialog>
+<dialog id="delDirDlg">
+  <h2>Удалить папку на ASIAIR целиком</h2>
+  <div class="hint" style="margin-top:0">Папка удаляется со всеми файлами и вложенными папками, в том числе с файлами, которые скрыты фильтрами или не передаются. Выберите, какую папку удалить:</div>
+  <div class="dirlist" id="ddLevels" style="height:auto; max-height:260px; margin-top:8px"></div>
+  <label><input type="checkbox" id="ddLocal"> удалить и у себя (эту папку на этом компьютере тоже)</label>
+  <div id="ddInfo" style="margin-top:10px; white-space:pre-line"></div>
+  <div class="err" id="ddWarn" style="margin-top:6px; white-space:pre-line"></div>
+  <div class="toolbar" style="margin-top:10px">
+    <span class="spacer"></span>
+    <button id="ddCancel">Отмена</button>
+    <button class="danger" id="ddOk">Удалить папку</button>
+  </div>
+</dialog>
 <dialog id="dirDlg">
   <h2>Выбор папки для снимков</h2>
   <div class="crumbs" id="dirRoots"></div>
@@ -660,6 +673,7 @@ function renderFiles() {
       if (xfer.length) head.append(el("span", { className: "fbar" }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
       const toFetch = inFolder.filter(x => canFetch(x) && !requested.has(x.path)).map(x => x.path);
       if (paused && toFetch.length) head.append(miniButton(`⤓ Скачать папку (${toFetch.length})`, "Передать файлы папки, не снимая паузу", () => fetchFiles(toFetch)));
+      if (selectable.length) head.append(miniButton("🗑 Удалить папку", "Удалить на ASIAIR эту папку (или папку выше) целиком, со всеми файлами и вложенными папками", () => openDelDir(fname)));
       const tr = el("tr", { className: "folder" }, el("td", {}, cb), head);
       tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); saveCollapsed(); renderFiles(); };
       tb.append(tr);
@@ -741,7 +755,9 @@ function renderCmds() {
       b.onclick = async () => { await post("/ui/api/cancel", { id: c.id }); refresh(); };
       td.append(b);
     }
-    tb.append(el("tr", {}, el("td", { className: "name", textContent: c.path }), el("td", {}, st),
+    const what = c.type === "delete_dir" ? el("td", { className: "name" }, "📁 " + c.path + "/ ", el("span", { className: "muted", textContent: "папка целиком" }))
+      : el("td", { className: "name", textContent: c.path });
+    tb.append(el("tr", {}, what, el("td", {}, st),
       el("td", { textContent: fmtTime(c.created) }), td));
   }
 }
@@ -1001,6 +1017,57 @@ $("delBtn").onclick = async () => {
   if (notYet.length && !also) msg += `\n\n⚠ ${notYet.length} из них ещё НЕ получены этим компьютером (${fmtBytes(notYet.reduce((a, f) => a + f.size, 0))}) — после удаления их не останется нигде.`;
   msg += "\n\nЭто действие необратимо. Удалить?";
   if (confirm(msg)) queueDelete(files.map(f => f.path), also);
+};
+// deleting a whole folder: the folder of a row or any folder above it
+let ddLevel = "";
+const underDir = dir => state.files.filter(f => f.path.startsWith(dir + "/"));
+function openDelDir(folder) {
+  const parts = folder.split("/");
+  const levels = [];
+  for (let i = parts.length; i >= 2; i--) levels.push(parts.slice(0, i).join("/")); // never the whole storage
+  if (!levels.length) return;
+  ddLevel = levels[0];
+  $("ddLocal").checked = $("alsoLocal").checked;
+  const box = $("ddLevels");
+  box.replaceChildren();
+  for (const lv of levels) {
+    const remote = underDir(lv).filter(f => f.remote);
+    const size = remote.reduce((a, f) => a + (f.remote_size || f.size), 0);
+    const rb = el("input", { type: "radio", name: "ddLevel", checked: lv === ddLevel });
+    rb.onchange = () => { ddLevel = lv; renderDelDir(); };
+    const rest = lv.slice(shareOf(lv).length + 1);
+    box.append(el("div", {}, el("label", { style: "cursor:pointer" }, rb, " 📁 ", el("span", { className: "mono", textContent: rest }), "  ",
+      el("span", { className: "muted", textContent: `${remote.length} файл(ов), ${fmtBytes(size)}` }))));
+  }
+  renderDelDir();
+  $("delDirDlg").showModal();
+}
+function renderDelDir() {
+  const files = underDir(ddLevel), remote = files.filter(f => f.remote);
+  const also = $("ddLocal").checked;
+  const size = remote.reduce((a, f) => a + (f.remote_size || f.size), 0);
+  const notYet = remote.filter(f => !(f.local && f.size === f.remote_size));
+  const localOnly = files.filter(f => f.local && !f.remote);
+  let info = `Будет удалено на ASIAIR (${shareLabel(shareOf(ddLevel))}): папка «${ddLevel.slice(shareOf(ddLevel).length + 1)}» — ${remote.length} файл(ов), ${fmtBytes(size)}`;
+  if (also) info += `\nНа этом компьютере будет удалена эта папка целиком: ${files.filter(f => f.local).length} файл(ов).`;
+  $("ddInfo").textContent = info;
+  const warn = [];
+  if (notYet.length) warn.push(`⚠ ${notYet.length} файл(ов) (${fmtBytes(notYet.reduce((a, f) => a + (f.remote_size || f.size), 0))}) ещё НЕ получены этим компьютером — после удаления их не останется нигде.`);
+  if (also && localOnly.length) warn.push(`⚠ Вместе с папкой у себя удалятся и ${localOnly.length} файл(ов), которых на ASIAIR уже нет.`);
+  warn.push("Это действие необратимо.");
+  $("ddWarn").textContent = warn.join("\n");
+}
+$("ddLocal").onchange = renderDelDir;
+$("ddCancel").onclick = () => $("delDirDlg").close();
+$("ddOk").onclick = async () => {
+  const dir = ddLevel, also = $("ddLocal").checked;
+  $("delDirDlg").close();
+  try {
+    await post("/ui/api/delete", { dirs: [dir], also_local: also });
+    for (const p of [...selected]) if (p.startsWith(dir + "/")) selected.delete(p);
+    toast("Папка поставлена в очередь на удаление");
+    refresh();
+  } catch (e) { alert("Ошибка: " + e.message); }
 };
 $("delReceived").onclick = async () => {
   const files = receivedToDelete();

@@ -143,7 +143,12 @@ type UpdateOffer struct {
 }
 
 // Command types.
-const CmdDelete = "delete"
+const (
+	CmdDelete = "delete" // Path is a file
+	// CmdDeleteDir removes the folder Path with all its files and subfolders.
+	// Agents older than 1.11 answer "неизвестная команда".
+	CmdDeleteDir = "delete_dir"
+)
 
 type Command struct {
 	ID   string `json:"id"`

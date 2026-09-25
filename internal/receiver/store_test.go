@@ -149,3 +149,28 @@ func TestStateFetch(t *testing.T) {
 		t.Fatalf("left: %v", f)
 	}
 }
+
+func TestStoreRemoveDir(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"EMMC Images/Light/M31/a.fit", "EMMC Images/Light/M31/n/b.fit", "EMMC Images/Other/c.fit"} {
+		os.MkdirAll(filepath.Dir(s.Local(p)), 0o755)
+		os.WriteFile(s.Local(p), []byte("x"), 0o644)
+	}
+	if err := s.RemoveDir("EMMC Images"); err == nil {
+		t.Fatal("removed a whole storage")
+	}
+	if err := s.RemoveDir("EMMC Images/Light/M31"); err != nil {
+		t.Fatal(err)
+	}
+	// the emptied parent goes too, the rest stays
+	if _, err := os.Stat(filepath.Join(root, "EMMC Images", "Light")); !os.IsNotExist(err) {
+		t.Fatal("empty parent left")
+	}
+	if _, err := os.Stat(s.Local("EMMC Images/Other/c.fit")); err != nil {
+		t.Fatal(err)
+	}
+}

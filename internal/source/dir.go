@@ -141,6 +141,14 @@ func (d *Dir) Remove(p string) error {
 	return os.Remove(lp)
 }
 
+func (d *Dir) RemoveAll(p string) error {
+	lp, err := d.local(p)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(lp)
+}
+
 func (d *Dir) Close() error { return nil }
 
 func (d *Dir) Probe(ctx context.Context) (*ProbeResult, error) {
