@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
 
@@ -30,7 +31,7 @@ type client struct {
 }
 
 func newClient(base, token, fingerprint string) (*client, error) {
-	u, err := url.Parse(strings.TrimRight(base, "/"))
+	u, err := url.Parse(strings.TrimRight(config.NormalizeReceiverURL(base), "/"))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("receiver_url %q: ожидается https://адрес:порт", base)
 	}
@@ -169,7 +170,7 @@ func CheckReceiver(ctx context.Context, receiverURL, token, fingerprint string) 
 // FetchFingerprint connects to an https receiver and returns the SHA-256
 // fingerprint of its certificate, so the user can confirm and pin it.
 func FetchFingerprint(ctx context.Context, receiverURL string) (string, error) {
-	u, err := url.Parse(receiverURL)
+	u, err := url.Parse(config.NormalizeReceiverURL(receiverURL))
 	if err != nil || u.Scheme != "https" {
 		return "", errors.New("отпечаток есть только у https-адреса")
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/agent"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/netcheck"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 )
 
@@ -221,6 +222,20 @@ func (w *window) testASIAIR() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// first: does the device answer on the file sharing port at all
+		if l, err := source.ParseLink(link); err == nil && l.Kind == "smb" {
+			hp := l.Host
+			if _, _, err := net.SplitHostPort(hp); err != nil {
+				hp = net.JoinHostPort(hp, "445")
+			}
+			if r := netcheck.Check(ctx, hp, 10*time.Second); !r.OK() {
+				w.mw.Synchronize(func() {
+					f.testASIAIR.SetEnabled(true)
+					w.netFailed(f.asiairResult, "ASIAIR", r, r.Advice("asiair"))
+				})
+				return
+			}
+		}
 		var res *source.ProbeResult
 		src, err := source.New(link, shares, user, pass, "")
 		if err == nil {
@@ -358,6 +373,13 @@ func (w *window) findDevices() {
 	}()
 }
 
+// netFailed shows where the network check stopped and what to look at.
+func (w *window) netFailed(l *walk.Label, what string, r netcheck.Result, advice string) {
+	setResult(l, false, r.Summary()+". "+advice)
+	log.Printf("Проверка: %s: %s. %s", what, r.Summary(), advice)
+	walk.MsgBox(w.mw, what+" недоступен", r.Summary()+".\n\n"+advice, walk.MsgBoxIconWarning)
+}
+
 func (w *window) testReceiver() {
 	f := &w.form
 	u, err := w.receiverURL()
@@ -373,6 +395,16 @@ func (w *window) testReceiver() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// first: does anything answer on the receiver port at all
+		r := netcheck.Check(ctx, config.ReceiverHostPort(u), 10*time.Second)
+		if !r.OK() {
+			w.mw.Synchronize(func() {
+				f.testReceiver.SetEnabled(true)
+				w.netFailed(f.receiverResult, "Приёмник", r, r.Advice("receiver"))
+			})
+			return
+		}
+		log.Printf("Проверка приёмника: %s", r.Summary())
 		var newFP string
 		var err error
 		if fp == "" && strings.HasPrefix(u, "https://") {

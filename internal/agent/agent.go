@@ -472,9 +472,11 @@ func (a *Agent) scan(ctx context.Context) error {
 	a.mu.Lock()
 	a.status.Connected = err == nil
 	if err != nil {
+		a.status.ASIAIRError = err.Error()
 		a.mu.Unlock()
 		return err
 	}
+	a.status.ASIAIRError = ""
 	a.scanErrors, a.everScanned = 0, true
 	now := time.Now()
 	a.status.LastScan = now

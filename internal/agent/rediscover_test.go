@@ -61,6 +61,9 @@ state_file: state.json
 	}
 	dead := &deadSource{}
 	a.src = dead
+	if err := a.scan(context.Background()); err == nil || a.Status().ASIAIRError == "" || a.Status().Connected {
+		t.Fatalf("failed scan not reported: %+v", a.Status())
+	}
 	var changed map[string]string
 	a.OnConfigChanged = func(v map[string]string) { changed = v }
 
@@ -96,6 +99,9 @@ state_file: state.json
 	}
 	if err := a.scan(context.Background()); err != nil || a.Status().TotalFiles != 1 {
 		t.Fatalf("scan at the new address: %v %+v", err, a.Status())
+	}
+	if st := a.Status(); st.ASIAIRError != "" || !st.Connected {
+		t.Fatalf("error not cleared: %+v", st)
 	}
 }
 

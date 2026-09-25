@@ -33,6 +33,27 @@ func SplitReceiverURL(u string) (scheme, host string, port int) {
 	return scheme, host, port
 }
 
+// NormalizeReceiverURL adds the default port to a receiver address written
+// without one ("https://home.example.ru" → "https://home.example.ru:8443"),
+// so the agent goes to the same port the settings form shows.
+func NormalizeReceiverURL(u string) string {
+	p, err := url.Parse(strings.TrimSpace(u))
+	if err != nil || p.Host == "" || p.Port() != "" {
+		return strings.TrimSpace(u)
+	}
+	p.Host = net.JoinHostPort(p.Hostname(), strconv.Itoa(DefaultReceiverPort))
+	return p.String()
+}
+
+// ReceiverHostPort returns "host:port" of a receiver address.
+func ReceiverHostPort(u string) string {
+	p, err := url.Parse(NormalizeReceiverURL(u))
+	if err != nil {
+		return ""
+	}
+	return p.Host
+}
+
 // JoinReceiverURL builds the receiver URL from form fields. The address may
 // also be typed as "host:port" or with a scheme; those take precedence.
 func JoinReceiverURL(scheme, host string, port int) (string, error) {

@@ -111,6 +111,7 @@
   <span class="badge info" id="hdrProgress" hidden></span>
   <span class="badge pend" id="hdrWait" hidden>передача не запущена</span>
   <span class="badge off" id="hdrDisk" hidden>мало места на диске</span>
+  <span class="badge off" id="hdrAsiair" hidden>ASIAIR недоступен</span>
   <span class="muted" id="destDir"></span>
 </header>
 <main>
@@ -553,6 +554,39 @@ function renderCmds() {
   }
 }
 
+// deviceHost returns the address of the ASIAIR from its link, or "" for a
+// folder or a USB stick.
+function deviceHost(link) {
+  const l = (link || "").trim();
+  if (/^(dir|usb):/i.test(l)) return "";
+  let m = l.match(/^smb:\/\/(?:[^@\/]*@)?([^\/]+)/i) || l.match(/^(?:\\\\|\/\/)([^\\\/]+)/);
+  return m ? m[1] : l;
+}
+function renderAsiair(a, stale) {
+  const dd = $("aAsiair");
+  dd.innerHTML = "";
+  const online = state.agent_online;
+  $("hdrAsiair").hidden = !(online && a.asiair && !a.connected && (a.asiair_error || a.last_scan && !a.last_scan.startsWith("0001")));
+  if (!a.asiair) { dd.textContent = "—"; return; }
+  const host = deviceHost(a.asiair);
+  const what = /^usb:/i.test(a.asiair) ? "флешка в компьютере агента" : /^dir:/i.test(a.asiair) ? "папка на компьютере агента" : "";
+  if (stale) {
+    dd.textContent = `${a.asiair} — ${a.connected ? "был доступен" : "был недоступен"} (на ${fmtTime(state.last_seen)})`;
+    return;
+  }
+  const scanned = a.last_scan && !a.last_scan.startsWith("0001");
+  const badge = a.connected
+    ? el("span", { className: "badge on", textContent: "доступен" })
+    : el("span", { className: "badge " + (scanned || a.asiair_error ? "off" : "pend"), textContent: scanned || a.asiair_error ? "недоступен" : "подключение…" });
+  const addr = el("b", { textContent: host || what || a.asiair });
+  dd.append(badge, " ", addr);
+  if (host && a.asiair !== host) dd.append(el("span", { className: "muted", textContent: " · " + a.asiair }));
+  if (a.connected) dd.append(el("span", { className: "muted", textContent: " · обход " + ago(a.last_scan) }));
+  if (a.searching) dd.append(el("div", { className: "muted", textContent: "агент ищет ASIAIR в сети обсерватории…" }));
+  if (!a.connected && a.asiair_error) dd.append(el("div", { className: "err", textContent: a.asiair_error }));
+  if (!a.connected && scanned) dd.append(el("div", { className: "muted", textContent: "последний удачный обход: " + fmtTime(a.last_scan) }));
+}
+
 function renderStatus() {
   const a = state.agent;
   $("agentBadge").className = "badge " + (state.agent_online ? "on" : "off");
@@ -566,9 +600,7 @@ function renderStatus() {
   $("aStale").textContent = !everSeen
     ? "Агент ещё ни разу не выходил на связь с этим приёмником. Проверьте в окне агента поле «Ошибка» и журнал."
     : `Агент не на связи с ${fmtTime(state.last_seen)}. Ниже — то, что он сообщил в последний раз, сейчас это может быть не так. Причину покажет окно агента: поле «Ошибка» и журнал.`;
-  $("aAsiair").textContent = !a.asiair ? "—" : stale
-    ? `${a.asiair} — ${a.connected ? "было подключено" : "не было подключения"} (на ${fmtTime(state.last_seen)})`
-    : `${a.asiair} — ${a.connected ? "подключено" : "нет подключения"}`;
+  renderAsiair(a, stale);
   $("aSeen").textContent = stale ? "нет связи с " + fmtTime(state.last_seen) : ago(state.last_seen);
   $("aScan").textContent = ago(a.last_scan);
   $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
