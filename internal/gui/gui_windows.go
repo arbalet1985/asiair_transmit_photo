@@ -60,6 +60,7 @@ func (r *runner) start(cfgPath string, paused bool) {
 	}
 	if err == nil {
 		r.agent.Restart = svc.Restart
+		r.agent.ConfirmUpdate = true // the user installs new versions with "Обновить"
 		r.agent.OnConfigChanged = r.onConfig
 	}
 	if err != nil {
@@ -114,9 +115,14 @@ type window struct {
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
 	lblTotal, lblVersion                                                 *walk.Label
 	lblTSCaption, lblTS                                                  *walk.Label
+	lblRate, lblRateNote                                                 *walk.Label
+	lblDiag, lblDiagTime, lblDiagPath                                    *walk.Label
+	rateSlider                                                           *walk.Slider
+	rateBps                                                              int64 // own limit shown by the slider
+	rateGen                                                              int   // debounces saving the slider
 	btnTSLogin                                                           *walk.PushButton
-	btnPause                                                             *walk.PushButton
-	actPause                                                             *walk.Action
+	btnPause, btnUpdate                                                  *walk.PushButton
+	actPause, actUpdate                                                  *walk.Action
 	progress, totalBar                                                   *walk.ProgressBar
 	cbAutostart, cbMinimized                                             *walk.CheckBox
 	logView                                                              *walk.ListBox
@@ -124,7 +130,8 @@ type window struct {
 	tabs                                                                 *walk.TabWidget
 	form                                                                 settingsForm
 
-	tsNotified string // login link already announced in the tray
+	tsNotified     string // login link already announced in the tray
+	updateNotified string // new version already announced in the tray
 
 	ready    bool // set after the window is built; checkbox handlers ignore the initial state
 	quitting bool
@@ -191,6 +198,7 @@ func Run(cfgPath string) error {
 	})
 
 	w.loadForm()
+	w.loadRate()
 	if !created {
 		w.run.start(cfgPath, w.settings.Paused)
 	}
@@ -285,12 +293,34 @@ func (w *window) create() error {
 									Label{Text: "Передаётся:"}, Label{AssignTo: &w.lblFile, Text: "—"},
 									Label{Text: ""}, ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
 									Label{Text: "Скорость:"}, Label{AssignTo: &w.lblSpeed, Text: "—"},
+									Label{Text: "Диагностика:"}, Label{AssignTo: &w.lblDiag, Text: "—"},
+									Label{Text: ""}, Label{AssignTo: &w.lblDiagTime, Text: "", TextColor: colorDim, Visible: false},
+									Label{Text: ""}, Label{AssignTo: &w.lblDiagPath, Text: "", Visible: false},
 									Label{Text: "Всего:"}, ProgressBar{AssignTo: &w.totalBar, MaxValue: 1000},
 									Label{Text: ""}, Label{AssignTo: &w.lblTotal, Text: "—"},
 									Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
 									Label{Text: "Отправлено:"}, Label{AssignTo: &w.lblSent, Text: "—"},
 									Label{Text: "Ошибка:"}, Label{AssignTo: &w.lblErr, Text: "—", TextColor: walk.RGB(200, 40, 40)},
-									Label{Text: "Версия:"}, Label{AssignTo: &w.lblVersion, Text: versionText("")},
+									Label{Text: "Версия:"},
+									Composite{
+										Layout: HBox{MarginsZero: true},
+										Children: []Widget{
+											Label{AssignTo: &w.lblVersion, Text: versionText("")},
+											PushButton{AssignTo: &w.btnUpdate, Text: "Обновить", Visible: false, OnClicked: w.installUpdate},
+											HSpacer{},
+										},
+									},
+								},
+							},
+							GroupBox{
+								Title:  "Скорость передачи",
+								Layout: Grid{Columns: 2, Spacing: 6},
+								Children: []Widget{
+									Slider{AssignTo: &w.rateSlider, MinValue: 1, MaxValue: config.RateSliderMax + 1, LineSize: 1, PageSize: 5,
+										ToolTipText: "Шаг 1 MB/s; крайнее правое положение — без ограничения", OnValueChanged: w.onRateChanged},
+									Label{AssignTo: &w.lblRate, Text: "—", MinSize: Size{Width: 120}},
+									Label{AssignTo: &w.lblRateNote, ColumnSpan: 2, TextColor: colorDim,
+										Text: "Сохраняется сразу. Страница приёмника может только уменьшить эту скорость."},
 								},
 							},
 							GroupBox{
@@ -362,6 +392,8 @@ func (w *window) create() error {
 	addAction("Настройки", func() { w.tabs.SetCurrentIndex(1); w.show() })
 	w.actPause = addAction(pauseText(false), w.togglePause)
 	addAction("Перезапустить агент", w.restart)
+	w.actUpdate = addAction("Обновить", w.installUpdate)
+	w.actUpdate.SetVisible(false)
 	w.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	addAction("Выход", w.quit)
 
@@ -523,11 +555,12 @@ func (w *window) update() {
 		} else if cfgErr != nil {
 			msg = "ошибка в настройках: " + cfgErr.Error()
 		}
-		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent, w.lblTotal} {
+		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent, w.lblTotal, w.lblDiag} {
 			l.SetText("—")
 		}
 		setShort(w.lblErr, msg, maxStatus)
 		w.updateTailscale(nil)
+		w.updateOffer(nil)
 		w.progress.SetValue(0)
 		w.totalBar.SetValue(0)
 		w.setTray(StateStopped, "ASIAIR Agent — "+msg)
@@ -537,6 +570,9 @@ func (w *window) update() {
 	lastSync, syncErr := a.Receiver()
 	w.updateTailscale(a)
 	setShort(w.lblVersion, versionText(st.Update), maxStatus)
+	w.updateRateNote(st)
+	w.updateDiag(st)
+	w.updateOffer(a)
 
 	switch {
 	case st.LastScan.IsZero() && st.LastError == "":
@@ -554,25 +590,30 @@ func (w *window) update() {
 	default:
 		w.lblReceiver.SetText("на связи (" + ago(lastSync) + ")")
 	}
+	streams := fmt.Sprintf(", одновременно файлов: %d", max(st.Streams, 1))
 	if st.Uploading != "" {
-		setShortTail(w.lblFile, st.Uploading, maxStatus)
+		file := st.Uploading
+		if n := len(st.Uploads); n > 1 {
+			file = fmt.Sprintf("%s (и ещё %d)", file, n-1)
+		}
+		setShortTail(w.lblFile, file, maxStatus)
 		if st.UploadSize > 0 {
 			w.progress.SetValue(int(st.UploadDone * 1000 / st.UploadSize))
 		}
-		w.lblSpeed.SetText(fmt.Sprintf("%s/s (лимит: %s)", config.FormatBytes(int64(st.Speed)), config.FormatRate(st.Rate)))
+		w.lblSpeed.SetText(fmt.Sprintf("%s/s (лимит: %s%s)", config.FormatBytes(int64(st.Speed)), config.FormatRate(st.Rate), streams))
 	} else {
 		w.lblFile.SetText("—")
 		if st.Paused {
 			w.lblFile.SetText(pauseLabel(st))
 		}
 		w.progress.SetValue(0)
-		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + ")")
+		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + streams + ")")
 	}
 	// overall progress: files on the ASIAIR already at the receiver, plus the
 	// part of the current file
 	done := st.DoneBytes
-	if st.Uploading != "" {
-		done += st.UploadDone
+	for _, u := range st.Uploads {
+		done += u.Done
 	}
 	if st.TotalBytes > 0 {
 		w.totalBar.SetValue(int(done * 1000 / st.TotalBytes))
@@ -653,4 +694,142 @@ func (w *window) tailscaleLogin() {
 	if u := a.Tailscale().AuthURL; u != "" {
 		svc.OpenBrowser(u)
 	}
+}
+
+// updateOffer shows the "Обновить" button when the receiver has a new
+// version, and announces it once in the tray.
+func (w *window) updateOffer(a *agent.Agent) {
+	v := ""
+	if a != nil {
+		v = a.UpdateAvailable()
+	}
+	w.btnUpdate.SetVisible(v != "")
+	w.actUpdate.SetVisible(v != "")
+	if v == "" {
+		return
+	}
+	w.btnUpdate.SetText("Обновить до " + v)
+	w.actUpdate.SetText("Обновить до " + v + "…")
+	if v != w.updateNotified {
+		w.updateNotified = v
+		w.ni.ShowInfo("ASIAIR Agent", "Вышла новая версия "+v+". Откройте окно агента и нажмите «Обновить до "+v+"».")
+	}
+}
+
+// installUpdate asks and installs the new version; the agent restarts.
+func (w *window) installUpdate() {
+	a, _ := w.run.state()
+	if a == nil {
+		return
+	}
+	v := a.UpdateAvailable()
+	if v == "" {
+		return
+	}
+	w.show()
+	if walk.MsgBox(w.mw, "ASIAIR Agent",
+		"Установить версию "+v+"?\n\nАгент перезапустится, передача снимков продолжится с того же места. "+
+			"Если новая версия не заработает, через несколько минут вернётся прежняя.",
+		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+		return
+	}
+	if err := a.InstallUpdate(context.Background()); err != nil {
+		walk.MsgBox(w.mw, "ASIAIR Agent", "Не удалось обновить: "+err.Error(), walk.MsgBoxIconError)
+		return
+	}
+	log.Printf("Обновление до %s запущено из окна", v)
+	w.update()
+}
+
+// Slider positions: 1..RateSliderMax are MB/s, the last one is no limit.
+func sliderPos(bps int64) int {
+	if bps <= 0 {
+		return config.RateSliderMax + 1
+	}
+	return int(min(max((bps+config.RateStep/2)/config.RateStep, 1), config.RateSliderMax))
+}
+
+func sliderRate(pos int) int64 {
+	if pos > config.RateSliderMax {
+		return 0
+	}
+	return int64(pos) * config.RateStep
+}
+
+// loadRate puts max_rate of agent.yaml on the slider.
+func (w *window) loadRate() {
+	bps, err := config.ParseRate(config.PeekAgent(w.cfgPath).MaxRate)
+	if err != nil {
+		bps, _ = config.ParseRate(config.DefaultMaxRate)
+	}
+	w.rateBps = bps // set first: onRateChanged then sees no change to save
+	w.rateSlider.SetValue(sliderPos(bps))
+	w.lblRate.SetText(config.FormatRate(bps))
+}
+
+// onRateChanged follows the slider; the limit is saved and applied once it
+// stops moving for a moment.
+func (w *window) onRateChanged() {
+	if !w.ready {
+		return
+	}
+	bps := sliderRate(w.rateSlider.Value())
+	if sliderPos(w.rateBps) == w.rateSlider.Value() {
+		bps = w.rateBps // not moved: keep a value like 500KB/s from agent.yaml
+	}
+	w.lblRate.SetText(config.FormatRate(bps))
+	w.rateGen++
+	gen := w.rateGen
+	time.AfterFunc(600*time.Millisecond, func() {
+		w.mw.Synchronize(func() {
+			if gen == w.rateGen && bps != w.rateBps {
+				w.saveRate(bps)
+			}
+		})
+	})
+}
+
+func (w *window) saveRate(bps int64) {
+	if err := config.UpdateAgentFile(w.cfgPath, map[string]string{"max_rate": config.FormatRateSetting(bps)}); err != nil {
+		log.Printf("Скорость не сохранена: %v", err)
+		w.loadRate()
+		return
+	}
+	w.rateBps = bps
+	if a, _ := w.run.state(); a != nil {
+		a.SetLocalRate(bps)
+	} else {
+		log.Printf("Ограничение скорости: %s", config.FormatRate(bps))
+	}
+}
+
+// updateRateNote says when the receiver page holds the transfer lower.
+func (w *window) updateRateNote(st protocol.AgentStatus) {
+	text := "Сохраняется сразу. Страница приёмника может только уменьшить эту скорость."
+	if st.OwnRate != nil && st.Rate > 0 && (*st.OwnRate <= 0 || st.Rate < *st.OwnRate) {
+		text = "На странице приёмника скорость уменьшена до " + config.FormatRate(st.Rate) + " — сейчас действует она."
+	}
+	if w.lblRateNote.Text() != text {
+		w.lblRateNote.SetText(text)
+	}
+}
+
+// updateDiag shows what holds the transfer back.
+func (w *window) updateDiag(st protocol.AgentStatus) {
+	text, path := "нет данных: файлы сейчас не передаются", ""
+	if d := st.Diag; d != nil {
+		if d.Text != "" {
+			text = d.Text
+		}
+		if d.Path != "" {
+			path = "Tailscale: " + d.Path
+		}
+	}
+	// "verdict — время: shares" on two lines
+	text, shares, _ := strings.Cut(text, " — ")
+	setShort(w.lblDiag, text, maxStatus)
+	setShort(w.lblDiagTime, shares, maxStatus)
+	w.lblDiagTime.SetVisible(shares != "")
+	setShort(w.lblDiagPath, path, maxStatus)
+	w.lblDiagPath.SetVisible(path != "")
 }

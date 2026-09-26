@@ -50,12 +50,13 @@ type seenInfo struct {
 }
 
 type Agent struct {
-	cfg       *config.Agent
-	src       source.Source
-	cl        *client
-	ts        *tsnode.Node // Tailscale connection to the receiver, or nil
-	lim       *ratelimit.Limiter
-	localRate int64
+	cfg        *config.Agent
+	src        source.Source
+	cl         *client
+	ts         *tsnode.Node // Tailscale connection to the receiver, or nil
+	lim        *ratelimit.Limiter
+	localRate  atomic.Int64 // max_rate of agent.yaml, changed from the window
+	remoteRate *int64       // guarded by mu; the limit set on the receiver page
 
 	mu       sync.Mutex
 	sent     map[string]sentInfo
@@ -78,24 +79,29 @@ type Agent struct {
 	syncRev     uint64             // state of the receiver seen last (poll loop only)
 	syncSession string             // random per run: the receiver orders statuses by it and syncSeq
 	syncSeq     uint64             // poll loop only
+	uploadSeq   uint64             // guarded by mu
 	cancelSync  context.CancelFunc // ends the held sync request; guarded by mu
 
-	uploadDone atomic.Int64
+	active  map[string]*upload // files being sent now; guarded by mu
+	streams atomic.Int32       // files sent at once, set on the receiver
+	diag    diag
 
 	// pause: no uploads while set; scanning and commands from the receiver go on.
 	// It is set from the agent window (local) or from the receiver page (remote).
-	paused       atomic.Bool
-	synced       atomic.Bool   // the receiver has answered once: its pause/start is known
-	localPause   bool          // guarded by mu
-	remotePause  bool          // guarded by mu
-	diskFull     string        // guarded by mu; the receiver has no room: why
-	wake         chan struct{} // wakes the transfer loop on pause changes
-	cancelUpload context.CancelFunc
+	paused      atomic.Bool
+	synced      atomic.Bool   // the receiver has answered once: its pause/start is known
+	localPause  bool          // guarded by mu
+	remotePause bool          // guarded by mu
+	diskFull    string        // guarded by mu; the receiver has no room: why
+	wake        chan struct{} // wakes the transfer loop on pause changes
 
 	// Restart runs the program again after a new version was installed
 	// (svc.Restart). Without it the agent does not update itself.
 	Restart func() error
-	Exe     string // program to replace; the running one when empty (tests set it)
+	// ConfirmUpdate: a new version is only shown (UpdateAvailable) and is
+	// installed when the user asks (InstallUpdate), whatever auto_update says.
+	ConfirmUpdate bool
+	Exe           string // program to replace; the running one when empty (tests set it)
 
 	// OnConfigChanged is told what the agent itself wrote to agent.yaml
 	// (a new ASIAIR address, the receiver certificate), for the window.
@@ -109,10 +115,12 @@ type Agent struct {
 	rescan       atomic.Bool // scan now, e.g. after a new address was found
 	discover     func(context.Context, func(string)) ([]source.Device, error)
 	newSource    func(link, user, pass string) (source.Source, error)
-	updating     bool             // guarded by mu
-	updateRetry  time.Time        // guarded by mu; after a failed update
-	rolledBack   *update.Rollback // this version was put back after a failed update
-	checkUpdate  bool             // just updated: tell the watchdog once the receiver answers (poll loop)
+	updating     bool                  // guarded by mu
+	updateRetry  time.Time             // guarded by mu; after a failed update
+	offer        *protocol.UpdateOffer // guarded by mu; newer version offered by the receiver
+	failed       string                // guarded by mu; version whose install just failed
+	rolledBack   *update.Rollback      // this version was put back after a failed update
+	checkUpdate  bool                  // just updated: tell the watchdog once the receiver answers (poll loop)
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
@@ -145,10 +153,10 @@ func New(cfg *config.Agent) (*Agent, error) {
 	rate, _ := config.ParseRate(cfg.MaxRate)
 	a := &Agent{
 		cfg: cfg, src: src, cl: cl, ts: node,
-		lim: ratelimit.New(rate), localRate: rate,
+		lim:  ratelimit.New(rate),
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
-		partial: map[string]int64{}, fetch: map[string]bool{},
+		partial: map[string]int64{}, fetch: map[string]bool{}, active: map[string]*upload{},
 		wake:        make(chan struct{}, 1),
 		syncSession: newSession(),
 	}
@@ -157,6 +165,8 @@ func New(cfg *config.Agent) (*Agent, error) {
 	a.status.ASIAIR = cfg.ASIAIR
 	a.status.Connection = cfg.Connection
 	a.status.Rate = rate
+	a.localRate.Store(rate)
+	a.streams.Store(1) // until the receiver says
 	a.initDiscovery()
 	cl.onPin = a.pinFingerprint
 	if err := a.loadState(); err != nil {
@@ -243,15 +253,19 @@ func (a *Agent) saveState() {
 // Run works until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
 	log.Printf("Агент %s: ASIAIR %s → %s, ограничение скорости: %s",
-		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate))
+		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate.Load()))
 	if a.Restart != nil {
 		a.startupUpdate()
 	}
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		a.pollLoop(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		a.watchPath(ctx)
 	}()
 	a.transferLoop(ctx)
 	wg.Wait()
@@ -325,9 +339,11 @@ func (a *Agent) applyPause(p bool, where string) {
 	on := a.localPause || a.remotePause || a.diskFull != ""
 	a.status.Paused, a.status.LocalPause, a.status.RemotePause = on, a.localPause, a.remotePause
 	a.status.DiskFull = a.diskFull
-	cancel := a.cancelUpload
-	if a.fetch[a.current] {
-		cancel = nil // requested files are sent even while paused
+	var cancels []context.CancelFunc
+	for p, u := range a.active {
+		if !a.fetch[p] { // requested files are sent even while paused
+			cancels = append(cancels, u.cancel)
+		}
 	}
 	a.mu.Unlock()
 	switch {
@@ -342,7 +358,7 @@ func (a *Agent) applyPause(p bool, where string) {
 	}
 	if on {
 		log.Printf("Агент: передача приостановлена")
-		if cancel != nil {
+		for _, cancel := range cancels {
 			cancel()
 		}
 	} else {
@@ -384,12 +400,16 @@ func (a *Agent) setFetch(paths []string) {
 		}
 	}
 	a.fetch = m
-	var cancel context.CancelFunc
-	if a.paused.Load() && a.current != "" && !m[a.current] {
-		cancel = a.cancelUpload // request withdrawn while paused
+	var cancels []context.CancelFunc
+	if a.paused.Load() {
+		for p, u := range a.active {
+			if !m[p] { // request withdrawn while paused
+				cancels = append(cancels, u.cancel)
+			}
+		}
 	}
 	a.mu.Unlock()
-	if cancel != nil {
+	for _, cancel := range cancels {
 		cancel()
 	}
 	if changed {
@@ -423,6 +443,8 @@ func (a *Agent) wait(ctx context.Context, d time.Duration) {
 
 func (a *Agent) transferLoop(ctx context.Context) {
 	var lastScan time.Time
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for ctx.Err() == nil {
 		if time.Since(lastScan) >= a.cfg.ScanInterval.D() || a.rescan.Swap(false) {
 			if err := a.scan(ctx); err != nil {
@@ -435,53 +457,92 @@ func (a *Agent) transferLoop(ctx context.Context) {
 			}
 			lastScan = time.Now()
 		}
-		if !a.synced.Load() {
-			a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
-			continue
-		}
-		// while paused only the files requested on the receiver page go
-		f, ok := a.next(a.paused.Load())
-		if !ok {
-			a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
-			continue
-		}
-		uctx, cancel := context.WithCancel(ctx)
-		a.mu.Lock()
-		a.cancelUpload, a.current = cancel, f.Path
-		if a.paused.Load() && !a.fetch[f.Path] { // paused between next and now
-			cancel()
-		}
-		a.mu.Unlock()
-		err := a.upload(uctx, f)
-		a.mu.Lock()
-		a.cancelUpload, a.current = nil, ""
-		a.mu.Unlock()
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if uctx.Err() != nil { // interrupted by the pause, not a failure
-				a.mu.Lock()
-				a.status.Uploading = ""
-				a.mu.Unlock()
-				log.Printf("Агент: %s: передача прервана паузой, продолжится с того же места", f.Path)
-				continue
-			}
-			var he *HTTPError
-			if errors.As(err, &he) && he.Code == http.StatusInsufficientStorage {
-				a.mu.Lock()
-				a.status.Uploading = ""
-				a.mu.Unlock()
-				msg := he.Msg
-				if msg == "" { // answer to HEAD: no body
-					msg = "на приёмнике мало места на диске"
+		if a.synced.Load() {
+			// start files until all streams are busy; while paused only
+			// the files requested on the receiver page go
+			for a.activeCount() < int(a.streams.Load()) {
+				f, ok := a.next(a.paused.Load())
+				if !ok {
+					break
 				}
-				a.setDiskFull(msg) // not the file's fault: no retry penalty
-				continue
+				u := a.startUpload(ctx, f)
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					a.runUpload(ctx, u)
+					a.wakeUp() // a stream is free
+				}()
 			}
-			a.fail(f, err)
 		}
+		a.wait(ctx, time.Until(lastScan.Add(a.cfg.ScanInterval.D())))
+	}
+}
+
+// upload is a file being sent.
+type upload struct {
+	f       source.File
+	ctx     context.Context
+	cancel  context.CancelFunc // the pause interrupts the upload
+	done    atomic.Int64       // bytes the receiver has, with this upload
+	started atomic.Bool        // the data is being sent (done is meaningful)
+	seq     uint64             // start order
+}
+
+func (a *Agent) activeCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.active)
+}
+
+func (a *Agent) startUpload(ctx context.Context, f source.File) *upload {
+	uctx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.uploadSeq++
+	u := &upload{f: f, ctx: uctx, cancel: cancel, seq: a.uploadSeq}
+	a.active[f.Path] = u
+	if a.paused.Load() && !a.fetch[f.Path] { // paused between next and now
+		cancel()
+	}
+	return u
+}
+
+// runUpload sends one file and handles the outcome.
+func (a *Agent) runUpload(ctx context.Context, u *upload) {
+	f := u.f
+	err := a.upload(u)
+	a.mu.Lock()
+	delete(a.active, f.Path)
+	a.mu.Unlock()
+	u.cancel()
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	if u.ctx.Err() != nil { // interrupted by the pause, not a failure
+		log.Printf("Агент: %s: передача прервана паузой, продолжится с того же места", f.Path)
+		return
+	}
+	var he *HTTPError
+	if errors.As(err, &he) && he.Code == http.StatusInsufficientStorage {
+		msg := he.Msg
+		if msg == "" { // answer to HEAD: no body
+			msg = "на приёмнике мало места на диске"
+		}
+		a.setDiskFull(msg) // not the file's fault: no retry penalty
+		return
+	}
+	a.fail(f, err)
+}
+
+// setStreams applies the number of streams set on the receiver page.
+func (a *Agent) setStreams(n int) {
+	if n <= 0 {
+		n = 1 // old receiver
+	}
+	n = min(n, protocol.MaxStreams)
+	if old := a.streams.Swap(int32(n)); int(old) != n {
+		log.Printf("Агент: одновременно передаётся файлов: %d", n)
+		a.wakeUp()
 	}
 }
 
@@ -677,7 +738,7 @@ func (a *Agent) next(onlyFetch bool) (source.File, bool) {
 			break
 		}
 		for _, f := range a.queue {
-			if a.isDeleted(f.Path) || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
+			if a.active[f.Path] != nil || a.isDeleted(f.Path) || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
 				continue
 			}
 			if t, ok := a.retryAt[f.Path]; ok && now.Before(t) {
@@ -707,7 +768,6 @@ func (a *Agent) fail(f source.File, err error) {
 	n := a.failures[f.Path]
 	backoff := min(30*time.Second<<min(n-1, 4), 5*time.Minute) // 30s … 5m
 	a.retryAt[f.Path] = time.Now().Add(backoff)
-	a.status.Uploading = ""
 	a.mu.Unlock()
 	log.Printf("Агент: %s: %v (повтор через %s)", f.Path, err, backoff)
 	a.setError(fmt.Errorf("%s: %w", f.Path, err))
@@ -722,7 +782,6 @@ func (a *Agent) markSent(f source.File) {
 	delete(a.failErr, f.Path)
 	delete(a.partial, f.Path)
 	a.dequeue(f.Path)
-	a.status.Uploading = ""
 	a.saveState()
 }
 
@@ -737,26 +796,28 @@ func fileQuery(f source.File) url.Values {
 // errRestart asks upload to start over (receiver has a different offset).
 var errRestart = errors.New("restart")
 
-func (a *Agent) upload(ctx context.Context, f source.File) error {
-	err := a.uploadOnce(ctx, f)
+func (a *Agent) upload(u *upload) error {
+	f := u.f
+	err := a.uploadOnce(u)
 	if errors.Is(err, errRestart) {
-		err = a.uploadOnce(ctx, f)
+		err = a.uploadOnce(u)
 	}
 	if errors.Is(err, errRestart) {
 		err = errors.New("приёмник сообщает другое смещение, повтор позже")
 	}
 	if err != nil {
 		// remember how much the receiver got, for the overall progress
-		a.mu.Lock()
-		if a.status.Uploading == f.Path {
-			a.partial[f.Path] = a.uploadDone.Load()
+		if u.started.Load() {
+			a.mu.Lock()
+			a.partial[f.Path] = u.done.Load()
+			a.mu.Unlock()
 		}
-		a.mu.Unlock()
 	}
 	return err
 }
 
-func (a *Agent) uploadOnce(ctx context.Context, f source.File) error {
+func (a *Agent) uploadOnce(u *upload) error {
+	ctx, f := u.ctx, u.f
 	q := fileQuery(f)
 	hctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	resp, err := a.cl.do(hctx, http.MethodHead, "/api/upload", q, nil, -1)
@@ -802,12 +863,11 @@ func (a *Agent) uploadOnce(ctx context.Context, f source.File) error {
 		log.Printf("Агент: отправка %s (%s)", f.Path, config.FormatBytes(f.Size))
 	}
 
-	a.mu.Lock()
-	a.status.Uploading, a.status.UploadSize = f.Path, f.Size
-	a.mu.Unlock()
-	a.uploadDone.Store(offset)
+	u.done.Store(offset)
+	u.started.Store(true)
 
-	body := a.lim.Reader(ctx, &progressReader{r: io.TeeReader(io.LimitReader(src, f.Size-offset), h), n: &a.uploadDone})
+	read := &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag}
+	body := &timedBody{d: &a.diag, r: a.lim.Reader(ctx, &progressReader{r: io.TeeReader(read, h), n: &u.done})}
 	q.Set("offset", strconv.FormatInt(offset, 10))
 	start := time.Now()
 	resp, err = a.cl.do(ctx, http.MethodPut, "/api/upload", q, io.NopCloser(body), f.Size-offset)
@@ -938,17 +998,33 @@ func (a *Agent) Receiver() (last time.Time, errText string) {
 func (a *Agent) Status() protocol.AgentStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.status.UploadDone = a.uploadDone.Load()
-	if a.status.Uploading == "" {
-		a.status.UploadDone, a.status.UploadSize = 0, 0
+	a.status.Uploads = a.status.Uploads[:0:0]
+	ups := make([]*upload, 0, len(a.active))
+	for _, u := range a.active {
+		if u.started.Load() {
+			ups = append(ups, u)
+		}
 	}
+	sort.Slice(ups, func(i, j int) bool { return ups[i].seq < ups[j].seq })
+	for _, u := range ups {
+		a.status.Uploads = append(a.status.Uploads, protocol.Upload{Path: u.f.Path, Done: u.done.Load(), Size: u.f.Size})
+	}
+	a.status.Uploading, a.status.UploadDone, a.status.UploadSize = "", 0, 0
+	if len(a.status.Uploads) > 0 {
+		first := a.status.Uploads[0]
+		a.status.Uploading, a.status.UploadDone, a.status.UploadSize = first.Path, first.Done, first.Size
+	}
+	a.status.Streams = int(a.streams.Load())
+	a.status.Diag = a.diag.result(a.status.Streams)
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
+	own := a.localRate.Load()
+	a.status.OwnRate = &own
 	st := a.status
 	// overall progress also counts the parts of interrupted files already at
 	// the receiver (the file being sent is counted by UploadDone)
 	for _, f := range a.files {
-		if n := a.partial[f.Path]; n > 0 && f.Path != st.Uploading && !a.isSent(f) {
+		if n := a.partial[f.Path]; n > 0 && a.active[f.Path] == nil && !a.isSent(f) {
 			st.DoneBytes += min(n, f.Size)
 		}
 	}
@@ -997,14 +1073,11 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	}
 	a.syncRev = resp.Rev
 	held = resp.Rev != 0
-	rate := a.localRate
-	if resp.MaxRate != nil {
-		rate = *resp.MaxRate
-	}
-	if rate != a.lim.Rate() {
-		log.Printf("Агент: ограничение скорости: %s", config.FormatRate(rate))
-		a.lim.SetRate(rate)
-	}
+	a.mu.Lock()
+	a.remoteRate = resp.MaxRate
+	a.mu.Unlock()
+	a.applyRate()
+	a.setStreams(resp.Streams)
 	a.setFetch(resp.Fetch)
 	a.setDiskFull(resp.DiskFull)
 	a.maybeUpdate(ctx, resp.Update)
@@ -1121,4 +1194,30 @@ func newSession() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// SetLocalRate changes the agent's own limit (the slider in the window).
+func (a *Agent) SetLocalRate(bps int64) {
+	a.localRate.Store(bps)
+	a.applyRate()
+	a.kickSync() // the receiver page shows the new limit at once
+}
+
+// applyRate sets the limit in effect: the agent's own one, or the lower
+// limit set on the receiver page (which cannot raise it).
+func (a *Agent) applyRate() {
+	a.mu.Lock()
+	rate := effectiveRate(a.localRate.Load(), a.remoteRate)
+	a.mu.Unlock()
+	if rate != a.lim.Rate() {
+		log.Printf("Агент: ограничение скорости: %s", config.FormatRate(rate))
+		a.lim.SetRate(rate)
+	}
+}
+
+func effectiveRate(own int64, remote *int64) int64 {
+	if remote != nil && *remote > 0 && (own <= 0 || *remote < own) {
+		return *remote
+	}
+	return own
 }

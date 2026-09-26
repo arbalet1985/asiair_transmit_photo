@@ -106,9 +106,14 @@ func buildFiles(local []LocalFile, inv []protocol.RemoteFile, cmds []*Command,
 	for _, ff := range agent.Failed {
 		failed[ff.Path] = ff
 	}
-	uploading := ""
+	uploading := map[string]protocol.Upload{}
 	if online {
-		uploading = agent.Uploading
+		for _, u := range agent.Uploads {
+			uploading[u.Path] = u
+		}
+		if agent.Uploading != "" && len(agent.Uploads) == 0 { // older agent
+			uploading[agent.Uploading] = protocol.Upload{Path: agent.Uploading, Done: agent.UploadDone, Size: agent.UploadSize}
+		}
 	}
 
 	var t uiTotals
@@ -121,9 +126,9 @@ func buildFiles(local []LocalFile, inv []protocol.RemoteFile, cmds []*Command,
 			f.Status = FileLocalOnly
 		case f.Local && f.Size == f.RemoteSize:
 			f.Status = FileReceived
-		case f.Path == uploading && agent.UploadSize > 0:
+		case uploading[f.Path].Size > 0:
 			f.Status = FileUploading
-			f.Progress = math.Min(float64(agent.UploadDone)/float64(agent.UploadSize), 1)
+			f.Progress = math.Min(float64(uploading[f.Path].Done)/float64(uploading[f.Path].Size), 1)
 		case partials[f.Path] > 0 && f.RemoteSize > 0:
 			// interrupted: resumed from here, when the agent retries
 			f.Status = FilePartial
@@ -165,7 +170,7 @@ func buildFiles(local []LocalFile, inv []protocol.RemoteFile, cmds []*Command,
 		}
 	}
 	t.RemainingBytes = t.Bytes - t.DoneBytes
-	if uploading != "" && agent.Speed > 0 && t.RemainingBytes > 0 {
+	if len(uploading) > 0 && agent.Speed > 0 && t.RemainingBytes > 0 {
 		t.ETASeconds = float64(t.RemainingBytes) / agent.Speed
 	}
 

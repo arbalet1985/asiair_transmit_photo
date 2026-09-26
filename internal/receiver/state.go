@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,7 +45,9 @@ func (c *Command) Covers(p string) bool {
 type persisted struct {
 	Commands []*Command `json:"commands"`
 	MaxRate  *int64     `json:"max_rate"`
-	Paused   bool       `json:"paused"` // transfer paused from the page
+	// Streams: files the agent sends at once; 0 = protocol.DefaultStreams.
+	Streams int  `json:"streams,omitempty"`
+	Paused  bool `json:"paused"` // transfer paused from the page
 	// WaitStart: a new receiver shows the ASIAIR tree but does not let the
 	// agent transfer until "Старт" is pressed on the page.
 	WaitStart bool `json:"wait_start"`
@@ -173,7 +176,7 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 		s.session, s.seq = req.Session, req.Seq
 	}
 	s.p.LastSeen = time.Now()
-	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
+	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
 		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
@@ -314,6 +317,32 @@ func (s *State) SetRate(bps *int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.p.MaxRate = bps
+	s.bump()
+	return s.save()
+}
+
+func (s *State) streamsLocked() int {
+	if s.p.Streams <= 0 {
+		return protocol.DefaultStreams
+	}
+	return min(s.p.Streams, protocol.MaxStreams)
+}
+
+// Streams returns how many files the agent sends at once.
+func (s *State) Streams() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streamsLocked()
+}
+
+// SetStreams sets how many files the agent sends at once.
+func (s *State) SetStreams(n int) error {
+	if n < 1 || n > protocol.MaxStreams {
+		return fmt.Errorf("число потоков должно быть от 1 до %d", protocol.MaxStreams)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.p.Streams = n
 	s.bump()
 	return s.save()
 }

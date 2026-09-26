@@ -426,6 +426,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
+	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
@@ -479,6 +480,7 @@ type uiState struct {
 	Files         []uiFile             `json:"files"`
 	Commands      []*Command           `json:"commands"`
 	MaxRate       *int64               `json:"max_rate"`
+	Streams       int                  `json:"streams"`
 	Paused        bool                 `json:"paused"`
 	WaitStart     bool                 `json:"wait_start"`
 	Fetch         []string             `json:"fetch"`
@@ -514,6 +516,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Totals:        totals,
 		Commands:      snap.Commands,
 		MaxRate:       snap.MaxRate,
+		Streams:       s.state.Streams(),
 		Paused:        snap.Paused,
 		WaitStart:     snap.WaitStart,
 		Fetch:         snap.Fetch,
@@ -597,6 +600,11 @@ func (s *Server) handleUIRate(w http.ResponseWriter, r *http.Request) {
 		}
 		bps = &v
 	}
+	// the agent sends no faster than its own limit: a limit at or above it
+	// (or none) means "as in the agent"
+	if own := s.state.Snapshot().Status.OwnRate; bps != nil && own != nil && *own > 0 && (*bps <= 0 || *bps >= *own) {
+		bps = nil
+	}
 	if err := s.state.SetRate(bps); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -606,6 +614,21 @@ func (s *Server) handleUIRate(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("Приёмник: ограничение скорости: %s", config.FormatRate(*bps))
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleUIStreams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Streams int `json:"streams"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if err := s.state.SetStreams(req.Streams); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("Приёмник: одновременно передаётся файлов: %d", req.Streams)
 	w.WriteHeader(http.StatusNoContent)
 }
 

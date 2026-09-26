@@ -132,6 +132,29 @@
   #logoutBtn { margin-left: auto; }
   .urls a { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
 
+  /* rate slider: the part above the agent's own limit is grey and locked */
+  .rate output { display: block; font-weight: 600; margin-bottom: 2px; }
+  #rateRange { --thumb: 18px; --fill: 0; --lim: 1; display: block; width: 100%; height: 22px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+  #rateRange::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: var(--track); }
+  #rateRange::-moz-range-track { height: 8px; border-radius: 4px; background: var(--track); }
+  #rateRange::-webkit-slider-thumb { -webkit-appearance: none; width: var(--thumb); height: var(--thumb); margin-top: -5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); }
+  #rateRange::-moz-range-thumb { width: var(--thumb); height: var(--thumb); box-sizing: border-box; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); }
+  #rateRange {
+    --at-fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--fill));
+    --at-lim: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--lim));
+    --track: linear-gradient(to right, var(--accent) 0 var(--at-fill), color-mix(in srgb, var(--accent) 25%, var(--panel)) var(--at-fill) var(--at-lim), transparent var(--at-lim)),
+      repeating-linear-gradient(-45deg, color-mix(in srgb, var(--muted) 60%, var(--panel)) 0 3px, color-mix(in srgb, var(--muted) 30%, var(--panel)) 3px 6px);
+  }
+  .rate-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 2px 0 0;  }
+
+  .uitem { margin-bottom: 6px; }
+  .uitem .progress { margin-top: 2px; }
+  .uitem .line { display: flex; gap: 8px; justify-content: space-between; }
+  .uitem .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .uitem .num { flex: none; color: var(--muted); font-size: 12px; }
+  .diag { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--row); font-size: 13px; }
+  .diag b { font-weight: 600; }
+
   /* ---------- phone ---------- */
   @media (max-width: 700px) {
     body { font-size: 15px; }
@@ -216,22 +239,28 @@
         <span class="muted" id="pauseNow"></span>
       </div>
       <div class="xfer">
-        <h3>Текущий файл</h3>
-        <div class="line" id="uFile">—</div>
-        <div class="progress"><div id="uBar"></div></div>
+        <h3 id="uHead">Передаётся</h3>
+        <div id="uList"><div class="line">—</div></div>
         <div class="line muted" id="uSpeed">—</div>
+        <div class="line diag" id="uDiag" hidden></div>
         <h3>Всего</h3>
         <div class="progress total"><div id="tBar"></div></div>
         <div class="line" id="tLine">—</div>
         <div class="line err" id="tErr"></div>
       </div>
       <h2 style="margin-top:14px">Ограничение скорости</h2>
-      <div class="toolbar">
-        <input type="text" id="rateInput" placeholder="напр. 2MB/s, 10Mbit/s, 0" size="16">
-        <button class="primary" id="rateApply">Применить</button>
-        <button id="rateAgent" title="Использовать max_rate из конфигурации агента">Как в агенте</button>
+      <div class="rate">
+        <output id="rateVal" for="rateRange">—</output>
+        <input type="range" id="rateRange" min="1" max="101" step="1" value="40" aria-label="Ограничение скорости, MB/s">
       </div>
-      <div class="muted" id="rateNow"></div>
+      <div class="rate-scale"><span>1 MB/s</span><span>без ограничения</span></div>
+      <div class="hint" id="rateNow"></div>
+      <h2 style="margin-top:14px">Одновременно файлов</h2>
+      <div class="toolbar">
+        <select id="streams" aria-label="Сколько файлов агент передаёт одновременно"></select>
+        <span class="muted" id="streamsNow"></span>
+      </div>
+      <div class="hint">Несколько потоков помогают, когда один поток не набирает скорость канала: большая задержка, потери, ретранслятор Tailscale. Если упирается в чтение с ASIAIR или в отдачу интернета, больше потоков не ускорит.</div>
     </section>
   </div>
 
@@ -917,8 +946,7 @@ function renderStatus() {
   $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
   $("aErr").textContent = a.last_error || "—";
-  const up = state.agent_online && a.uploading;
-  $("uFile").textContent = up ? a.uploading : (state.agent_online && a.paused ? "пауза" : "нет");
+  renderUploads(a);
   $("pauseBtn").textContent = state.wait_start ? "Старт" : state.paused ? "Продолжить" : "Пауза";
   $("hdrWait").hidden = !state.wait_start;
   let pn = "";
@@ -930,14 +958,6 @@ function renderStatus() {
   if (state.agent_online && a.disk_full) pn = "агент на паузе: на этом компьютере мало места на диске (см. «Место на диске»)";
   if (state.agent_online && a.local_pause) pn += pn ? "; в окне агента тоже включена пауза — снимается там" : "пауза включена в окне агента — снимается там";
   $("pauseNow").textContent = pn;
-  $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
-  if (up && a.upload_size) {
-    const left = a.speed > 0 ? fmtDur((a.upload_size - a.upload_done) / a.speed) : "";
-    $("uSpeed").textContent = `${fmtBytes(a.upload_done)} из ${fmtBytes(a.upload_size)} · ${fmtBytes(a.speed)}/s` +
-      (left ? ` · осталось ${left}` : "") + ` · лимит: ${fmtRate(a.rate)}`;
-  } else {
-    $("uSpeed").textContent = `лимит: ${fmtRate(a.rate)}`;
-  }
   const t = state.totals || {};
   const pct = t.bytes ? 100 * t.done_bytes / t.bytes : 0;
   $("tBar").style.width = pct.toFixed(1) + "%";
@@ -950,9 +970,8 @@ function renderStatus() {
   $("tErr").textContent = t.failed ? `ждут повтора после ошибки: ${t.failed} (агент повторит сам; фильтр «С ошибками» покажет какие)` : "";
   $("hdrProgress").hidden = !t.files || t.remaining_bytes <= 0;
   $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
-  $("rateNow").textContent = state.max_rate === null
-    ? "Сейчас: берётся из конфигурации агента"
-    : "Сейчас задано здесь: " + fmtRate(state.max_rate);
+  renderRate();
+  renderStreams();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
@@ -1224,15 +1243,125 @@ $("delReceived").onclick = async () => {
   msg += "\n\nЭто действие необратимо. Удалить?";
   if (confirm(msg)) queueDelete(files.map(f => f.path), false);
 };
-$("rateApply").onclick = async () => {
-  try { await post("/ui/api/rate", { rate: $("rateInput").value || "0" }); toast("Ограничение применится при следующей связи с агентом"); refresh(); }
-  catch (e) { alert("Ошибка: " + e.message); }
-};
+// ---------- files being sent, diagnostics, streams ----------
+function uploadsOf(a) {
+  if (!state.agent_online) return [];
+  if (a.uploads && a.uploads.length) return a.uploads;
+  return a.uploading ? [{ path: a.uploading, done: a.upload_done, size: a.upload_size }] : []; // older agent
+}
+function renderUploads(a) {
+  const ups = uploadsOf(a), list = $("uList");
+  $("uHead").textContent = ups.length > 1 ? `Передаются (${ups.length})` : "Передаётся";
+  list.replaceChildren();
+  if (!ups.length) {
+    const d = document.createElement("div");
+    d.className = "line";
+    d.textContent = state.agent_online && a.paused ? "пауза" : "нет";
+    list.append(d);
+  }
+  for (const u of ups) {
+    const item = document.createElement("div"), line = document.createElement("div");
+    const name = document.createElement("span"), num = document.createElement("span");
+    const bar = document.createElement("div"), fill = document.createElement("div");
+    item.className = "uitem"; line.className = "line"; name.className = "name"; num.className = "num"; bar.className = "progress";
+    name.textContent = u.path; name.title = u.path;
+    num.textContent = `${fmtBytes(u.done)} из ${fmtBytes(u.size)}`;
+    fill.style.width = u.size ? (100 * u.done / u.size).toFixed(1) + "%" : "0";
+    bar.append(fill); line.append(name, num); item.append(line, bar); list.append(item);
+  }
+  let sp = `лимит: ${fmtRate(a.rate)}`;
+  if (ups.length) {
+    const left = ups.reduce((s, u) => s + u.size - u.done, 0);
+    sp = `${fmtBytes(a.speed)}/s` + (a.speed > 0 ? ` · этим файлам осталось ${fmtDur(left / a.speed)}` : "") + " · " + sp;
+  }
+  $("uSpeed").textContent = sp;
+  const d = state.agent_online && a.diag;
+  $("uDiag").hidden = !(d && (d.text || d.path));
+  if (d) {
+    $("uDiag").replaceChildren();
+    const b = document.createElement("b");
+    b.textContent = "Диагностика: ";
+    $("uDiag").append(b, d.text || "нет данных: файлы сейчас не передаются");
+    if (d.path) {
+      const p = document.createElement("div");
+      p.textContent = "Tailscale: " + d.path;
+      $("uDiag").append(p);
+    }
+  }
+}
+{
+  const sel = $("streams");
+  for (let i = 1; i <= 8; i++) sel.append(new Option(i === 1 ? "1 (по одному)" : String(i), i));
+  sel.onchange = async () => {
+    try { await post("/ui/api/streams", { streams: +sel.value }); toast("Применится при следующей связи с агентом"); }
+    catch (e) { alert("Ошибка: " + e.message); }
+    refresh();
+  };
+}
+function renderStreams() {
+  const a = state.agent || {};
+  if (document.activeElement !== $("streams")) $("streams").value = state.streams || 3;
+  $("streamsNow").textContent = !a.version ? "" :
+    a.streams ? (a.streams === state.streams ? "" : `у агента сейчас: ${a.streams}`) : "агент старой версии передаёт по одному файлу";
+}
+
+// ---------- rate slider ----------
+// Positions 1..100 are MB/s in steps of 1, 101 is "no limit". The agent's
+// own limit is the ceiling: the receiver can only lower it, so the slider
+// does not go past it and the part beyond is grey.
+const MB = 1 << 20, RATE_MAX = 100, RATE_NONE = RATE_MAX + 1;
+let rateBusy = false;
+const ratePos = bps => bps > 0 ? Math.min(RATE_MAX, Math.max(1, Math.round(bps / MB))) : RATE_NONE;
+const posRate = pos => pos >= RATE_NONE ? 0 : pos * MB;
+function rateLimitPos() {
+  const own = state && state.agent && state.agent.own_rate;
+  if (own === undefined || own === null) return RATE_NONE; // old agent: the page value replaces its own
+  return own > 0 ? Math.max(1, Math.min(RATE_MAX, Math.floor(own / MB))) : RATE_NONE;
+}
+function paintRate(pos) {
+  const r = $("rateRange"), lim = rateLimitPos(), span = RATE_NONE - 1;
+  r.style.setProperty("--fill", (pos - 1) / span);
+  r.style.setProperty("--lim", (lim - 1) / span);
+  const own = state.agent.own_rate;
+  $("rateVal").textContent = own !== undefined && own !== null && pos >= lim
+    ? fmtRate(own) + " · как в агенте" : fmtRate(posRate(pos));
+}
+function renderRate() {
+  const own = state.agent.own_rate;
+  const lim = rateLimitPos();
+  let eff = state.max_rate;
+  if (eff === null || eff === undefined) eff = own !== undefined && own !== null ? own : state.agent.rate || 0;
+  else if (own > 0 && (eff <= 0 || eff > own)) eff = own;
+  if (!rateBusy) {
+    $("rateRange").value = Math.min(ratePos(eff), lim);
+    paintRate(+$("rateRange").value);
+  }
+  $("rateNow").textContent = own === undefined || own === null
+    ? (state.agent_online || state.agent.version ? "Агент старой версии: значение здесь заменяет его собственное ограничение." : "Агент ещё не сообщил свою скорость.")
+    : own > 0
+      ? `Потолок — скорость в настройках агента: ${fmtRate(own)}. Быстрее агент не отправляет, поэтому часть шкалы правее неё серая. Здесь её можно только уменьшить; поднять — бегунком в окне агента.`
+      : "В агенте скорость не ограничена: здесь можно выбрать любую.";
+}
+$("rateRange").addEventListener("input", () => {
+  const r = $("rateRange"), lim = rateLimitPos();
+  rateBusy = true;
+  if (+r.value > lim) r.value = lim; // the grey part is locked
+  paintRate(+r.value);
+});
+$("rateRange").addEventListener("change", async () => {
+  const pos = +$("rateRange").value, own = state.agent.own_rate;
+  const asAgent = own !== undefined && own !== null && pos >= rateLimitPos();
+  try {
+    await post("/ui/api/rate", { rate: asAgent ? null : pos >= RATE_NONE ? "0" : pos + "MB/s" });
+    toast("Ограничение применится при следующей связи с агентом");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  rateBusy = false;
+  refresh();
+});
 $("pauseBtn").onclick = async () => {
   try { await post("/ui/api/pause", { paused: !(state.paused || state.wait_start) }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
 };
-$("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
 $("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
 
 // ---------- folding the settings ----------

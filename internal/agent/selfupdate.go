@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,30 +14,79 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
-// maybeUpdate starts installing the agent version offered by the receiver.
+// maybeUpdate starts installing the agent version offered by the receiver,
+// or, when the user confirms updates (ConfirmUpdate), keeps the offer until
+// InstallUpdate is called.
 func (a *Agent) maybeUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
-	if offer == nil || !update.Newer(offer.Version, protocol.Version) {
-		return
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if offer == nil || !update.Newer(offer.Version, protocol.Version) {
+		if a.offer != nil && !a.updating {
+			if a.status.Update == availableText(a.offer.Version) {
+				a.status.Update = ""
+			}
+			a.offer = nil
+		}
+		return
+	}
+	a.offer = offer
 	switch {
 	case a.rolledBack != nil && a.rolledBack.Version == offer.Version:
 		// this version did not work here: wait for the next one
 		a.status.Update = rollbackText(a.rolledBack)
+		return
+	case a.updating:
+		return
+	case a.ConfirmUpdate:
+		if a.failed != offer.Version { // keep the error until the next try
+			a.status.Update = availableText(offer.Version)
+		}
 		return
 	case !bool(a.cfg.AutoUpdate):
 		a.status.Update = fmt.Sprintf("доступна версия %s (автообновление выключено в agent.yaml)", offer.Version)
 		return
 	case a.Restart == nil:
 		return
-	case a.updating:
-		return
 	case time.Now().Before(a.updateRetry):
 		return
 	}
 	a.updating = true
 	go a.selfUpdate(ctx, offer)
+}
+
+func availableText(version string) string {
+	return fmt.Sprintf("доступна версия %s — нажмите «Обновить» в окне агента", version)
+}
+
+// UpdateAvailable returns the new version the user can install now with
+// InstallUpdate, or "".
+func (a *Agent) UpdateAvailable() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.offer == nil || a.updating || a.Restart == nil ||
+		a.rolledBack != nil && a.rolledBack.Version == a.offer.Version {
+		return ""
+	}
+	return a.offer.Version
+}
+
+// InstallUpdate installs the offered new version and restarts the agent;
+// the user asked for it (the "Обновить" button).
+func (a *Agent) InstallUpdate(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case a.updating:
+		return nil
+	case a.offer == nil:
+		return errors.New("новой версии нет")
+	case a.Restart == nil:
+		return errors.New("этот агент не может обновить себя")
+	}
+	a.updating = true
+	a.failed = ""
+	go a.selfUpdate(ctx, a.offer)
+	return nil
 }
 
 // selfUpdate downloads the new agent from the receiver, replaces this
@@ -62,9 +112,15 @@ func (a *Agent) selfUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
 	a.mu.Lock()
 	a.updating = false
 	a.updateRetry = time.Now().Add(time.Hour)
+	a.failed = offer.Version
 	a.status.Update = "обновление до " + offer.Version + " не удалось: " + err.Error()
+	retry := "повтор через час"
+	if a.ConfirmUpdate {
+		a.status.Update += " — можно повторить кнопкой «Обновить»"
+		retry = "можно повторить кнопкой «Обновить»"
+	}
 	a.mu.Unlock()
-	log.Printf("Агент: обновление до %s не удалось: %v (повтор через час)", offer.Version, err)
+	log.Printf("Агент: обновление до %s не удалось: %v (%s)", offer.Version, err, retry)
 }
 
 func (a *Agent) setUpdate(format string, args ...any) {

@@ -62,6 +62,7 @@ type Agent struct {
 	Logs      `yaml:",inline"`
 
 	// AutoUpdate: install new versions handed out by the receiver. Default true.
+	// The agent window ignores it: there the user presses "Обновить".
 	AutoUpdate Bool `yaml:"auto_update"`
 
 	// TailscaleDir keeps the Tailscale login of the agent (next to agent.yaml).
@@ -263,7 +264,7 @@ func agentDefaults() *Agent {
 		ScanInterval: Duration(time.Minute),
 		PollInterval: Duration(15 * time.Second),
 		MinFileAge:   Duration(30 * time.Second),
-		MaxRate:      "10MB/s",
+		MaxRate:      DefaultMaxRate,
 		AutoUpdate:   true,
 		StateFile:    "agent-state.json",
 		Extensions:   []string{".fit", ".fits", ".fts", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".xisf"},
@@ -410,6 +411,27 @@ func ParseRate(s string) (int64, error) {
 		v /= 8
 	}
 	return int64(v), nil
+}
+
+// DefaultMaxRate is the agent's transfer limit unless agent.yaml says otherwise.
+const DefaultMaxRate = "100MB/s"
+
+// Rate sliders (agent window, receiver page) move in steps of RateStep up to
+// RateSliderMax; the position after it means "no limit".
+const (
+	RateStep      = 1 << 20 // 1MB/s
+	RateSliderMax = 100     // steps
+)
+
+// FormatRateSetting writes a rate as max_rate: "40MB/s", or "0" for no limit.
+func FormatRateSetting(bps int64) string {
+	if bps <= 0 {
+		return "0"
+	}
+	if bps%RateStep == 0 {
+		return fmt.Sprintf("%dMB/s", bps/RateStep)
+	}
+	return fmt.Sprintf("%dKB/s", (bps+1023)/1024)
 }
 
 // DefaultMinFree is the free space the receiver keeps on its disk.

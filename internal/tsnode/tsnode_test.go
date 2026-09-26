@@ -3,9 +3,14 @@ package tsnode
 import (
 	"context"
 	"io"
+	"net/netip"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/key"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode/tsnodetest"
 )
@@ -92,4 +97,20 @@ func TestInteractiveLogin(t *testing.T) {
 		t.Fatal("CompleteAuth failed")
 	}
 	waitRunning(t, n)
+}
+
+func TestPeerPath(t *testing.T) {
+	s := &ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+		key.NewNode().Public(): {DNSName: "asiair-receiver.tail1.ts.net.", HostName: "asiair-receiver", Relay: "fra"},
+		key.NewNode().Public(): {DNSName: "other.tail1.ts.net.", CurAddr: "1.2.3.4:41641", TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.9")}},
+	}}
+	if p := peerPath(s, "asiair-receiver"); !strings.Contains(p, "ретранслятор Tailscale «fra»") {
+		t.Fatalf("relay: %q", p)
+	}
+	if p := peerPath(s, "100.64.0.9"); p != "напрямую (1.2.3.4:41641)" {
+		t.Fatalf("direct: %q", p)
+	}
+	if p := peerPath(s, "nobody"); p != "" {
+		t.Fatalf("unknown: %q", p)
+	}
 }
