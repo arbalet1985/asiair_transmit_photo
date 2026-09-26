@@ -62,6 +62,7 @@ type Agent struct {
 	Logs      `yaml:",inline"`
 
 	// AutoUpdate: install new versions handed out by the receiver. Default true.
+	// The agent window ignores it: there the user presses "Обновить".
 	AutoUpdate Bool `yaml:"auto_update"`
 
 	// TailscaleDir keeps the Tailscale login of the agent (next to agent.yaml).

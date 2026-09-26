@@ -60,6 +60,7 @@ func (r *runner) start(cfgPath string, paused bool) {
 	}
 	if err == nil {
 		r.agent.Restart = svc.Restart
+		r.agent.ConfirmUpdate = true // the user installs new versions with "Обновить"
 		r.agent.OnConfigChanged = r.onConfig
 	}
 	if err != nil {
@@ -115,8 +116,8 @@ type window struct {
 	lblTotal, lblVersion                                                 *walk.Label
 	lblTSCaption, lblTS                                                  *walk.Label
 	btnTSLogin                                                           *walk.PushButton
-	btnPause                                                             *walk.PushButton
-	actPause                                                             *walk.Action
+	btnPause, btnUpdate                                                  *walk.PushButton
+	actPause, actUpdate                                                  *walk.Action
 	progress, totalBar                                                   *walk.ProgressBar
 	cbAutostart, cbMinimized                                             *walk.CheckBox
 	logView                                                              *walk.ListBox
@@ -124,7 +125,8 @@ type window struct {
 	tabs                                                                 *walk.TabWidget
 	form                                                                 settingsForm
 
-	tsNotified string // login link already announced in the tray
+	tsNotified     string // login link already announced in the tray
+	updateNotified string // new version already announced in the tray
 
 	ready    bool // set after the window is built; checkbox handlers ignore the initial state
 	quitting bool
@@ -290,7 +292,15 @@ func (w *window) create() error {
 									Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
 									Label{Text: "Отправлено:"}, Label{AssignTo: &w.lblSent, Text: "—"},
 									Label{Text: "Ошибка:"}, Label{AssignTo: &w.lblErr, Text: "—", TextColor: walk.RGB(200, 40, 40)},
-									Label{Text: "Версия:"}, Label{AssignTo: &w.lblVersion, Text: versionText("")},
+									Label{Text: "Версия:"},
+									Composite{
+										Layout: HBox{MarginsZero: true},
+										Children: []Widget{
+											Label{AssignTo: &w.lblVersion, Text: versionText("")},
+											PushButton{AssignTo: &w.btnUpdate, Text: "Обновить", Visible: false, OnClicked: w.installUpdate},
+											HSpacer{},
+										},
+									},
 								},
 							},
 							GroupBox{
@@ -362,6 +372,8 @@ func (w *window) create() error {
 	addAction("Настройки", func() { w.tabs.SetCurrentIndex(1); w.show() })
 	w.actPause = addAction(pauseText(false), w.togglePause)
 	addAction("Перезапустить агент", w.restart)
+	w.actUpdate = addAction("Обновить", w.installUpdate)
+	w.actUpdate.SetVisible(false)
 	w.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	addAction("Выход", w.quit)
 
@@ -528,6 +540,7 @@ func (w *window) update() {
 		}
 		setShort(w.lblErr, msg, maxStatus)
 		w.updateTailscale(nil)
+		w.updateOffer(nil)
 		w.progress.SetValue(0)
 		w.totalBar.SetValue(0)
 		w.setTray(StateStopped, "ASIAIR Agent — "+msg)
@@ -537,6 +550,7 @@ func (w *window) update() {
 	lastSync, syncErr := a.Receiver()
 	w.updateTailscale(a)
 	setShort(w.lblVersion, versionText(st.Update), maxStatus)
+	w.updateOffer(a)
 
 	switch {
 	case st.LastScan.IsZero() && st.LastError == "":
@@ -653,4 +667,49 @@ func (w *window) tailscaleLogin() {
 	if u := a.Tailscale().AuthURL; u != "" {
 		svc.OpenBrowser(u)
 	}
+}
+
+// updateOffer shows the "Обновить" button when the receiver has a new
+// version, and announces it once in the tray.
+func (w *window) updateOffer(a *agent.Agent) {
+	v := ""
+	if a != nil {
+		v = a.UpdateAvailable()
+	}
+	w.btnUpdate.SetVisible(v != "")
+	w.actUpdate.SetVisible(v != "")
+	if v == "" {
+		return
+	}
+	w.btnUpdate.SetText("Обновить до " + v)
+	w.actUpdate.SetText("Обновить до " + v + "…")
+	if v != w.updateNotified {
+		w.updateNotified = v
+		w.ni.ShowInfo("ASIAIR Agent", "Вышла новая версия "+v+". Откройте окно агента и нажмите «Обновить до "+v+"».")
+	}
+}
+
+// installUpdate asks and installs the new version; the agent restarts.
+func (w *window) installUpdate() {
+	a, _ := w.run.state()
+	if a == nil {
+		return
+	}
+	v := a.UpdateAvailable()
+	if v == "" {
+		return
+	}
+	w.show()
+	if walk.MsgBox(w.mw, "ASIAIR Agent",
+		"Установить версию "+v+"?\n\nАгент перезапустится, передача снимков продолжится с того же места. "+
+			"Если новая версия не заработает, через несколько минут вернётся прежняя.",
+		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+		return
+	}
+	if err := a.InstallUpdate(context.Background()); err != nil {
+		walk.MsgBox(w.mw, "ASIAIR Agent", "Не удалось обновить: "+err.Error(), walk.MsgBoxIconError)
+		return
+	}
+	log.Printf("Обновление до %s запущено из окна", v)
+	w.update()
 }

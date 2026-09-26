@@ -95,7 +95,10 @@ type Agent struct {
 	// Restart runs the program again after a new version was installed
 	// (svc.Restart). Without it the agent does not update itself.
 	Restart func() error
-	Exe     string // program to replace; the running one when empty (tests set it)
+	// ConfirmUpdate: a new version is only shown (UpdateAvailable) and is
+	// installed when the user asks (InstallUpdate), whatever auto_update says.
+	ConfirmUpdate bool
+	Exe           string // program to replace; the running one when empty (tests set it)
 
 	// OnConfigChanged is told what the agent itself wrote to agent.yaml
 	// (a new ASIAIR address, the receiver certificate), for the window.
@@ -109,10 +112,12 @@ type Agent struct {
 	rescan       atomic.Bool // scan now, e.g. after a new address was found
 	discover     func(context.Context, func(string)) ([]source.Device, error)
 	newSource    func(link, user, pass string) (source.Source, error)
-	updating     bool             // guarded by mu
-	updateRetry  time.Time        // guarded by mu; after a failed update
-	rolledBack   *update.Rollback // this version was put back after a failed update
-	checkUpdate  bool             // just updated: tell the watchdog once the receiver answers (poll loop)
+	updating     bool                  // guarded by mu
+	updateRetry  time.Time             // guarded by mu; after a failed update
+	offer        *protocol.UpdateOffer // guarded by mu; newer version offered by the receiver
+	failed       string                // guarded by mu; version whose install just failed
+	rolledBack   *update.Rollback      // this version was put back after a failed update
+	checkUpdate  bool                  // just updated: tell the watchdog once the receiver answers (poll loop)
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
