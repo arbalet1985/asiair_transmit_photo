@@ -58,14 +58,22 @@ type AgentStatus struct {
 	// ASIAIRError: why the last scan of the ASIAIR failed ("" when it worked).
 	ASIAIRError string `json:"asiair_error,omitempty"`
 	// Searching: the agent is looking for the ASIAIR in the local network.
-	Searching  bool      `json:"searching,omitempty"`
-	LastScan   time.Time `json:"last_scan"`
-	LastError  string    `json:"last_error,omitempty"`
-	Uploading  string    `json:"uploading,omitempty"`
-	UploadDone int64     `json:"upload_done"`
-	UploadSize int64     `json:"upload_size"`
-	Speed      float64   `json:"speed"` // bytes/s, measured
-	Rate       int64     `json:"rate"`  // bytes/s, limit in effect (0 = unlimited)
+	Searching bool      `json:"searching,omitempty"`
+	LastScan  time.Time `json:"last_scan"`
+	LastError string    `json:"last_error,omitempty"`
+	// Uploading, UploadDone, UploadSize: the first of Uploads (older
+	// receivers show only one file).
+	Uploading  string  `json:"uploading,omitempty"`
+	UploadDone int64   `json:"upload_done"`
+	UploadSize int64   `json:"upload_size"`
+	Speed      float64 `json:"speed"` // bytes/s, measured
+	Rate       int64   `json:"rate"`  // bytes/s, limit in effect (0 = unlimited)
+	// Uploads: the files being sent now, several at once with Streams > 1.
+	Uploads []Upload `json:"uploads,omitempty"`
+	// Streams: how many files the agent sends at once (set on the receiver).
+	Streams int `json:"streams,omitempty"`
+	// Diag: where the transfer spends its time, to find the bottleneck.
+	Diag *Diag `json:"diag,omitempty"`
 	// OwnRate is the agent's own limit (max_rate in agent.yaml), bytes/s,
 	// 0 = unlimited. The receiver can only lower it. Nil in old agents,
 	// where the receiver's limit replaced it.
@@ -125,6 +133,9 @@ type SyncResponse struct {
 	// OwnRate use the lower of the two; older ones use MaxRate instead of
 	// their own (0 = unlimited).
 	MaxRate *int64 `json:"max_rate"`
+	// Streams: how many files to send at once, 1..MaxStreams (0 from old
+	// receivers: one).
+	Streams int `json:"streams,omitempty"`
 	// Paused: the transfer is paused from the receiver page.
 	Paused bool `json:"paused,omitempty"`
 	// WaitStart: the transfer has not been started on the receiver page yet
@@ -140,6 +151,39 @@ type SyncResponse struct {
 	// /api/update/agent.
 	Update *UpdateOffer `json:"update,omitempty"`
 }
+
+// Upload is a file being sent.
+type Upload struct {
+	Path string `json:"path"`
+	Done int64  `json:"done"`
+	Size int64  `json:"size"`
+}
+
+// Diag shows what holds the transfer back, measured over the last seconds
+// of sending: the shares of time spent reading from the ASIAIR, waiting for
+// the rate limit and pushing the data into the network.
+type Diag struct {
+	Read    float64 `json:"read"`    // 0..1
+	Limit   float64 `json:"limit"`   // 0..1
+	Network float64 `json:"network"` // 0..1
+	// ReadSpeed: how fast one stream reads from the ASIAIR, bytes/s
+	// (0 = not measured: reading never held the transfer back).
+	ReadSpeed float64 `json:"read_speed,omitempty"`
+	// Bottleneck: "read", "limit", "network" or "" (nothing sent lately).
+	Bottleneck string `json:"bottleneck,omitempty"`
+	// Path: how the Tailscale traffic goes ("напрямую …" or a relay).
+	Path string `json:"path,omitempty"`
+	// Text: the summary for people (without Path; "" when nothing was sent
+	// lately).
+	Text string `json:"text,omitempty"`
+}
+
+// MaxStreams limits the files sent at once; DefaultStreams is used until
+// the receiver page changes it.
+const (
+	MaxStreams     = 8
+	DefaultStreams = 3
+)
 
 // UpdateOffer describes the agent program the receiver can hand out.
 type UpdateOffer struct {

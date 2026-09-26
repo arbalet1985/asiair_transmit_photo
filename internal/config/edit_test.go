@@ -62,7 +62,7 @@ func TestUpdateAgentFile(t *testing.T) {
 	if c.ASIAIR != `\\192.168.0.7\EMMC Images` || c.ReceiverURL != "https://1.2.3.4:9443" || c.Token != "it's-secret" {
 		t.Fatalf("values: %+v", c)
 	}
-	if c.MaxRate != "40MB/s" || len(c.Shares) != 1 {
+	if c.MaxRate != "100MB/s" || len(c.Shares) != 1 {
 		t.Fatalf("other settings lost: %+v", c)
 	}
 	out, _ := os.ReadFile(p)

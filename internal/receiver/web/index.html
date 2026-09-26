@@ -147,6 +147,14 @@
   }
   .rate-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 2px 0 0;  }
 
+  .uitem { margin-bottom: 6px; }
+  .uitem .progress { margin-top: 2px; }
+  .uitem .line { display: flex; gap: 8px; justify-content: space-between; }
+  .uitem .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .uitem .num { flex: none; color: var(--muted); font-size: 12px; }
+  .diag { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--row); font-size: 13px; }
+  .diag b { font-weight: 600; }
+
   /* ---------- phone ---------- */
   @media (max-width: 700px) {
     body { font-size: 15px; }
@@ -231,10 +239,10 @@
         <span class="muted" id="pauseNow"></span>
       </div>
       <div class="xfer">
-        <h3>Текущий файл</h3>
-        <div class="line" id="uFile">—</div>
-        <div class="progress"><div id="uBar"></div></div>
+        <h3 id="uHead">Передаётся</h3>
+        <div id="uList"><div class="line">—</div></div>
         <div class="line muted" id="uSpeed">—</div>
+        <div class="line diag" id="uDiag" hidden></div>
         <h3>Всего</h3>
         <div class="progress total"><div id="tBar"></div></div>
         <div class="line" id="tLine">—</div>
@@ -247,6 +255,12 @@
       </div>
       <div class="rate-scale"><span>1 MB/s</span><span>без ограничения</span></div>
       <div class="hint" id="rateNow"></div>
+      <h2 style="margin-top:14px">Одновременно файлов</h2>
+      <div class="toolbar">
+        <select id="streams" aria-label="Сколько файлов агент передаёт одновременно"></select>
+        <span class="muted" id="streamsNow"></span>
+      </div>
+      <div class="hint">Несколько потоков помогают, когда один поток не набирает скорость канала: большая задержка, потери, ретранслятор Tailscale. Если упирается в чтение с ASIAIR или в отдачу интернета, больше потоков не ускорит.</div>
     </section>
   </div>
 
@@ -932,8 +946,7 @@ function renderStatus() {
   $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
   $("aErr").textContent = a.last_error || "—";
-  const up = state.agent_online && a.uploading;
-  $("uFile").textContent = up ? a.uploading : (state.agent_online && a.paused ? "пауза" : "нет");
+  renderUploads(a);
   $("pauseBtn").textContent = state.wait_start ? "Старт" : state.paused ? "Продолжить" : "Пауза";
   $("hdrWait").hidden = !state.wait_start;
   let pn = "";
@@ -945,14 +958,6 @@ function renderStatus() {
   if (state.agent_online && a.disk_full) pn = "агент на паузе: на этом компьютере мало места на диске (см. «Место на диске»)";
   if (state.agent_online && a.local_pause) pn += pn ? "; в окне агента тоже включена пауза — снимается там" : "пауза включена в окне агента — снимается там";
   $("pauseNow").textContent = pn;
-  $("uBar").style.width = up && a.upload_size ? (100 * a.upload_done / a.upload_size).toFixed(1) + "%" : "0";
-  if (up && a.upload_size) {
-    const left = a.speed > 0 ? fmtDur((a.upload_size - a.upload_done) / a.speed) : "";
-    $("uSpeed").textContent = `${fmtBytes(a.upload_done)} из ${fmtBytes(a.upload_size)} · ${fmtBytes(a.speed)}/s` +
-      (left ? ` · осталось ${left}` : "") + ` · лимит: ${fmtRate(a.rate)}`;
-  } else {
-    $("uSpeed").textContent = `лимит: ${fmtRate(a.rate)}`;
-  }
   const t = state.totals || {};
   const pct = t.bytes ? 100 * t.done_bytes / t.bytes : 0;
   $("tBar").style.width = pct.toFixed(1) + "%";
@@ -966,6 +971,7 @@ function renderStatus() {
   $("hdrProgress").hidden = !t.files || t.remaining_bytes <= 0;
   $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
   renderRate();
+  renderStreams();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
@@ -1237,6 +1243,68 @@ $("delReceived").onclick = async () => {
   msg += "\n\nЭто действие необратимо. Удалить?";
   if (confirm(msg)) queueDelete(files.map(f => f.path), false);
 };
+// ---------- files being sent, diagnostics, streams ----------
+function uploadsOf(a) {
+  if (!state.agent_online) return [];
+  if (a.uploads && a.uploads.length) return a.uploads;
+  return a.uploading ? [{ path: a.uploading, done: a.upload_done, size: a.upload_size }] : []; // older agent
+}
+function renderUploads(a) {
+  const ups = uploadsOf(a), list = $("uList");
+  $("uHead").textContent = ups.length > 1 ? `Передаются (${ups.length})` : "Передаётся";
+  list.replaceChildren();
+  if (!ups.length) {
+    const d = document.createElement("div");
+    d.className = "line";
+    d.textContent = state.agent_online && a.paused ? "пауза" : "нет";
+    list.append(d);
+  }
+  for (const u of ups) {
+    const item = document.createElement("div"), line = document.createElement("div");
+    const name = document.createElement("span"), num = document.createElement("span");
+    const bar = document.createElement("div"), fill = document.createElement("div");
+    item.className = "uitem"; line.className = "line"; name.className = "name"; num.className = "num"; bar.className = "progress";
+    name.textContent = u.path; name.title = u.path;
+    num.textContent = `${fmtBytes(u.done)} из ${fmtBytes(u.size)}`;
+    fill.style.width = u.size ? (100 * u.done / u.size).toFixed(1) + "%" : "0";
+    bar.append(fill); line.append(name, num); item.append(line, bar); list.append(item);
+  }
+  let sp = `лимит: ${fmtRate(a.rate)}`;
+  if (ups.length) {
+    const left = ups.reduce((s, u) => s + u.size - u.done, 0);
+    sp = `${fmtBytes(a.speed)}/s` + (a.speed > 0 ? ` · этим файлам осталось ${fmtDur(left / a.speed)}` : "") + " · " + sp;
+  }
+  $("uSpeed").textContent = sp;
+  const d = state.agent_online && a.diag;
+  $("uDiag").hidden = !(d && (d.text || d.path));
+  if (d) {
+    $("uDiag").replaceChildren();
+    const b = document.createElement("b");
+    b.textContent = "Диагностика: ";
+    $("uDiag").append(b, d.text || "нет данных: файлы сейчас не передаются");
+    if (d.path) {
+      const p = document.createElement("div");
+      p.textContent = "Tailscale: " + d.path;
+      $("uDiag").append(p);
+    }
+  }
+}
+{
+  const sel = $("streams");
+  for (let i = 1; i <= 8; i++) sel.append(new Option(i === 1 ? "1 (по одному)" : String(i), i));
+  sel.onchange = async () => {
+    try { await post("/ui/api/streams", { streams: +sel.value }); toast("Применится при следующей связи с агентом"); }
+    catch (e) { alert("Ошибка: " + e.message); }
+    refresh();
+  };
+}
+function renderStreams() {
+  const a = state.agent || {};
+  if (document.activeElement !== $("streams")) $("streams").value = state.streams || 3;
+  $("streamsNow").textContent = !a.version ? "" :
+    a.streams ? (a.streams === state.streams ? "" : `у агента сейчас: ${a.streams}`) : "агент старой версии передаёт по одному файлу";
+}
+
 // ---------- rate slider ----------
 // Positions 1..100 are MB/s in steps of 1, 101 is "no limit". The agent's
 // own limit is the ceiling: the receiver can only lower it, so the slider

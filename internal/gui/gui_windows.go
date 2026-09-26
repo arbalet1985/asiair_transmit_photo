@@ -116,6 +116,7 @@ type window struct {
 	lblTotal, lblVersion                                                 *walk.Label
 	lblTSCaption, lblTS                                                  *walk.Label
 	lblRate, lblRateNote                                                 *walk.Label
+	lblDiag, lblDiagTime, lblDiagPath                                    *walk.Label
 	rateSlider                                                           *walk.Slider
 	rateBps                                                              int64 // own limit shown by the slider
 	rateGen                                                              int   // debounces saving the slider
@@ -292,6 +293,9 @@ func (w *window) create() error {
 									Label{Text: "Передаётся:"}, Label{AssignTo: &w.lblFile, Text: "—"},
 									Label{Text: ""}, ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
 									Label{Text: "Скорость:"}, Label{AssignTo: &w.lblSpeed, Text: "—"},
+									Label{Text: "Диагностика:"}, Label{AssignTo: &w.lblDiag, Text: "—"},
+									Label{Text: ""}, Label{AssignTo: &w.lblDiagTime, Text: "", TextColor: colorDim, Visible: false},
+									Label{Text: ""}, Label{AssignTo: &w.lblDiagPath, Text: "", Visible: false},
 									Label{Text: "Всего:"}, ProgressBar{AssignTo: &w.totalBar, MaxValue: 1000},
 									Label{Text: ""}, Label{AssignTo: &w.lblTotal, Text: "—"},
 									Label{Text: "Очередь:"}, Label{AssignTo: &w.lblQueue, Text: "—"},
@@ -551,7 +555,7 @@ func (w *window) update() {
 		} else if cfgErr != nil {
 			msg = "ошибка в настройках: " + cfgErr.Error()
 		}
-		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent, w.lblTotal} {
+		for _, l := range []*walk.Label{w.lblASIAIR, w.lblReceiver, w.lblFile, w.lblSpeed, w.lblQueue, w.lblSent, w.lblTotal, w.lblDiag} {
 			l.SetText("—")
 		}
 		setShort(w.lblErr, msg, maxStatus)
@@ -567,6 +571,7 @@ func (w *window) update() {
 	w.updateTailscale(a)
 	setShort(w.lblVersion, versionText(st.Update), maxStatus)
 	w.updateRateNote(st)
+	w.updateDiag(st)
 	w.updateOffer(a)
 
 	switch {
@@ -585,25 +590,30 @@ func (w *window) update() {
 	default:
 		w.lblReceiver.SetText("на связи (" + ago(lastSync) + ")")
 	}
+	streams := fmt.Sprintf(", одновременно файлов: %d", max(st.Streams, 1))
 	if st.Uploading != "" {
-		setShortTail(w.lblFile, st.Uploading, maxStatus)
+		file := st.Uploading
+		if n := len(st.Uploads); n > 1 {
+			file = fmt.Sprintf("%s (и ещё %d)", file, n-1)
+		}
+		setShortTail(w.lblFile, file, maxStatus)
 		if st.UploadSize > 0 {
 			w.progress.SetValue(int(st.UploadDone * 1000 / st.UploadSize))
 		}
-		w.lblSpeed.SetText(fmt.Sprintf("%s/s (лимит: %s)", config.FormatBytes(int64(st.Speed)), config.FormatRate(st.Rate)))
+		w.lblSpeed.SetText(fmt.Sprintf("%s/s (лимит: %s%s)", config.FormatBytes(int64(st.Speed)), config.FormatRate(st.Rate), streams))
 	} else {
 		w.lblFile.SetText("—")
 		if st.Paused {
 			w.lblFile.SetText(pauseLabel(st))
 		}
 		w.progress.SetValue(0)
-		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + ")")
+		w.lblSpeed.SetText("— (лимит: " + config.FormatRate(st.Rate) + streams + ")")
 	}
 	// overall progress: files on the ASIAIR already at the receiver, plus the
 	// part of the current file
 	done := st.DoneBytes
-	if st.Uploading != "" {
-		done += st.UploadDone
+	for _, u := range st.Uploads {
+		done += u.Done
 	}
 	if st.TotalBytes > 0 {
 		w.totalBar.SetValue(int(done * 1000 / st.TotalBytes))
@@ -802,4 +812,24 @@ func (w *window) updateRateNote(st protocol.AgentStatus) {
 	if w.lblRateNote.Text() != text {
 		w.lblRateNote.SetText(text)
 	}
+}
+
+// updateDiag shows what holds the transfer back.
+func (w *window) updateDiag(st protocol.AgentStatus) {
+	text, path := "нет данных: файлы сейчас не передаются", ""
+	if d := st.Diag; d != nil {
+		if d.Text != "" {
+			text = d.Text
+		}
+		if d.Path != "" {
+			path = "Tailscale: " + d.Path
+		}
+	}
+	// "verdict — время: shares" on two lines
+	text, shares, _ := strings.Cut(text, " — ")
+	setShort(w.lblDiag, text, maxStatus)
+	setShort(w.lblDiagTime, shares, maxStatus)
+	w.lblDiagTime.SetVisible(shares != "")
+	setShort(w.lblDiagPath, path, maxStatus)
+	w.lblDiagPath.SetVisible(path != "")
 }

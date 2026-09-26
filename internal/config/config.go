@@ -414,7 +414,7 @@ func ParseRate(s string) (int64, error) {
 }
 
 // DefaultMaxRate is the agent's transfer limit unless agent.yaml says otherwise.
-const DefaultMaxRate = "40MB/s"
+const DefaultMaxRate = "100MB/s"
 
 // Rate sliders (agent window, receiver page) move in steps of RateStep up to
 // RateSliderMax; the position after it means "no limit".

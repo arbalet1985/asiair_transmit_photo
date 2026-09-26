@@ -301,3 +301,47 @@ func fromIPN(s *ipnstate.Status) Status {
 	}
 	return st
 }
+
+// Path says how traffic reaches the device host (short name, full name or
+// 100.x.y.z address): "напрямую (addr)" or through a relay. "" when the
+// device is unknown or the node is not running.
+func (n *Node) Path(ctx context.Context, host string) string {
+	if n.Status().State != StateRunning {
+		return ""
+	}
+	lc, err := n.srv.LocalClient()
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	s, err := lc.Status(ctx)
+	if err != nil {
+		return ""
+	}
+	return peerPath(s, host)
+}
+
+func peerPath(s *ipnstate.Status, host string) string {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, p := range s.Peer {
+		match := strings.EqualFold(ShortName(p.DNSName), host) || strings.EqualFold(strings.TrimSuffix(p.DNSName, "."), host) ||
+			strings.EqualFold(p.HostName, host)
+		for _, ip := range p.TailscaleIPs {
+			match = match || ip.String() == host
+		}
+		if !match {
+			continue
+		}
+		switch {
+		case p.CurAddr != "":
+			return "напрямую (" + p.CurAddr + ")"
+		case p.PeerRelay != "":
+			return "через ретранслятор (" + p.PeerRelay + ")"
+		case p.Relay != "":
+			return "через ретранслятор Tailscale «" + p.Relay + "» — скорость обычно не выше 1–2 МБ/с"
+		}
+		return "соединение устанавливается"
+	}
+	return ""
+}
