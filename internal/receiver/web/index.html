@@ -132,6 +132,21 @@
   #logoutBtn { margin-left: auto; }
   .urls a { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
 
+  /* rate slider: the part above the agent's own limit is grey and locked */
+  .rate output { display: block; font-weight: 600; margin-bottom: 2px; }
+  #rateRange { --thumb: 18px; --fill: 0; --lim: 1; display: block; width: 100%; height: 22px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+  #rateRange::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: var(--track); }
+  #rateRange::-moz-range-track { height: 8px; border-radius: 4px; background: var(--track); }
+  #rateRange::-webkit-slider-thumb { -webkit-appearance: none; width: var(--thumb); height: var(--thumb); margin-top: -5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); }
+  #rateRange::-moz-range-thumb { width: var(--thumb); height: var(--thumb); box-sizing: border-box; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); }
+  #rateRange {
+    --at-fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--fill));
+    --at-lim: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--lim));
+    --track: linear-gradient(to right, var(--accent) 0 var(--at-fill), color-mix(in srgb, var(--accent) 25%, var(--panel)) var(--at-fill) var(--at-lim), transparent var(--at-lim)),
+      repeating-linear-gradient(-45deg, color-mix(in srgb, var(--muted) 60%, var(--panel)) 0 3px, color-mix(in srgb, var(--muted) 30%, var(--panel)) 3px 6px);
+  }
+  .rate-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 2px 0 0;  }
+
   /* ---------- phone ---------- */
   @media (max-width: 700px) {
     body { font-size: 15px; }
@@ -226,12 +241,12 @@
         <div class="line err" id="tErr"></div>
       </div>
       <h2 style="margin-top:14px">Ограничение скорости</h2>
-      <div class="toolbar">
-        <input type="text" id="rateInput" placeholder="напр. 2MB/s, 10Mbit/s, 0" size="16">
-        <button class="primary" id="rateApply">Применить</button>
-        <button id="rateAgent" title="Использовать max_rate из конфигурации агента">Как в агенте</button>
+      <div class="rate">
+        <output id="rateVal" for="rateRange">—</output>
+        <input type="range" id="rateRange" min="1" max="101" step="1" value="40" aria-label="Ограничение скорости, MB/s">
       </div>
-      <div class="muted" id="rateNow"></div>
+      <div class="rate-scale"><span>1 MB/s</span><span>без ограничения</span></div>
+      <div class="hint" id="rateNow"></div>
     </section>
   </div>
 
@@ -950,9 +965,7 @@ function renderStatus() {
   $("tErr").textContent = t.failed ? `ждут повтора после ошибки: ${t.failed} (агент повторит сам; фильтр «С ошибками» покажет какие)` : "";
   $("hdrProgress").hidden = !t.files || t.remaining_bytes <= 0;
   $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
-  $("rateNow").textContent = state.max_rate === null
-    ? "Сейчас: берётся из конфигурации агента"
-    : "Сейчас задано здесь: " + fmtRate(state.max_rate);
+  renderRate();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
@@ -1224,15 +1237,63 @@ $("delReceived").onclick = async () => {
   msg += "\n\nЭто действие необратимо. Удалить?";
   if (confirm(msg)) queueDelete(files.map(f => f.path), false);
 };
-$("rateApply").onclick = async () => {
-  try { await post("/ui/api/rate", { rate: $("rateInput").value || "0" }); toast("Ограничение применится при следующей связи с агентом"); refresh(); }
-  catch (e) { alert("Ошибка: " + e.message); }
-};
+// ---------- rate slider ----------
+// Positions 1..100 are MB/s in steps of 1, 101 is "no limit". The agent's
+// own limit is the ceiling: the receiver can only lower it, so the slider
+// does not go past it and the part beyond is grey.
+const MB = 1 << 20, RATE_MAX = 100, RATE_NONE = RATE_MAX + 1;
+let rateBusy = false;
+const ratePos = bps => bps > 0 ? Math.min(RATE_MAX, Math.max(1, Math.round(bps / MB))) : RATE_NONE;
+const posRate = pos => pos >= RATE_NONE ? 0 : pos * MB;
+function rateLimitPos() {
+  const own = state && state.agent && state.agent.own_rate;
+  if (own === undefined || own === null) return RATE_NONE; // old agent: the page value replaces its own
+  return own > 0 ? Math.max(1, Math.min(RATE_MAX, Math.floor(own / MB))) : RATE_NONE;
+}
+function paintRate(pos) {
+  const r = $("rateRange"), lim = rateLimitPos(), span = RATE_NONE - 1;
+  r.style.setProperty("--fill", (pos - 1) / span);
+  r.style.setProperty("--lim", (lim - 1) / span);
+  const own = state.agent.own_rate;
+  $("rateVal").textContent = own !== undefined && own !== null && pos >= lim
+    ? fmtRate(own) + " · как в агенте" : fmtRate(posRate(pos));
+}
+function renderRate() {
+  const own = state.agent.own_rate;
+  const lim = rateLimitPos();
+  let eff = state.max_rate;
+  if (eff === null || eff === undefined) eff = own !== undefined && own !== null ? own : state.agent.rate || 0;
+  else if (own > 0 && (eff <= 0 || eff > own)) eff = own;
+  if (!rateBusy) {
+    $("rateRange").value = Math.min(ratePos(eff), lim);
+    paintRate(+$("rateRange").value);
+  }
+  $("rateNow").textContent = own === undefined || own === null
+    ? (state.agent_online || state.agent.version ? "Агент старой версии: значение здесь заменяет его собственное ограничение." : "Агент ещё не сообщил свою скорость.")
+    : own > 0
+      ? `Потолок — скорость в настройках агента: ${fmtRate(own)}. Быстрее агент не отправляет, поэтому часть шкалы правее неё серая. Здесь её можно только уменьшить; поднять — бегунком в окне агента.`
+      : "В агенте скорость не ограничена: здесь можно выбрать любую.";
+}
+$("rateRange").addEventListener("input", () => {
+  const r = $("rateRange"), lim = rateLimitPos();
+  rateBusy = true;
+  if (+r.value > lim) r.value = lim; // the grey part is locked
+  paintRate(+r.value);
+});
+$("rateRange").addEventListener("change", async () => {
+  const pos = +$("rateRange").value, own = state.agent.own_rate;
+  const asAgent = own !== undefined && own !== null && pos >= rateLimitPos();
+  try {
+    await post("/ui/api/rate", { rate: asAgent ? null : pos >= RATE_NONE ? "0" : pos + "MB/s" });
+    toast("Ограничение применится при следующей связи с агентом");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  rateBusy = false;
+  refresh();
+});
 $("pauseBtn").onclick = async () => {
   try { await post("/ui/api/pause", { paused: !(state.paused || state.wait_start) }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
 };
-$("rateAgent").onclick = async () => { await post("/ui/api/rate", { rate: null }); refresh(); };
 $("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
 
 // ---------- folding the settings ----------

@@ -187,7 +187,7 @@ func (w *window) settingsPage(minimized bool) []Widget {
 		Composite{
 			Layout: HBox{MarginsZero: true},
 			Children: []Widget{
-				PushButton{Text: "Файл настроек…", ToolTipText: "Остальные параметры: лимит скорости, фильтры, интервалы", OnClicked: w.openConfig},
+				PushButton{Text: "Файл настроек…", ToolTipText: "Остальные параметры: фильтры, интервалы, журналы", OnClicked: w.openConfig},
 				HSpacer{},
 				PushButton{Text: "Сохранить и применить", OnClicked: w.saveSettings},
 			},

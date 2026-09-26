@@ -115,6 +115,10 @@ type window struct {
 	lblASIAIR, lblReceiver, lblFile, lblSpeed, lblQueue, lblSent, lblErr *walk.Label
 	lblTotal, lblVersion                                                 *walk.Label
 	lblTSCaption, lblTS                                                  *walk.Label
+	lblRate, lblRateNote                                                 *walk.Label
+	rateSlider                                                           *walk.Slider
+	rateBps                                                              int64 // own limit shown by the slider
+	rateGen                                                              int   // debounces saving the slider
 	btnTSLogin                                                           *walk.PushButton
 	btnPause, btnUpdate                                                  *walk.PushButton
 	actPause, actUpdate                                                  *walk.Action
@@ -193,6 +197,7 @@ func Run(cfgPath string) error {
 	})
 
 	w.loadForm()
+	w.loadRate()
 	if !created {
 		w.run.start(cfgPath, w.settings.Paused)
 	}
@@ -301,6 +306,17 @@ func (w *window) create() error {
 											HSpacer{},
 										},
 									},
+								},
+							},
+							GroupBox{
+								Title:  "Скорость передачи",
+								Layout: Grid{Columns: 2, Spacing: 6},
+								Children: []Widget{
+									Slider{AssignTo: &w.rateSlider, MinValue: 1, MaxValue: config.RateSliderMax + 1, LineSize: 1, PageSize: 5,
+										ToolTipText: "Шаг 1 MB/s; крайнее правое положение — без ограничения", OnValueChanged: w.onRateChanged},
+									Label{AssignTo: &w.lblRate, Text: "—", MinSize: Size{Width: 120}},
+									Label{AssignTo: &w.lblRateNote, ColumnSpan: 2, TextColor: colorDim,
+										Text: "Сохраняется сразу. Страница приёмника может только уменьшить эту скорость."},
 								},
 							},
 							GroupBox{
@@ -550,6 +566,7 @@ func (w *window) update() {
 	lastSync, syncErr := a.Receiver()
 	w.updateTailscale(a)
 	setShort(w.lblVersion, versionText(st.Update), maxStatus)
+	w.updateRateNote(st)
 	w.updateOffer(a)
 
 	switch {
@@ -712,4 +729,77 @@ func (w *window) installUpdate() {
 	}
 	log.Printf("Обновление до %s запущено из окна", v)
 	w.update()
+}
+
+// Slider positions: 1..RateSliderMax are MB/s, the last one is no limit.
+func sliderPos(bps int64) int {
+	if bps <= 0 {
+		return config.RateSliderMax + 1
+	}
+	return int(min(max((bps+config.RateStep/2)/config.RateStep, 1), config.RateSliderMax))
+}
+
+func sliderRate(pos int) int64 {
+	if pos > config.RateSliderMax {
+		return 0
+	}
+	return int64(pos) * config.RateStep
+}
+
+// loadRate puts max_rate of agent.yaml on the slider.
+func (w *window) loadRate() {
+	bps, err := config.ParseRate(config.PeekAgent(w.cfgPath).MaxRate)
+	if err != nil {
+		bps, _ = config.ParseRate(config.DefaultMaxRate)
+	}
+	w.rateBps = bps // set first: onRateChanged then sees no change to save
+	w.rateSlider.SetValue(sliderPos(bps))
+	w.lblRate.SetText(config.FormatRate(bps))
+}
+
+// onRateChanged follows the slider; the limit is saved and applied once it
+// stops moving for a moment.
+func (w *window) onRateChanged() {
+	if !w.ready {
+		return
+	}
+	bps := sliderRate(w.rateSlider.Value())
+	if sliderPos(w.rateBps) == w.rateSlider.Value() {
+		bps = w.rateBps // not moved: keep a value like 500KB/s from agent.yaml
+	}
+	w.lblRate.SetText(config.FormatRate(bps))
+	w.rateGen++
+	gen := w.rateGen
+	time.AfterFunc(600*time.Millisecond, func() {
+		w.mw.Synchronize(func() {
+			if gen == w.rateGen && bps != w.rateBps {
+				w.saveRate(bps)
+			}
+		})
+	})
+}
+
+func (w *window) saveRate(bps int64) {
+	if err := config.UpdateAgentFile(w.cfgPath, map[string]string{"max_rate": config.FormatRateSetting(bps)}); err != nil {
+		log.Printf("Скорость не сохранена: %v", err)
+		w.loadRate()
+		return
+	}
+	w.rateBps = bps
+	if a, _ := w.run.state(); a != nil {
+		a.SetLocalRate(bps)
+	} else {
+		log.Printf("Ограничение скорости: %s", config.FormatRate(bps))
+	}
+}
+
+// updateRateNote says when the receiver page holds the transfer lower.
+func (w *window) updateRateNote(st protocol.AgentStatus) {
+	text := "Сохраняется сразу. Страница приёмника может только уменьшить эту скорость."
+	if st.OwnRate != nil && st.Rate > 0 && (*st.OwnRate <= 0 || st.Rate < *st.OwnRate) {
+		text = "На странице приёмника скорость уменьшена до " + config.FormatRate(st.Rate) + " — сейчас действует она."
+	}
+	if w.lblRateNote.Text() != text {
+		w.lblRateNote.SetText(text)
+	}
 }

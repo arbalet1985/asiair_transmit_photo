@@ -64,13 +64,17 @@ type AgentStatus struct {
 	Uploading  string    `json:"uploading,omitempty"`
 	UploadDone int64     `json:"upload_done"`
 	UploadSize int64     `json:"upload_size"`
-	Speed      float64   `json:"speed"`            // bytes/s, measured
-	Rate       int64     `json:"rate"`             // bytes/s, limit in effect (0 = unlimited)
-	QueueFiles int       `json:"queue_files"`      // files waiting to be sent
-	QueueBytes int64     `json:"queue_bytes"`      // bytes waiting to be sent
-	SentFiles  int       `json:"sent_files"`       // files sent since start
-	SentBytes  int64     `json:"sent_bytes"`       // bytes sent since start
-	Paused     bool      `json:"paused,omitempty"` // transfer paused (from either side)
+	Speed      float64   `json:"speed"` // bytes/s, measured
+	Rate       int64     `json:"rate"`  // bytes/s, limit in effect (0 = unlimited)
+	// OwnRate is the agent's own limit (max_rate in agent.yaml), bytes/s,
+	// 0 = unlimited. The receiver can only lower it. Nil in old agents,
+	// where the receiver's limit replaced it.
+	OwnRate    *int64 `json:"own_rate,omitempty"`
+	QueueFiles int    `json:"queue_files"`      // files waiting to be sent
+	QueueBytes int64  `json:"queue_bytes"`      // bytes waiting to be sent
+	SentFiles  int    `json:"sent_files"`       // files sent since start
+	SentBytes  int64  `json:"sent_bytes"`       // bytes sent since start
+	Paused     bool   `json:"paused,omitempty"` // transfer paused (from either side)
 
 	// Where the pause is set: in the agent window and/or on the receiver page.
 	LocalPause  bool `json:"local_pause,omitempty"`
@@ -117,7 +121,9 @@ type SyncResponse struct {
 	// SyncRequest. Zero from receivers without long polling.
 	Rev      uint64    `json:"rev,omitempty"`
 	Commands []Command `json:"commands"`
-	// MaxRate in bytes/s; nil = use the agent's own setting, 0 = unlimited.
+	// MaxRate in bytes/s; nil or 0 = the agent's own setting. Agents since
+	// OwnRate use the lower of the two; older ones use MaxRate instead of
+	// their own (0 = unlimited).
 	MaxRate *int64 `json:"max_rate"`
 	// Paused: the transfer is paused from the receiver page.
 	Paused bool `json:"paused,omitempty"`

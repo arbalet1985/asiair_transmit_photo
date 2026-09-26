@@ -50,12 +50,13 @@ type seenInfo struct {
 }
 
 type Agent struct {
-	cfg       *config.Agent
-	src       source.Source
-	cl        *client
-	ts        *tsnode.Node // Tailscale connection to the receiver, or nil
-	lim       *ratelimit.Limiter
-	localRate int64
+	cfg        *config.Agent
+	src        source.Source
+	cl         *client
+	ts         *tsnode.Node // Tailscale connection to the receiver, or nil
+	lim        *ratelimit.Limiter
+	localRate  atomic.Int64 // max_rate of agent.yaml, changed from the window
+	remoteRate *int64       // guarded by mu; the limit set on the receiver page
 
 	mu       sync.Mutex
 	sent     map[string]sentInfo
@@ -150,7 +151,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 	rate, _ := config.ParseRate(cfg.MaxRate)
 	a := &Agent{
 		cfg: cfg, src: src, cl: cl, ts: node,
-		lim: ratelimit.New(rate), localRate: rate,
+		lim:  ratelimit.New(rate),
 		sent: map[string]sentInfo{}, seen: map[string]seenInfo{},
 		deleted: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}, failErr: map[string]string{},
 		partial: map[string]int64{}, fetch: map[string]bool{},
@@ -162,6 +163,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 	a.status.ASIAIR = cfg.ASIAIR
 	a.status.Connection = cfg.Connection
 	a.status.Rate = rate
+	a.localRate.Store(rate)
 	a.initDiscovery()
 	cl.onPin = a.pinFingerprint
 	if err := a.loadState(); err != nil {
@@ -248,7 +250,7 @@ func (a *Agent) saveState() {
 // Run works until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
 	log.Printf("Агент %s: ASIAIR %s → %s, ограничение скорости: %s",
-		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate))
+		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate.Load()))
 	if a.Restart != nil {
 		a.startupUpdate()
 	}
@@ -949,6 +951,8 @@ func (a *Agent) Status() protocol.AgentStatus {
 	}
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
+	own := a.localRate.Load()
+	a.status.OwnRate = &own
 	st := a.status
 	// overall progress also counts the parts of interrupted files already at
 	// the receiver (the file being sent is counted by UploadDone)
@@ -1002,14 +1006,10 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	}
 	a.syncRev = resp.Rev
 	held = resp.Rev != 0
-	rate := a.localRate
-	if resp.MaxRate != nil {
-		rate = *resp.MaxRate
-	}
-	if rate != a.lim.Rate() {
-		log.Printf("Агент: ограничение скорости: %s", config.FormatRate(rate))
-		a.lim.SetRate(rate)
-	}
+	a.mu.Lock()
+	a.remoteRate = resp.MaxRate
+	a.mu.Unlock()
+	a.applyRate()
 	a.setFetch(resp.Fetch)
 	a.setDiskFull(resp.DiskFull)
 	a.maybeUpdate(ctx, resp.Update)
@@ -1126,4 +1126,30 @@ func newSession() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// SetLocalRate changes the agent's own limit (the slider in the window).
+func (a *Agent) SetLocalRate(bps int64) {
+	a.localRate.Store(bps)
+	a.applyRate()
+	a.kickSync() // the receiver page shows the new limit at once
+}
+
+// applyRate sets the limit in effect: the agent's own one, or the lower
+// limit set on the receiver page (which cannot raise it).
+func (a *Agent) applyRate() {
+	a.mu.Lock()
+	rate := effectiveRate(a.localRate.Load(), a.remoteRate)
+	a.mu.Unlock()
+	if rate != a.lim.Rate() {
+		log.Printf("Агент: ограничение скорости: %s", config.FormatRate(rate))
+		a.lim.SetRate(rate)
+	}
+}
+
+func effectiveRate(own int64, remote *int64) int64 {
+	if remote != nil && *remote > 0 && (own <= 0 || *remote < own) {
+		return *remote
+	}
+	return own
 }

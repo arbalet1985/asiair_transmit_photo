@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/receiver"
 )
 
@@ -171,9 +172,30 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("traversal accepted: %d", r.StatusCode)
 	}
 
-	// rate set on the web page reaches the agent
+	// rate set on the web page reaches the agent; it can only lower the
+	// agent's own limit
+	ui("/ui/api/rate", map[string]any{"rate": "200KB/s"})
+	waitFor(t, "rate change", 5*time.Second, func() bool { return a.lim.Rate() == 200*1024 })
 	ui("/ui/api/rate", map[string]any{"rate": "3MB/s"})
-	waitFor(t, "rate change", 5*time.Second, func() bool { return a.lim.Rate() == 3<<20 })
+	waitFor(t, "rate capped", 5*time.Second, func() bool { return a.lim.Rate() == 400*1024 })
+	a.SetLocalRate(5 << 20) // the slider in the agent window
+	waitFor(t, "own limit raised", 5*time.Second, func() bool { return a.lim.Rate() == 5<<20 })
+	waitFor(t, "own rate reported", 5*time.Second, func() bool {
+		resp, err := http.Get("http://" + rcfg.UIListen + "/ui/api/state")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var st struct {
+			Agent protocol.AgentStatus `json:"agent"`
+		}
+		json.NewDecoder(resp.Body).Decode(&st)
+		return st.Agent.OwnRate != nil && *st.Agent.OwnRate == 5<<20
+	})
+	ui("/ui/api/rate", map[string]any{"rate": "3MB/s"})
+	waitFor(t, "receiver limit under the new own one", 5*time.Second, func() bool { return a.lim.Rate() == 3<<20 })
+	ui("/ui/api/rate", map[string]any{"rate": nil})
+	a.SetLocalRate(400 * 1024)
 	ui("/ui/api/rate", map[string]any{"rate": nil})
 	waitFor(t, "rate reset", 5*time.Second, func() bool { return a.lim.Rate() == 400*1024 })
 

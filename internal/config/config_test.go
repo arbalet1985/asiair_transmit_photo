@@ -110,3 +110,15 @@ func TestParseDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatRateSetting(t *testing.T) {
+	for bps, want := range map[int64]string{0: "0", 40 << 20: "40MB/s", 1 << 20: "1MB/s", 500 * 1024: "500KB/s"} {
+		got := FormatRateSetting(bps)
+		if got != want {
+			t.Errorf("%d: %q, want %q", bps, got, want)
+		}
+		if back, _ := ParseRate(got); back != bps {
+			t.Errorf("%q parses to %d, want %d", got, back, bps)
+		}
+	}
+}

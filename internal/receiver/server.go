@@ -597,6 +597,11 @@ func (s *Server) handleUIRate(w http.ResponseWriter, r *http.Request) {
 		}
 		bps = &v
 	}
+	// the agent sends no faster than its own limit: a limit at or above it
+	// (or none) means "as in the agent"
+	if own := s.state.Snapshot().Status.OwnRate; bps != nil && own != nil && *own > 0 && (*bps <= 0 || *bps >= *own) {
+		bps = nil
+	}
 	if err := s.state.SetRate(bps); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
