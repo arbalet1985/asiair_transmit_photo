@@ -158,3 +158,10 @@ func TestSortShares(t *testing.T) {
 		t.Errorf("sortShares = %q; want %q", got, want)
 	}
 }
+
+func TestDirSpace(t *testing.T) {
+	sp := NewDir(t.TempDir()).Space(context.Background())
+	if len(sp) != 1 || sp[0].Total == 0 || sp[0].Free > sp[0].Total {
+		t.Fatalf("%+v", sp)
+	}
+}

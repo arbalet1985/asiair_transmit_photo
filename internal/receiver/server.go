@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -65,6 +66,9 @@ type Server struct {
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
 	speed      speedLog      // the agent speed of the last hours, for the chart
+	quality    *quality      // stars and HFR of the received Light frames
+	thumbs     *thumbCache   // gallery thumbnails
+	thumbSem   chan struct{} // thumbnails made at once
 	cleanupNow chan struct{} // run the ASIAIR cleanup at once (setting changed)
 
 	// Firewall manages the Windows firewall rule (set by the program).
@@ -117,6 +121,8 @@ func New(cfg *config.Receiver) (*Server, error) {
 		sess: loadSessions(filepath.Join(cfg.DataDir, "sessions.json")), lim: newLimiter()}
 	s.updater = newUpdater(s)
 	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
+	s.quality = newQuality(filepath.Join(cfg.DataDir, "quality.json"))
+	s.thumbs, s.thumbSem = newThumbCache(), make(chan struct{}, 2)
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
 		if err != nil {
@@ -166,7 +172,14 @@ func (s *Server) Run(ctx context.Context) error {
 	log.Printf("Приёмник: версия %s", protocol.Version)
 	go s.updater.run(ctx)
 	go s.automation(ctx)
-	defer s.speed.save() // the chart history survives a restart
+	qctx, qstop := context.WithCancel(ctx)
+	qdone := make(chan struct{})
+	go func() {
+		defer close(qdone)
+		s.qualityWorker(qctx)
+	}()
+	defer func() { qstop(); <-qdone }() // it saves the measurements
+	defer s.speed.save()                // the chart history survives a restart
 	if s.cfg.TailscaleOn {
 		if err := s.startTailscale(); err != nil {
 			log.Printf("Приёмник: Tailscale не запущен: %v", err)
@@ -313,6 +326,9 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
 		log.Printf("Приёмник: получен %s (%s)", p, config.FormatBytes(size))
+		if measurable(p) {
+			s.quality.poke()
+		}
 		s.state.FetchDone(p)
 		w.WriteHeader(http.StatusOK)
 	}
@@ -441,6 +457,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)
 	mux.HandleFunc("/ui/api/order", s.handleUIOrder)
 	mux.HandleFunc("/ui/api/site", s.handleUISite)
+	mux.HandleFunc("/ui/api/open", s.handleUIOpen)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
@@ -448,6 +465,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
+	mux.HandleFunc("/ui/thumb", s.handleUIThumb)
 	mux.HandleFunc("/ui/api/connect", s.handleUIConnect)
 	mux.HandleFunc("/ui/api/tailscale", s.handleUITailscale)
 	mux.HandleFunc("/ui/api/network", s.handleUINetwork)
@@ -531,6 +549,14 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 	local, _ := store.List(shares)
 	online := time.Since(snap.LastSeen) < 2*time.Minute
 	files, totals := buildFiles(local, snap.Inventory, snap.Commands, snap.Status, online, store.Partials())
+	for i := range files {
+		f := &files[i]
+		if f.Local && measurable(f.Path) {
+			if e, ok := s.quality.get(f.Path, f.Size, f.MTime); ok && e.Err == "" {
+				f.Measured, f.HFR, f.Stars = true, math.Round(e.HFR*100)/100, e.Stars
+			}
+		}
+	}
 	out := uiState{
 		Files:         files,
 		Totals:        totals,

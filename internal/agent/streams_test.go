@@ -73,6 +73,9 @@ func TestStreams(t *testing.T) {
 	if most < 2 || most > 4 {
 		t.Fatalf("files at once: %d, want 2..4", most)
 	}
+	if st := a.Status(); len(st.Storage) != 1 || st.Storage[0].Total == 0 {
+		t.Fatalf("ASIAIR space: %+v", st.Storage)
+	}
 	if a.Status().Streams != 4 {
 		t.Fatalf("streams %d", a.Status().Streams)
 	}

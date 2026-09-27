@@ -15,6 +15,8 @@ package protocol
 import (
 	"crypto/sha256"
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -70,6 +72,8 @@ type AgentStatus struct {
 	Rate       int64   `json:"rate"`  // bytes/s, limit in effect (0 = unlimited)
 	// Uploads: the files being sent now, several at once with Streams > 1.
 	Uploads []Upload `json:"uploads,omitempty"`
+	// Storage: free space of the ASIAIR storages (eMMC, SD card, USB stick).
+	Storage []StorageSpace `json:"storage,omitempty"`
 	// Next: the files to be sent next (up to 3), in order; Done is what the
 	// receiver already has of an interrupted file.
 	Next []Upload `json:"next,omitempty"`
@@ -167,6 +171,13 @@ type SyncResponse struct {
 	Update *UpdateOffer `json:"update,omitempty"`
 }
 
+// StorageSpace is the free space of one ASIAIR share.
+type StorageSpace struct {
+	Share string `json:"share"`
+	Free  int64  `json:"free"`
+	Total int64  `json:"total"`
+}
+
 // Upload is a file being sent.
 type Upload struct {
 	Path string `json:"path"`
@@ -255,4 +266,20 @@ type RemoteFile struct {
 // Inventory is the full list of files on the ASIAIR after a scan.
 type Inventory struct {
 	Files []RemoteFile `json:"files"`
+}
+
+var frameRe = regexp.MustCompile(`(?:^|[^a-z])(light|dark|flat|bias)(?:[^a-z]|$)`)
+
+// FrameKind tells the frame type from the file name ("Light_M31_300.0s_….fit"):
+// "light", "dark", "flat", "bias", "darkflat" or "".
+func FrameKind(p string) string {
+	n := strings.ToLower(path.Base(p))
+	if strings.Contains(n, "darkflat") || strings.Contains(n, "flatdark") ||
+		strings.Contains(n, "dark_flat") || strings.Contains(n, "flat_dark") {
+		return "darkflat"
+	}
+	if m := frameRe.FindStringSubmatch(n); m != nil {
+		return m[1]
+	}
+	return ""
 }

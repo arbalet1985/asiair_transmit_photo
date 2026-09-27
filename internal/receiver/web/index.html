@@ -181,6 +181,32 @@
   .totp { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
   .totp img { display: block; margin: 8px 0; background: #fff; padding: 8px; border-radius: 6px; image-rendering: pixelated; }
 
+  .seg { display: inline-flex; }
+  .seg button { border-radius: 0; }
+  .seg button:first-child { border-radius: 6px 0 0 6px; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+  .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 8px; }
+  .tile { position: relative; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--row); cursor: pointer; }
+  .tile img { display: block; width: 100%; aspect-ratio: 3 / 2; object-fit: cover; background: #000; }
+  .tile .cap { padding: 4px 6px; font-size: 12px; }
+  .tile .cap .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .cap .muted { font-size: 11px; }
+  .tile.sel { outline: 3px solid var(--danger); outline-offset: -3px; }
+  .tile input[type=checkbox] { position: absolute; top: 6px; left: 6px; width: 18px; height: 18px; }
+  .tile .badge { position: absolute; top: 6px; right: 6px; }
+  .qbad { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+  .usage { margin-top: 10px; font-size: 13px; }
+  .usage .row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 80px; gap: 8px; align-items: center; margin: 2px 0; }
+  .usage .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .usage .row .num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .usage .bar { height: 5px; background: var(--row); border-radius: 3px; overflow: hidden; }
+  .usage .bar > div { height: 100%; background: var(--accent); }
+  .space { display: block; margin-bottom: 4px; }
+  .space .progress { margin-top: 2px; }
+  table.summary tbody tr { cursor: pointer; }
+  table.summary tbody tr:hover td { background: var(--row); }
+
   /* ---------- phone ---------- */
   @media (max-width: 700px) {
     body { font-size: 15px; }
@@ -254,6 +280,7 @@
         <dt>Связь</dt><dd id="aSeen">—</dd>
         <dt>Последний обход</dt><dd id="aScan">—</dd>
         <dt>Очередь</dt><dd id="aQueue">—</dd>
+        <dt>Место на ASIAIR</dt><dd id="aSpace">—</dd>
         <dt>Отправлено</dt><dd id="aSent">—</dd>
         <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
       </dl>
@@ -337,7 +364,7 @@
         <label><input type="checkbox" id="summaryAll"> все ночи</label>
       </div>
       <div class="tablewrap"><table class="summary">
-        <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>Получено</th></tr></thead>
+        <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>HFR</th><th>Получено</th></tr></thead>
         <tbody id="summaryBody"></tbody>
       </table></div>
       <div class="line" id="summaryTotals"></div>
@@ -362,6 +389,7 @@
       <div class="progress disk"><div id="dBar"></div></div>
       <div class="line" id="dLine">—</div>
       <div class="line err" id="dFull"></div>
+      <div id="dUsage" class="usage"></div>
       <div class="label" style="margin-top:8px">Оставлять свободным</div>
       <div class="toolbar">
         <input type="text" id="minFreeInput" placeholder="напр. 5%, 10GB, 0" size="12">
@@ -545,7 +573,15 @@
     </div>
     <div class="toolbar filters" id="filters">
       <select id="fShare" title="Шара (хранилище) ASIAIR: внутренняя память, SD-карта, флешка"><option value="">Все шары</option></select>
+      <select id="fNight" title="Ночь съёмки (с полудня до полудня)"><option value="">Все ночи</option></select>
+      <select id="fObject" title="Объект (папка ASIAIR Autorun/Light/<объект> или имя Light-кадра)"><option value="">Все объекты</option></select>
       <select id="fKind" title="Тип кадра по имени файла: Light, Dark, Flat, Bias"><option value="">Все кадры</option></select>
+      <select id="fQuality" title="Оценка Light-кадров по звёздам: мало звёзд — облака или дымка, крупные звёзды — фокус, ветер, плохое небо">
+        <option value="">Любое качество</option>
+        <option value="bad">Подозрительные кадры</option>
+        <option value="good">Хорошие кадры</option>
+        <option value="unmeasured">Ещё не оценены</option>
+      </select>
       <select id="fType" title="Тип файлов"><option value="">Все типы</option></select>
       <select id="fPhase" title="Освещённость Луны в момент съёмки">
         <option value="">Любая фаза Луны</option>
@@ -568,6 +604,9 @@
     </div>
     </div>
     <div class="toolbar">
+      <span class="seg" role="group" aria-label="Вид">
+        <button id="viewList" title="Список по папкам">☰ Список</button><button id="viewGrid" title="Миниатюры полученных кадров">▦ Плитка</button>
+      </span>
       <button id="collapseAll" title="Свернуть все папки">▸ Свернуть все</button>
       <button id="expandAll" title="Развернуть все папки">▾ Развернуть все</button>
       <button id="selFound" title="Отметить все файлы, которые сейчас показаны (с учётом фильтров, в том числе в свёрнутых папках)">Выбрать все найденные</button>
@@ -590,6 +629,8 @@
         <tbody id="files"></tbody>
       </table>
     </div>
+    <div class="gallery" id="gallery" hidden></div>
+    <div class="toolbar" id="galleryMore" hidden><button id="galleryMoreBtn">Показать ещё</button></div>
     <div class="muted" id="filesInfo" style="margin-top:8px"></div>
   </section>
 
@@ -614,6 +655,7 @@
     <button id="vNext" title="Следующий (→)">→</button>
     <span class="title" id="vTitle"></span>
     <span class="muted" id="vPos"></span>
+    <button id="vOpen" title="Открыть папку с этим файлом на этом компьютере">📂 В папке</button>
     <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
     <button id="vClose" title="Закрыть (Esc)">✕</button>
   </div>
@@ -761,7 +803,7 @@ function shareLabel(sh) {
 // day boundaries in local time; "по" includes the whole day
 const dayStart = d => d ? new Date(d + "T00:00:00").getTime() : null;
 const dayEnd = d => d ? new Date(d + "T00:00:00").getTime() + 86400000 : null;
-const filterIds = ["filter", "show", "fShare", "fKind", "fType", "fPhase", "fMoonAlt", "fFrom", "fTo"];
+const filterIds = ["filter", "show", "fShare", "fNight", "fObject", "fKind", "fType", "fQuality", "fPhase", "fMoonAlt", "fFrom", "fTo"];
 function saveFilters() {
   const v = {};
   for (const id of filterIds) v[id] = $(id).value;
@@ -778,7 +820,7 @@ function loadFilters() {
   $("showFiltered").checked = !!v.showFiltered;
 }
 function filtersActive() {
-  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fKind").value || $("fType").value || $("fPhase").value || $("fMoonAlt").value || $("fFrom").value || $("fTo").value);
+  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fNight").value || $("fObject").value || $("fKind").value || $("fType").value || $("fQuality").value || $("fPhase").value || $("fMoonAlt").value || $("fFrom").value || $("fTo").value);
 }
 // fill the storage and type lists from the files, with counts
 function renderFilterOptions() {
@@ -803,6 +845,17 @@ function renderFilterOptions() {
   const kl = kindGroups.filter(([id]) => kinds.has(id)).map(([id, label]) => [id, `${label} — ${kinds.get(id)}`]);
   if (kinds.has("other")) kl.push(["other", `Без типа в имени — ${kinds.get("other")}`]);
   fill($("fKind"), "Все кадры", kl);
+  const nights = new Map(), objects = new Map();
+  for (const f of state.files) {
+    if (f.status === "filtered" && !$("showFiltered").checked) continue;
+    const i = infoOf(f);
+    if (i.kind === "other") continue;
+    const n = nights.get(i.night.key) || { label: i.night.label, n: 0 };
+    n.n++; nights.set(i.night.key, n);
+    if (i.object) objects.set(i.object, (objects.get(i.object) || 0) + 1);
+  }
+  fill($("fNight"), "Все ночи", [...nights].sort((a, b) => b[0].localeCompare(a[0])).map(([k, v]) => [k, `${v.label} — ${v.n}`]));
+  fill($("fObject"), "Все объекты", [...objects].sort((a, b) => a[0].localeCompare(b[0])).map(([o, n]) => [o, `${o} — ${n}`]));
   const tl = typeGroups.filter(([id]) => types.has(id)).map(([id, label]) => [id, `${label} — ${types.get(id)}`]);
   if (types.has("other")) tl.push(["other", `Другие — ${types.get("other")}`]);
   fill($("fType"), "Все типы", tl);
@@ -815,7 +868,10 @@ function renderFiltersSummary(shown) {
   if (q) parts.push(`«${q}»`);
   if ($("show").value !== "all") parts.push($("show").selectedOptions[0].textContent);
   if ($("fShare").value) parts.push(shareLabel($("fShare").value));
+  if ($("fNight").value) parts.push("ночь " + $("fNight").selectedOptions[0].textContent.split(" — ")[0]);
+  if ($("fObject").value) parts.push($("fObject").value);
   if ($("fKind").value) parts.push($("fKind").selectedOptions[0].textContent.split(" — ")[0]);
+  if ($("fQuality").value) parts.push($("fQuality").selectedOptions[0].textContent);
   if ($("fType").value) parts.push($("fType").selectedOptions[0].textContent.split(" — ")[0]);
   if ($("fPhase").value) parts.push($("fPhase").selectedOptions[0].textContent);
   if ($("fMoonAlt").value) parts.push($("fMoonAlt").selectedOptions[0].textContent);
@@ -834,6 +890,7 @@ function visibleFiles() {
   const mode = $("show").value, showFiltered = $("showFiltered").checked;
   const share = $("fShare").value, type = $("fType").value, kind = $("fKind").value;
   const phase = $("fPhase").value.split("-").map(Number), moonAlt = siteSet() ? $("fMoonAlt").value : "";
+  const night = $("fNight").value, obj = $("fObject").value, qual = $("fQuality").value;
   const from = dayStart($("fFrom").value), to = dayEnd($("fTo").value);
   return state.files.filter(f => {
     if (q && !f.path.toLowerCase().includes(q)) return false;
@@ -841,6 +898,14 @@ function visibleFiles() {
     if (share && shareOf(f.path) !== share) return false;
     if (type && fileType(f.name) !== type) return false;
     if (kind && frameKind(f.name) !== kind) return false;
+    if (night || obj) {
+      const i = infoOf(f);
+      if (night && i.night.key !== night || obj && i.object !== obj) return false;
+    }
+    if (qual) {
+      if (qual === "unmeasured") { if (f.q || !f.local || frameKind(f.name) !== "light" || !isFits(f.name)) return false; }
+      else { const j = judge(f); if (!j || (qual === "bad") !== j.bad) return false; }
+    }
     if (phase.length === 2 || moonAlt) {
       const m = moonOf(f);
       if (!m) return false;
@@ -923,9 +988,15 @@ function renderFiles() {
   const files = visibleFiles();
   const tb = $("files");
   tb.replaceChildren();
+  const grid = view === "grid";
+  $("filesTable").parentElement.hidden = grid;
+  $("gallery").hidden = !grid;
+  $("galleryMore").hidden = true;
+  $("collapseAll").hidden = $("expandAll").hidden = grid;
+  if (grid) renderGallery(files);
   const paused = xferPaused(), requested = new Set(state.fetch || []);
   let folder = null;
-  for (const f of files) {
+  for (const f of grid ? [] : files) {
     if (f.folder !== folder) {
       folder = f.folder;
       const inFolder = files.filter(x => x.folder === folder);
@@ -952,6 +1023,7 @@ function renderFiles() {
       if (xfer.length) head.append(el("span", { className: "fbar" }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
       const toFetch = inFolder.filter(x => canFetch(x) && !requested.has(x.path)).map(x => x.path);
       if (paused && toFetch.length) head.append(miniButton(`⤓ Скачать папку (${toFetch.length})`, "Передать файлы папки, не снимая паузу", () => fetchFiles(toFetch)));
+      if (!isRemote() && inFolder.some(x => x.local)) head.append(miniButton("📂", "Открыть эту папку на этом компьютере", () => openFolder(fname)));
       const sd = syncDirOf(folder);
       if (sd) {
         head.append(el("span", {}, " ", el("span", { className: "badge info", textContent: "⟳ синхронизируется на паузе",
@@ -981,7 +1053,7 @@ function renderFiles() {
       el("td", {}, cb),
       el("td", { className: "name" }, name),
       el("td", { className: "num", textContent: fmtBytes(f.size) }),
-      el("td", {}, fmtTime(f.mtime), moonTag(f)),
+      el("td", {}, fmtTime(f.mtime), moonTag(f), qualityTag(f)),
       el("td", {}, statusBadge(f), fetchControl(f)),
       el("td", {}, remote)));
   }
@@ -1140,6 +1212,8 @@ function renderStatus() {
   renderSummary();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
+  renderUsage();
+  renderSpace(state.agent || {});
   renderUpdate(state.update || {}, state.agent || {});
   renderTailscale(state.tailscale);
   renderRemote(state.remote_access);
@@ -1251,7 +1325,7 @@ function filtersChanged() { saveFilters(); if (state) { renderFilterOptions(); r
 for (const id of filterIds) $(id).addEventListener(id === "filter" ? "input" : "change", filtersChanged);
 $("showFiltered").onchange = filtersChanged;
 $("fReset").onclick = () => {
-  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fPhase").value = ""; $("fMoonAlt").value = ""; $("fFrom").value = ""; $("fTo").value = "";
+  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fNight").value = ""; $("fObject").value = ""; $("fQuality").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fPhase").value = ""; $("fMoonAlt").value = ""; $("fFrom").value = ""; $("fTo").value = "";
   filtersChanged();
 };
 // the last night: from noon of the day before until noon (by the newest frame)
@@ -1549,6 +1623,178 @@ function renderCleanup() {
   $("cleanNow").textContent = !c.enabled ? "Выключена." : `Включена: старше ${c.days} дн.` + (last ? "; " + last : "");
 }
 
+// ---------- frame info, quality, gallery, space ----------
+const infoCache = new Map();
+function infoOf(f) {
+  const k = f.path + "|" + f.mtime;
+  let v = infoCache.get(k);
+  if (!v) {
+    const fi = frameInfo(f);
+    v = { ...fi, night: nightFmt(fi.when) };
+    if (infoCache.size > 60000) infoCache.clear();
+    infoCache.set(k, v);
+  }
+  return v;
+}
+const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+let qualMap = null, qualKey = "";
+// typical stars and HFR of each night and object, from its measured frames
+function qualityGroups() {
+  const key = state.files.length + "|" + state.files.reduce((n, f) => n + (f.q ? 1 : 0), 0);
+  if (key === qualKey && qualMap) return qualMap;
+  const groups = new Map();
+  for (const f of state.files) {
+    if (!f.q) continue;
+    const i = infoOf(f), g = i.night.key + "|" + i.object;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(f);
+  }
+  qualMap = new Map();
+  for (const [g, fs] of groups) {
+    if (fs.length < 5) continue; // too few to tell what is normal
+    qualMap.set(g, { hfr: median(fs.filter(f => f.stars > 0).map(f => f.hfr)), stars: median(fs.map(f => f.stars)) });
+  }
+  qualKey = key;
+  return qualMap;
+}
+// judge compares a measured frame with the others of its night and object
+function judge(f) {
+  if (!f.q) return null;
+  const i = infoOf(f), m = qualityGroups().get(i.night.key + "|" + i.object);
+  if (!m) return { bad: false };
+  if (m.stars > 0 && f.stars < 0.6 * m.stars) return { bad: true, why: `мало звёзд: ${f.stars} при обычных ${m.stars} — облака, дымка, роса?` };
+  if (m.hfr > 0 && f.hfr > 1.3 * m.hfr) return { bad: true, why: `звёзды крупнее обычного: HFR ${f.hfr.toFixed(2)} при ${m.hfr.toFixed(2)} — фокус, ветер, гидирование?` };
+  return { bad: false };
+}
+function qualityTag(f) {
+  if (!f.q) return "";
+  const t = el("span", { className: "muted", textContent: ` · HFR ${f.hfr ? f.hfr.toFixed(2) : "—"} · ${f.stars}★`,
+    title: "Размер звёзд (HFR, пиксели кадра; меньше — резче) и число найденных звёзд" });
+  const j = judge(f);
+  return j && j.bad ? el("span", {}, t, " ", el("span", { className: "badge qbad", textContent: "⚠", title: j.why })) : t;
+}
+function qualitySummary(fs) {
+  if (!fs.length) return "—";
+  const h = median(fs.filter(f => f.stars > 0).map(f => f.hfr));
+  const bad = fs.filter(f => { const j = judge(f); return j && j.bad; }).length;
+  return (h ? h.toFixed(2) : "—") + (bad ? ` · ⚠ ${bad}` : "");
+}
+// a row of the summary: show its frames in the file list
+function showGroup(r) {
+  $("fNight").value = r.night.key;
+  $("fObject").value = r.object || "";
+  $("fKind").value = r.kind;
+  filtersChanged();
+  $("filesBar").scrollIntoView({ behavior: "smooth" });
+}
+async function openFolder(path) {
+  try { await post("/ui/api/open", { path }); }
+  catch (e) { alert("Не удалось открыть: " + e.message); }
+}
+$("vOpen").onclick = () => { const f = V.list[V.idx]; if (f) openFolder(f.path); };
+
+let view = store.get("view", "list"), galleryLimit = 120;
+function setView(v) {
+  view = v;
+  store.set("view", v);
+  $("viewList").classList.toggle("on", v === "list");
+  $("viewGrid").classList.toggle("on", v === "grid");
+  galleryLimit = 120;
+  if (state) renderFiles();
+}
+$("viewList").onclick = () => setView("list");
+$("viewGrid").onclick = () => setView("grid");
+$("viewList").classList.toggle("on", view === "list");
+$("viewGrid").classList.toggle("on", view === "grid");
+$("galleryMoreBtn").onclick = () => { galleryLimit += 120; renderFiles(); };
+function renderGallery(files) {
+  const g = $("gallery");
+  const list = files.filter(f => f.local && viewable(f.name));
+  const keep = new Map([...g.children].filter(t => t.dataset.key).map(t => [t.dataset.key, t]));
+  const tiles = [];
+  for (const f of list.slice(0, galleryLimit)) {
+    const key = f.path + "|" + f.mtime;
+    let t = keep.get(key);
+    if (!t) {
+      t = el("div", { className: "tile" });
+      t.dataset.key = key;
+      const img = el("img", { loading: "lazy", decoding: "async", alt: f.name, src: "/ui/thumb?w=320&path=" + encodeURIComponent(f.path) });
+      img.onerror = () => { img.style.visibility = "hidden"; };
+      t.append(img, el("input", { type: "checkbox", title: "Отметить для удаления на ASIAIR" }), el("div", { className: "cap" }));
+    }
+    const cb = t.querySelector("input");
+    cb.checked = selected.has(f.path);
+    cb.disabled = !f.remote || f.pending;
+    cb.onclick = e => { e.stopPropagation(); cb.checked ? selected.add(f.path) : selected.delete(f.path); renderFiles(); };
+    t.classList.toggle("sel", selected.has(f.path));
+    t.onclick = () => openViewer(f.path, list);
+    t.querySelector(".cap").replaceChildren(el("span", { className: "name", textContent: f.name, title: f.path }),
+      el("span", { className: "muted", textContent: fmtTime(f.mtime) }), moonTag(f), qualityTag(f));
+    tiles.push(t);
+  }
+  if (!list.length) tiles.push(el("div", { className: "muted", textContent: "Нет полученных кадров для показа: снимите часть фильтров или дождитесь передачи." }));
+  g.replaceChildren(...tiles);
+  $("galleryMore").hidden = list.length <= galleryLimit;
+  $("galleryMoreBtn").textContent = `Показать ещё (${list.length - galleryLimit})`;
+}
+
+const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
+// how much a night of shooting takes: the average of the last three nights
+function bytesPerNight() {
+  const nights = new Map();
+  for (const f of state.files) {
+    if (f.status === "filtered") continue;
+    const i = infoOf(f);
+    if (i.kind === "other") continue;
+    nights.set(i.night.key, (nights.get(i.night.key) || 0) + (f.remote_size || f.size));
+  }
+  const last = [...nights].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 3).map(x => x[1]);
+  return last.length ? last.reduce((a, b) => a + b, 0) / last.length : 0;
+}
+function renderSpace(a) {
+  const dd = $("aSpace"), st = a.storage || [];
+  dd.replaceChildren();
+  if (!st.length) { dd.textContent = a.version ? "агент пока не сообщил (нужен агент 1.17 или новее)" : "—"; return; }
+  const per = bytesPerNight();
+  for (const sp of st) {
+    const nights = per > 0 ? Math.floor(sp.free / per) : null;
+    const low = nights !== null ? nights < 1 : sp.free < 0.03 * sp.total;
+    let t = `${shareLabel(sp.share)}: свободно ${fmtBytes(sp.free)} из ${fmtBytes(sp.total)}`;
+    if (nights !== null) t += nights < 1 ? " — меньше, чем на ночь съёмки!" : ` — примерно на ${nights} ${plural(nights, "ночь", "ночи", "ночей")}`;
+    else if (low) t += " — почти заполнено!";
+    dd.append(el("span", { className: "space" + (low ? " err" : ""), title: per ? `Ночь съёмки в среднем занимает ${fmtBytes(per)} (по последним ночам)` : "" },
+      t, el("div", { className: "progress disk" + (low ? " full" : "") }, el("div", { style: `width:${(100 * (sp.total - sp.free) / sp.total).toFixed(1)}%` }))));
+  }
+}
+let usageKey = "";
+// what takes the room on this computer: by object, calibration and the rest
+function renderUsage() {
+  const key = state.files.length + "|" + state.files.reduce((n, f) => n + (f.local ? f.size : 0), 0);
+  if (key === usageKey) return;
+  usageKey = key;
+  const by = new Map();
+  let total = 0;
+  for (const f of state.files) {
+    if (!f.local) continue;
+    const i = infoOf(f);
+    const k = i.kind === "light" ? (i.object || "Light без объекта") : i.kind === "other" ? "Прочее (стеки, миниатюры, журналы)" : "Калибровочные кадры";
+    by.set(k, (by.get(k) || 0) + f.size);
+    total += f.size;
+  }
+  const box = $("dUsage");
+  box.replaceChildren();
+  if (!total) return;
+  const rows = [...by].sort((a, b) => b[1] - a[1]);
+  const top = rows.slice(0, 8), rest = rows.slice(8).reduce((s, r) => s + r[1], 0);
+  if (rest) top.push([`ещё ${rows.length - 8}`, rest]);
+  box.append(el("div", { className: "label", textContent: `Снимки здесь занимают ${fmtBytes(total)}` }));
+  for (const [name, size] of top) {
+    box.append(el("div", { className: "row" }, el("span", { className: "name", textContent: name, title: name }),
+      el("div", { className: "bar" }, el("div", { style: `width:${(100 * size / top[0][1]).toFixed(1)}%` })),
+      el("span", { className: "num", textContent: fmtBytes(size) })));
+  }
+}
+
 // ---------- the Moon ----------
 // Low-precision positions (after V. Agafonkin's SunCalc, from Meeus):
 // about 0.5° for the altitude and a percent for the illumination.
@@ -1684,8 +1930,9 @@ let summaryKey = "";
 function renderSummary() {
   if ($("summaryPanel").classList.contains("folded")) return;
   const key = state.files.length + "|" + state.files.reduce((n, f) => n + (f.local ? 1 : 0), 0) + "|" + $("summaryAll").checked + "|" + JSON.stringify(state.site || {});
-  if (key === summaryKey) return; // nothing changed
-  summaryKey = key;
+  const key2 = key + "|" + state.files.reduce((n, f) => n + (f.q ? 1 : 0), 0);
+  if (key2 === summaryKey) return; // nothing changed
+  summaryKey = key2;
   const groups = new Map(), objects = new Map();
   for (const f of state.files) {
     if (f.status === "filtered") continue;
@@ -1696,6 +1943,7 @@ function renderSummary() {
     let g = groups.get(k);
     if (!g) groups.set(k, g = { night, kind: fi.kind, object: fi.object, n: 0, here: 0, total: 0, exps: new Set(), moon: [] });
     if (fi.kind === "light") { const m = moonOf(f); if (m) g.moon.push(m); }
+    if (f.q) { g.q = g.q || []; g.q.push(f); }
     g.n++; g.total += fi.exp; if (fi.exp) g.exps.add(fi.exp);
     if (f.local) g.here++;
     if (fi.kind === "light") {
@@ -1717,11 +1965,13 @@ function renderSummary() {
     const td = (t, cls) => el("td", { textContent: t, className: cls || "" });
     tr.append(td(r.night.key !== prev ? r.night.label : ""), td(r.object || "—"), td(kindLabel[r.kind] || r.kind),
       td(String(r.n), "num"), td([...r.exps].sort((a, b) => a - b).map(fmtExp).join(", ") || "—", "num"),
-      td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
+      td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(qualitySummary(r.q || []), "num"), td(r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
+    tr.title = "Показать эти кадры в списке файлов";
+    tr.onclick = () => showGroup(r);
     prev = r.night.key;
     body.append(tr);
   }
-  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 8, className: "muted", textContent: "Кадров с типом в имени (Light, Dark, Flat, Bias) пока нет." })));
+  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 9, className: "muted", textContent: "Кадров с типом в имени (Light, Dark, Flat, Bias) пока нет." })));
   $("summaryInfo").textContent = nights.length ? `ночей: ${nights.length}` + (shown.length < nights.length ? `, показаны последние ${shown.length}` : "") : "";
   const tot = [...objects].sort((a, b) => b[1].total - a[1].total)
     .map(([o, v]) => `${o || "без имени"}: ${v.n} Light, ${fmtExp(v.total)} за ${v.nights.size} ноч${v.nights.size === 1 ? "ь" : v.nights.size < 5 ? "и" : "ей"}`);
@@ -2270,6 +2520,12 @@ function showInfo(f, meta) {
   dl.replaceChildren();
   const add = (k, v) => dl.append(el("dt", { textContent: k }), el("dd", { textContent: v }));
   add("Размер файла", fmtBytes(f.size));
+  const cur = state.files.find(x => x.path === f.path) || f;
+  if (cur.q) {
+    add("Звёзды", `${cur.stars}, HFR ${cur.hfr ? cur.hfr.toFixed(2) : "—"} px`);
+    const j = judge(cur);
+    if (j && j.bad) add("Качество", "⚠ " + j.why);
+  }
   if (meta) {
     add("Кадр", `${meta.source[0]}×${meta.source[1]}` + (meta.bayer ? " (цветной, " + meta.bayer + ")" : meta.channels === 3 ? " (RGB)" : " (ч/б)"));
     add("Превью", `${meta.width}×${meta.height}, уменьшено в ${meta.binning}×`);
@@ -2380,6 +2636,7 @@ function openViewer(path, files) {
   V.list = files.filter(f => f.local && viewable(f.name));
   V.idx = Math.max(0, V.list.findIndex(f => f.path === path));
   V.zoom = false; $("vImgBox").classList.remove("zoom");
+  $("vOpen").hidden = isRemote();
   $("viewer").showModal();
   showFile();
 }
