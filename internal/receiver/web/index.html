@@ -422,7 +422,8 @@
       <label title="Миниатюры, журналы и другие файлы, которые агент по настройкам не передаёт"><input type="checkbox" id="showFiltered"> Показать непередаваемые</label>
     </div>
     <div class="toolbar filters" id="filters">
-      <select id="fShare" title="Хранилище ASIAIR"><option value="">Все хранилища</option></select>
+      <select id="fShare" title="Шара (хранилище) ASIAIR: внутренняя память, SD-карта, флешка"><option value="">Все шары</option></select>
+      <select id="fKind" title="Тип кадра по имени файла: Light, Dark, Flat, Bias"><option value="">Все кадры</option></select>
       <select id="fType" title="Тип файлов"><option value="">Все типы</option></select>
       <label>с <input type="date" id="fFrom" title="Снятые с этой даты"></label>
       <label>по <input type="date" id="fTo" title="Снятые по эту дату включительно"></label>
@@ -606,6 +607,14 @@ function fileType(name) {
   return "other";
 }
 const shareOf = p => p.split("/")[0];
+// frame type from the file name: Light_M31_….fit, Dark_300.0s_….fit, …
+const kindGroups = [["light", "Light"], ["dark", "Dark"], ["flat", "Flat"], ["bias", "Bias"], ["darkflat", "Dark flat"]];
+function frameKind(name) {
+  const n = name.toLowerCase();
+  if (/dark[\s_-]?flat|flat[\s_-]?dark/.test(n)) return "darkflat";
+  const m = n.match(/(?:^|[^a-z])(light|dark|flat|bias)(?=[^a-z]|$)/);
+  return m ? m[1] : "other";
+}
 function shareLabel(sh) {
   const l = sh.toLowerCase();
   if (l === "emmc images" || l.startsWith("emmc")) return "Внутренняя память (" + sh + ")";
@@ -616,7 +625,7 @@ function shareLabel(sh) {
 // day boundaries in local time; "по" includes the whole day
 const dayStart = d => d ? new Date(d + "T00:00:00").getTime() : null;
 const dayEnd = d => d ? new Date(d + "T00:00:00").getTime() + 86400000 : null;
-const filterIds = ["filter", "show", "fShare", "fType", "fFrom", "fTo"];
+const filterIds = ["filter", "show", "fShare", "fKind", "fType", "fFrom", "fTo"];
 function saveFilters() {
   const v = {};
   for (const id of filterIds) v[id] = $(id).value;
@@ -633,7 +642,7 @@ function loadFilters() {
   $("showFiltered").checked = !!v.showFiltered;
 }
 function filtersActive() {
-  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fType").value || $("fFrom").value || $("fTo").value);
+  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fKind").value || $("fType").value || $("fFrom").value || $("fTo").value);
 }
 // fill the storage and type lists from the files, with counts
 function renderFilterOptions() {
@@ -645,14 +654,19 @@ function renderFilterOptions() {
     sel.replaceChildren(...opts);
     sel.value = cur;
   };
-  const shares = new Map(), types = new Map();
+  const shares = new Map(), types = new Map(), kinds = new Map();
   for (const f of state.files) {
     if (f.status === "filtered" && !$("showFiltered").checked) continue;
     shares.set(shareOf(f.path), (shares.get(shareOf(f.path)) || 0) + 1);
     const t = fileType(f.name);
     types.set(t, (types.get(t) || 0) + 1);
+    const k = frameKind(f.name);
+    kinds.set(k, (kinds.get(k) || 0) + 1);
   }
-  fill($("fShare"), "Все хранилища", [...shares].sort((a, b) => a[0].localeCompare(b[0])).map(([sh, n]) => [sh, `${shareLabel(sh)} — ${n}`]));
+  fill($("fShare"), "Все шары", [...shares].sort((a, b) => a[0].localeCompare(b[0])).map(([sh, n]) => [sh, `${shareLabel(sh)} — ${n}`]));
+  const kl = kindGroups.filter(([id]) => kinds.has(id)).map(([id, label]) => [id, `${label} — ${kinds.get(id)}`]);
+  if (kinds.has("other")) kl.push(["other", `Без типа в имени — ${kinds.get("other")}`]);
+  fill($("fKind"), "Все кадры", kl);
   const tl = typeGroups.filter(([id]) => types.has(id)).map(([id, label]) => [id, `${label} — ${types.get(id)}`]);
   if (types.has("other")) tl.push(["other", `Другие — ${types.get("other")}`]);
   fill($("fType"), "Все типы", tl);
@@ -665,6 +679,7 @@ function renderFiltersSummary(shown) {
   if (q) parts.push(`«${q}»`);
   if ($("show").value !== "all") parts.push($("show").selectedOptions[0].textContent);
   if ($("fShare").value) parts.push(shareLabel($("fShare").value));
+  if ($("fKind").value) parts.push($("fKind").selectedOptions[0].textContent.split(" — ")[0]);
   if ($("fType").value) parts.push($("fType").selectedOptions[0].textContent.split(" — ")[0]);
   const d = v => v ? v.split("-").reverse().join(".") : "";
   if ($("fFrom").value || $("fTo").value) parts.push(($("fFrom").value ? "с " + d($("fFrom").value) : "") + ($("fTo").value ? " по " + d($("fTo").value) : ""));
@@ -679,13 +694,14 @@ function setFiltersFolded(f) {
 function visibleFiles() {
   const q = $("filter").value.trim().toLowerCase();
   const mode = $("show").value, showFiltered = $("showFiltered").checked;
-  const share = $("fShare").value, type = $("fType").value;
+  const share = $("fShare").value, type = $("fType").value, kind = $("fKind").value;
   const from = dayStart($("fFrom").value), to = dayEnd($("fTo").value);
   return state.files.filter(f => {
     if (q && !f.path.toLowerCase().includes(q)) return false;
     if (f.status === "filtered" && !showFiltered) return false;
     if (share && shareOf(f.path) !== share) return false;
     if (type && fileType(f.name) !== type) return false;
+    if (kind && frameKind(f.name) !== kind) return false;
     if (from !== null || to !== null) {
       const t = new Date(f.mtime).getTime();
       if (from !== null && t < from) return false;
@@ -1085,7 +1101,7 @@ function filtersChanged() { saveFilters(); if (state) { renderFilterOptions(); r
 for (const id of filterIds) $(id).addEventListener(id === "filter" ? "input" : "change", filtersChanged);
 $("showFiltered").onchange = filtersChanged;
 $("fReset").onclick = () => {
-  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fType").value = ""; $("fFrom").value = ""; $("fTo").value = "";
+  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fFrom").value = ""; $("fTo").value = "";
   filtersChanged();
 };
 // the last night: from noon of the day before until noon (by the newest frame)
