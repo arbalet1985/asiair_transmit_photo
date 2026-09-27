@@ -174,6 +174,9 @@
   table.summary tr.night td { border-top: 2px solid var(--border); }
   table.summary .kind { display: inline-block; min-width: 3.5em; }
 
+  .totp { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+  .totp img { display: block; margin: 8px 0; background: #fff; padding: 8px; border-radius: 6px; image-rendering: pixelated; }
+
   /* ---------- phone ---------- */
   @media (max-width: 700px) {
     body { font-size: 15px; }
@@ -484,6 +487,25 @@
         <button class="primary" id="rmPassSave">Сохранить</button>
       </div>
       <div class="hint" id="rmPassHint" style="margin-top:0"></div>
+      <div class="label" style="margin-top:12px">Одноразовые коды (двухфакторный вход)</div>
+      <div class="toolbar">
+        <span class="line" id="rmTotpNow">—</span>
+        <span class="spacer"></span>
+        <button id="rmTotpOn">Включить…</button>
+        <button id="rmTotpOff" hidden>Выключить</button>
+      </div>
+      <div id="rmTotpSetup" class="totp" hidden>
+        <div class="hint" style="margin-top:0">1. В приложении-аутентификаторе на телефоне (Google Authenticator, Microsoft Authenticator, Aegis, 2FAS, 1Password…) добавьте аккаунт и отсканируйте код:</div>
+        <img id="rmTotpQR" alt="QR-код для приложения-аутентификатора" width="200" height="200">
+        <div class="hint">или введите ключ вручную: <b class="mono" id="rmTotpSecret"></b> (тип — по времени, 6 цифр, 30 секунд)</div>
+        <div class="hint">2. Введите код, который показало приложение:</div>
+        <div class="toolbar">
+          <input type="text" id="rmTotpCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" style="width:8em">
+          <button class="primary" id="rmTotpConfirm">Подтвердить и включить</button>
+          <button id="rmTotpCancel">Отмена</button>
+        </div>
+      </div>
+      <div class="hint" id="rmTotpHint">После пароля страница спросит 6-значный код из приложения на телефоне: без телефона войти не получится, даже зная пароль. Выключаются коды только здесь, на компьютере с приёмником, — если телефон потерян, выключите и настройте заново.</div>
       <label class="line" style="display:block;margin-top:12px"><input type="checkbox" id="rmNet"> Через интернет — порт <b id="rmPort">—</b>, тот же, что для агента</label>
       <div class="hint urls" id="rmNetHint"></div>
       <label class="line" style="display:block;margin-top:12px"><input type="checkbox" id="rmTs"> Через Tailscale</label>
@@ -2032,6 +2054,18 @@ function renderRemote(r) {
   }
   $("rmTsHint").innerHTML = h;
   $("rmTsHint").className = "hint urls" + (err ? " err" : "");
+  $("rmTotpNow").textContent = r.totp ? "включены: после пароля нужен код из приложения" : "выключены: вход только по паролю";
+  $("rmTotpOn").hidden = r.totp; $("rmTotpOff").hidden = !r.totp;
+  $("rmTotpOn").disabled = !r.password_set;
+  $("rmTotpOn").title = r.password_set ? "" : "Сначала задайте пароль";
+  if (r.totp_setup) {
+    $("rmTotpQR").src = r.totp_setup.qr;
+    $("rmTotpSecret").textContent = r.totp_setup.secret;
+    $("rmTotpSetup").hidden = false;
+    $("rmTotpCode").value = "";
+    $("rmTotpCode").focus();
+  }
+  if (r.totp) $("rmTotpSetup").hidden = true;
   $("rmSessions").textContent = r.sessions ? `Вошли: ${r.sessions} (телефоны и браузеры)` : "Никто не вошёл";
   $("rmLogoutAll").disabled = !r.sessions;
 }
@@ -2044,6 +2078,19 @@ $("rmPassSave").onclick = async () => {
   if (p.length < 8) return alert("Пароль должен быть не короче 8 символов");
   if (rm && rm.password_set && rm.sessions && !confirm("Заменить пароль? Все телефоны должны будут войти заново.")) return;
   if (await rmAction({ action: "password", password: p }, "Пароль сохранён")) $("rmPass").value = "";
+};
+$("rmTotpOn").onclick = () => rmAction({ action: "totp-begin" });
+$("rmTotpCancel").onclick = () => { $("rmTotpSetup").hidden = true; };
+$("rmTotpConfirm").onclick = async () => {
+  const code = $("rmTotpCode").value.replace(/\s/g, "");
+  if (!/^\d{6}$/.test(code)) return alert("Введите 6 цифр из приложения");
+  if (rm && rm.sessions && !confirm("Включить коды? Все телефоны должны будут войти заново — с паролем и кодом.")) return;
+  await rmAction({ action: "totp-confirm", code }, "Одноразовые коды включены");
+};
+$("rmTotpCode").addEventListener("keydown", e => { if (e.key === "Enter") $("rmTotpConfirm").click(); });
+$("rmTotpOff").onclick = async () => {
+  if (!confirm("Выключить одноразовые коды? Вход с телефона снова будет только по паролю.")) return;
+  await rmAction({ action: "totp-off" }, "Одноразовые коды выключены");
 };
 for (const [id, what] of [["rmNet", "internet"], ["rmTs", "tailscale"]]) {
   $(id).onchange = async e => {

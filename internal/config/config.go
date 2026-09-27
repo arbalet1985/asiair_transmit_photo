@@ -126,6 +126,9 @@ type Receiver struct {
 	// RemotePassword is the hash of the password for the remote page
 	// (set on the page; see receiver.HashPassword).
 	RemotePassword string `yaml:"remote_password"`
+	// RemoteTOTP is the secret (base32) of the one-time codes asked after
+	// the password (an authenticator app); empty = password only.
+	RemoteTOTP string `yaml:"remote_totp"`
 
 	// Path of the file the configuration was loaded from.
 	Path string `yaml:"-"`

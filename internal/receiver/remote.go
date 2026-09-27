@@ -273,6 +273,12 @@ func (s *Server) remotePassword() string {
 	return s.cfg.RemotePassword
 }
 
+func (s *Server) remoteTOTP() string {
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	return s.cfg.RemoteTOTP
+}
+
 // agentPortHandler serves the agent API and, when remote access through
 // the channel is on, the page.
 func (s *Server) agentPortHandler(channel string) http.Handler {
@@ -300,6 +306,9 @@ func (s *Server) remoteHandler() http.Handler {
 		mux.HandleFunc(p, s.handleStatic)
 	}
 	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/login/info", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]bool{"totp": s.remoteTOTP() != ""})
+	})
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, _ := r.Cookie(sessionCookie)
@@ -337,11 +346,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Password string `json:"password"`
+		Code     string `json:"code"` // one-time code, when enabled
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	hash := s.remotePassword()
+	hash, secret := s.remotePassword(), s.remoteTOTP()
 	if hash == "" {
 		http.Error(w, "пароль для входа с телефона не задан: задайте его на странице приёмника на домашнем компьютере (блок «Доступ с телефона»)", http.StatusForbidden)
 		return
@@ -351,15 +361,29 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("слишком много неверных попыток, повторите через %d мин", int(d.Minutes())+1), http.StatusTooManyRequests)
 		return
 	}
-	if !checkPassword(hash, req.Password) {
+	// both are checked before answering: a wrong answer does not tell
+	// whether the password was right
+	pwOK := checkPassword(hash, req.Password)
+	codeOK := secret == "" || pwOK && s.totp.check(secret, req.Code, time.Now())
+	if !pwOK || !codeOK {
 		flood := s.lim.fail(ip)
-		log.Printf("Приёмник: неверный пароль для входа с телефона от %s", ip)
+		msg := "неверный пароль"
+		if secret != "" {
+			msg = "неверный пароль или код"
+			if pwOK {
+				log.Printf("Приёмник: неверный одноразовый код для входа с телефона от %s", ip)
+			} else {
+				log.Printf("Приёмник: неверный пароль для входа с телефона от %s", ip)
+			}
+		} else {
+			log.Printf("Приёмник: неверный пароль для входа с телефона от %s", ip)
+		}
 		if flood {
 			time.Sleep(3 * loginDelay)
 		} else {
 			time.Sleep(loginDelay)
 		}
-		http.Error(w, "неверный пароль", http.StatusUnauthorized)
+		http.Error(w, msg, http.StatusUnauthorized)
 		return
 	}
 	s.lim.ok(ip)
@@ -439,22 +463,25 @@ func gzipped(next http.HandlerFunc) http.HandlerFunc {
 // ---------- settings (on this computer only) ----------
 
 type remoteInfo struct {
-	Remote      bool   `json:"remote"` // this page is open remotely
-	PasswordSet bool   `json:"password_set"`
-	Internet    bool   `json:"internet"`
-	Tailscale   bool   `json:"tailscale"`
-	Sessions    int    `json:"sessions"`
-	Port        string `json:"port"`
-	InternetUp  bool   `json:"internet_up"` // the agent port is open
-	TSRunning   bool   `json:"ts_running"`
-	TSName      string `json:"ts_name,omitempty"`
-	TSURL       string `json:"ts_url,omitempty"` // https with a real certificate
-	TSError     string `json:"ts_error,omitempty"`
+	Remote      bool `json:"remote"` // this page is open remotely
+	PasswordSet bool `json:"password_set"`
+	TOTP        bool `json:"totp"` // one-time codes are asked after the password
+	// TOTPSetup: the new secret being set up (in the answer to "totp-begin")
+	TOTPSetup  *totpSetup `json:"totp_setup,omitempty"`
+	Internet   bool       `json:"internet"`
+	Tailscale  bool       `json:"tailscale"`
+	Sessions   int        `json:"sessions"`
+	Port       string     `json:"port"`
+	InternetUp bool       `json:"internet_up"` // the agent port is open
+	TSRunning  bool       `json:"ts_running"`
+	TSName     string     `json:"ts_name,omitempty"`
+	TSURL      string     `json:"ts_url,omitempty"` // https with a real certificate
+	TSError    string     `json:"ts_error,omitempty"`
 }
 
 func (s *Server) remoteInfo(r *http.Request) remoteInfo {
 	s.remoteMu.Lock()
-	info := remoteInfo{Remote: isRemote(r), PasswordSet: s.cfg.RemotePassword != "",
+	info := remoteInfo{Remote: isRemote(r), PasswordSet: s.cfg.RemotePassword != "", TOTP: s.cfg.RemoteTOTP != "",
 		Internet: bool(s.cfg.RemoteInternet), Tailscale: bool(s.cfg.RemoteTailscale)}
 	info.TSURL, info.TSError = s.tsWebURL, s.tsWebErr
 	s.remoteMu.Unlock()
@@ -475,6 +502,7 @@ func (s *Server) handleUIRemote(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action   string `json:"action"`
 		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -530,6 +558,53 @@ func (s *Server) handleUIRemote(w http.ResponseWriter, r *http.Request) {
 			s.stopTSWeb()
 		}
 		log.Printf("Приёмник: страница через Tailscale: %s", onOff(on))
+	case "totp-begin":
+		secret := newTOTPSecret()
+		uri := totpURI(secret, s.totpAccount())
+		qr, err := totpQR(uri)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.remoteMu.Lock()
+		s.totpNew = secret
+		s.remoteMu.Unlock()
+		info := s.remoteInfo(r)
+		info.TOTPSetup = &totpSetup{Secret: groupSecret(secret), URI: uri, QR: qr}
+		writeJSON(w, info)
+		return
+	case "totp-confirm":
+		s.remoteMu.Lock()
+		secret := s.totpNew
+		s.remoteMu.Unlock()
+		if secret == "" {
+			http.Error(w, "начните настройку заново", http.StatusBadRequest)
+			return
+		}
+		var g totpGuard
+		if !g.check(secret, req.Code, time.Now()) {
+			http.Error(w, "код не подошёл: проверьте, что время на телефоне точное, и введите новый код", http.StatusBadRequest)
+			return
+		}
+		if !save(map[string]string{"remote_totp": secret}) {
+			return
+		}
+		s.remoteMu.Lock()
+		s.cfg.RemoteTOTP, s.totpNew = secret, ""
+		s.remoteMu.Unlock()
+		s.totp.mu.Lock()
+		s.totp.last = g.last // the code just typed cannot log in
+		s.totp.mu.Unlock()
+		s.sess.clear() // phones log in again, now with a code
+		log.Printf("Приёмник: вход с телефона — включены одноразовые коды")
+	case "totp-off":
+		if !save(map[string]string{"remote_totp": ""}) {
+			return
+		}
+		s.remoteMu.Lock()
+		s.cfg.RemoteTOTP, s.totpNew = "", ""
+		s.remoteMu.Unlock()
+		log.Printf("Приёмник: вход с телефона — одноразовые коды выключены")
 	case "logout-all":
 		s.sess.clear()
 		log.Printf("Приёмник: выполнен выход на всех телефонах")
