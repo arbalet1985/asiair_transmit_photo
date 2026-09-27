@@ -272,6 +272,8 @@ func pauseLabel(st protocol.AgentStatus) string {
 		return "на приёмнике мало места на диске"
 	case st.WaitStart && !st.LocalPause:
 		return "ждёт «Старт» на странице приёмника"
+	case st.Schedule != "" && st.RemotePause && !st.LocalPause:
+		return "по расписанию приёмника " + st.Schedule
 	case st.LocalPause && st.RemotePause:
 		return "пауза здесь и на приёмнике"
 	case st.RemotePause:

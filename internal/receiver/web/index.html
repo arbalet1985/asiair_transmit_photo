@@ -155,6 +155,25 @@
   .diag { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--row); font-size: 13px; }
   .diag b { font-weight: 600; }
 
+  .sched input[type=time] { border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; font: inherit; color: inherit; }
+  input[type=number] { border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; font: inherit; color: inherit; }
+  .chart { position: relative; height: 180px; margin-top: 6px; }
+  .chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .chart .grid line { stroke: var(--border); stroke-width: 1; }
+  .chart .axis text { fill: var(--muted); font-size: 11px; }
+  .chart .speed { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+  .chart .area { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: none; }
+  .chart .limit { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; }
+  .chart .cross { stroke: var(--muted); stroke-width: 1; }
+  .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+  .chart .empty { fill: var(--muted); font-size: 13px; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / .12); white-space: nowrap; z-index: 2; }
+  .tip b { font-weight: 600; }
+  .tablewrap { overflow-x: auto; }
+  table.summary td.num, table.summary th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.summary tr.night td { border-top: 2px solid var(--border); }
+  table.summary .kind { display: inline-block; min-width: 3.5em; }
+
   /* ---------- phone ---------- */
   @media (max-width: 700px) {
     body { font-size: 15px; }
@@ -261,8 +280,60 @@
         <span class="muted" id="streamsNow"></span>
       </div>
       <div class="hint">Несколько потоков помогают, когда один поток не набирает скорость канала: большая задержка, потери, ретранслятор Tailscale. Если упирается в чтение с ASIAIR или в отдачу интернета, больше потоков не ускорит.</div>
+      <h2 style="margin-top:14px">Порядок передачи</h2>
+      <div class="toolbar">
+        <select id="order" aria-label="Какие файлы передавать первыми">
+          <option value="">Сначала старые (по порядку съёмки)</option>
+          <option value="newest">Сначала новые — последняя ночь раньше</option>
+          <option value="lights">Сначала Light, потом калибровочные</option>
+        </select>
+      </div>
+      <div class="hint">Файлы, запрошенные кнопкой «Скачать», всё равно идут первыми. Нужен агент 1.15 или новее.</div>
+      <h2 style="margin-top:14px">Расписание</h2>
+      <div class="toolbar sched">
+        <label><input type="checkbox" id="schedOn"> с</label>
+        <input type="time" id="schedFrom" value="22:00" aria-label="Начало окна">
+        <label for="schedTo">до</label>
+        <input type="time" id="schedTo" value="06:00" aria-label="Конец окна">
+        <select id="schedRate" aria-label="Что делать в это время"></select>
+        <button class="primary" id="schedApply">Применить</button>
+      </div>
+      <div class="hint" id="schedNow">Например, ночью, пока идёт съёмка, не нагружать ASIAIR и его Wi-Fi, а днём передавать на полной скорости. Время — этого компьютера.</div>
     </section>
   </div>
+
+  <section class="panel" id="speedPanel">
+    <h2 class="fold" id="speedHead">Скорость передачи</h2>
+    <div class="fbody">
+      <div class="toolbar">
+        <select id="speedHours" aria-label="За сколько часов">
+          <option value="1">за 1 час</option>
+          <option value="6" selected>за 6 часов</option>
+          <option value="24">за 24 часа</option>
+        </select>
+        <span class="muted" id="speedSummary"></span>
+      </div>
+      <div class="chart" id="speedChart"></div>
+      <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Разрывы — минуты, когда файлы не передавались. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История хранится с момента запуска приёмника.</div>
+    </div>
+  </section>
+
+  <section class="panel" id="summaryPanel">
+    <h2 class="fold" id="summaryHead">Сводка по ночам</h2>
+    <div class="fbody">
+      <div class="toolbar">
+        <span class="muted" id="summaryInfo"></span>
+        <span class="spacer"></span>
+        <label><input type="checkbox" id="summaryAll"> все ночи</label>
+      </div>
+      <div class="tablewrap"><table class="summary">
+        <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>Получено</th></tr></thead>
+        <tbody id="summaryBody"></tbody>
+      </table></div>
+      <div class="line" id="summaryTotals"></div>
+      <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
+    </div>
+  </section>
 
   <div id="setupWrap">
   <div class="setupbar">
@@ -287,6 +358,28 @@
         <button class="primary" id="minFreeApply">Применить</button>
       </div>
       <div class="hint">Когда свободного места на диске со снимками остаётся меньше этого запаса, приёмник перестаёт принимать файлы, а агент встаёт на паузу. Снимки на ASIAIR при этом не удаляются, недокачанный файл потом продолжится с того же места. Можно указать процент диска (<b>5%</b>) или объём (<b>10GB</b>, <b>500MB</b>); <b>0</b> — без запаса.</div>
+    </section>
+    <section class="panel" id="cleanupPanel">
+      <h2>Автоочистка ASIAIR</h2>
+      <div class="toolbar">
+        <label><input type="checkbox" id="cleanOn"> Удалять на ASIAIR файлы старше</label>
+        <input type="number" id="cleanDays" min="1" max="3650" value="7" style="width:5em" aria-label="Дней">
+        <span>дн.</span>
+        <button class="primary" id="cleanApply">Применить</button>
+      </div>
+      <div class="line muted" id="cleanNow"></div>
+      <div class="hint">Удаляются только файлы, которые уже получены сюда и проверены по контрольной сумме (тот же размер здесь и на ASIAIR). Непереданные, недокачанные и непередаваемые файлы (миниатюры, журналы) не трогаются, копии на этом компьютере остаются. Проверка — раз в 10 минут, удаление идёт обычными командами (видно в «Командах удаления»).</div>
+    </section>
+    <section class="panel" id="sitePanel">
+      <h2>Координаты обсерватории</h2>
+      <div class="toolbar">
+        <label>широта <input type="number" id="siteLat" step="0.0001" min="-90" max="90" style="width:8em" placeholder="55.7558"></label>
+        <label>долгота <input type="number" id="siteLon" step="0.0001" min="-180" max="180" style="width:8em" placeholder="37.6173"></label>
+        <button class="primary" id="siteApply">Сохранить</button>
+        <button id="siteDetect" title="Прочитать SITELAT и SITELONG из последних полученных FITS-файлов">Взять из снимков</button>
+      </div>
+      <div class="line muted" id="siteNow"></div>
+      <div class="hint">Нужны, чтобы показать, на какой высоте была Луна во время съёмки (фаза Луны считается и без них). Долгота к востоку от Гринвича — положительная. ASIAIR обычно записывает координаты в FITS-файлы: тогда приёмник возьмёт их сам.</div>
     </section>
     <section class="panel" id="startupPanel" hidden>
       <h2>Запуск на этом компьютере</h2>
@@ -425,6 +518,20 @@
       <select id="fShare" title="Шара (хранилище) ASIAIR: внутренняя память, SD-карта, флешка"><option value="">Все шары</option></select>
       <select id="fKind" title="Тип кадра по имени файла: Light, Dark, Flat, Bias"><option value="">Все кадры</option></select>
       <select id="fType" title="Тип файлов"><option value="">Все типы</option></select>
+      <select id="fPhase" title="Освещённость Луны в момент съёмки">
+        <option value="">Любая фаза Луны</option>
+        <option value="0-10">Луна до 10% (около новолуния)</option>
+        <option value="0-25">Луна до 25%</option>
+        <option value="25-50">Луна 25–50%</option>
+        <option value="50-75">Луна 50–75%</option>
+        <option value="75-100">Луна больше 75%</option>
+      </select>
+      <select id="fMoonAlt" title="Высота Луны над горизонтом в момент съёмки (нужны координаты обсерватории)">
+        <option value="">Луна на любой высоте</option>
+        <option value="below">Луна под горизонтом</option>
+        <option value="above">Луна над горизонтом</option>
+        <option value="high">Луна выше 30°</option>
+      </select>
       <label>с <input type="date" id="fFrom" title="Снятые с этой даты"></label>
       <label>по <input type="date" id="fTo" title="Снятые по эту дату включительно"></label>
       <button id="fLastNight" title="Кадры последней ночи: с полудня накануне до полудня">Последняя ночь</button>
@@ -625,7 +732,7 @@ function shareLabel(sh) {
 // day boundaries in local time; "по" includes the whole day
 const dayStart = d => d ? new Date(d + "T00:00:00").getTime() : null;
 const dayEnd = d => d ? new Date(d + "T00:00:00").getTime() + 86400000 : null;
-const filterIds = ["filter", "show", "fShare", "fKind", "fType", "fFrom", "fTo"];
+const filterIds = ["filter", "show", "fShare", "fKind", "fType", "fPhase", "fMoonAlt", "fFrom", "fTo"];
 function saveFilters() {
   const v = {};
   for (const id of filterIds) v[id] = $(id).value;
@@ -642,7 +749,7 @@ function loadFilters() {
   $("showFiltered").checked = !!v.showFiltered;
 }
 function filtersActive() {
-  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fKind").value || $("fType").value || $("fFrom").value || $("fTo").value);
+  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fKind").value || $("fType").value || $("fPhase").value || $("fMoonAlt").value || $("fFrom").value || $("fTo").value);
 }
 // fill the storage and type lists from the files, with counts
 function renderFilterOptions() {
@@ -681,6 +788,8 @@ function renderFiltersSummary(shown) {
   if ($("fShare").value) parts.push(shareLabel($("fShare").value));
   if ($("fKind").value) parts.push($("fKind").selectedOptions[0].textContent.split(" — ")[0]);
   if ($("fType").value) parts.push($("fType").selectedOptions[0].textContent.split(" — ")[0]);
+  if ($("fPhase").value) parts.push($("fPhase").selectedOptions[0].textContent);
+  if ($("fMoonAlt").value) parts.push($("fMoonAlt").selectedOptions[0].textContent);
   const d = v => v ? v.split("-").reverse().join(".") : "";
   if ($("fFrom").value || $("fTo").value) parts.push(($("fFrom").value ? "с " + d($("fFrom").value) : "") + ($("fTo").value ? " по " + d($("fTo").value) : ""));
   if ($("showFiltered").checked) parts.push("с непередаваемыми");
@@ -695,6 +804,7 @@ function visibleFiles() {
   const q = $("filter").value.trim().toLowerCase();
   const mode = $("show").value, showFiltered = $("showFiltered").checked;
   const share = $("fShare").value, type = $("fType").value, kind = $("fKind").value;
+  const phase = $("fPhase").value.split("-").map(Number), moonAlt = siteSet() ? $("fMoonAlt").value : "";
   const from = dayStart($("fFrom").value), to = dayEnd($("fTo").value);
   return state.files.filter(f => {
     if (q && !f.path.toLowerCase().includes(q)) return false;
@@ -702,6 +812,12 @@ function visibleFiles() {
     if (share && shareOf(f.path) !== share) return false;
     if (type && fileType(f.name) !== type) return false;
     if (kind && frameKind(f.name) !== kind) return false;
+    if (phase.length === 2 || moonAlt) {
+      const m = moonOf(f);
+      if (!m) return false;
+      if (phase.length === 2 && (m.illum < phase[0] || m.illum > phase[1] || (phase[0] > 0 && m.illum === phase[0]))) return false;
+      if (moonAlt === "below" && m.alt >= 0 || moonAlt === "above" && m.alt < 0 || moonAlt === "high" && m.alt < 30) return false;
+    }
     if (from !== null || to !== null) {
       const t = new Date(f.mtime).getTime();
       if (from !== null && t < from) return false;
@@ -836,7 +952,7 @@ function renderFiles() {
       el("td", {}, cb),
       el("td", { className: "name" }, name),
       el("td", { className: "num", textContent: fmtBytes(f.size) }),
-      el("td", { textContent: fmtTime(f.mtime) }),
+      el("td", {}, fmtTime(f.mtime), moonTag(f)),
       el("td", {}, statusBadge(f), fetchControl(f)),
       el("td", {}, remote)));
   }
@@ -988,6 +1104,11 @@ function renderStatus() {
   $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
   renderRate();
   renderStreams();
+  renderOrder();
+  renderSchedule();
+  renderCleanup();
+  renderSite();
+  renderSummary();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
   renderUpdate(state.update || {}, state.agent || {});
@@ -1101,7 +1222,7 @@ function filtersChanged() { saveFilters(); if (state) { renderFilterOptions(); r
 for (const id of filterIds) $(id).addEventListener(id === "filter" ? "input" : "change", filtersChanged);
 $("showFiltered").onchange = filtersChanged;
 $("fReset").onclick = () => {
-  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fFrom").value = ""; $("fTo").value = "";
+  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fPhase").value = ""; $("fMoonAlt").value = ""; $("fFrom").value = ""; $("fTo").value = "";
   filtersChanged();
 };
 // the last night: from noon of the day before until noon (by the newest frame)
@@ -1321,6 +1442,350 @@ function renderStreams() {
     a.streams ? (a.streams === state.streams ? "" : `у агента сейчас: ${a.streams}`) : "агент старой версии передаёт по одному файлу";
 }
 
+// ---------- order, schedule, cleanup ----------
+$("order").onchange = async () => {
+  try { await post("/ui/api/order", { order: $("order").value }); toast("Применится при следующей связи с агентом"); }
+  catch (e) { alert("Ошибка: " + e.message); }
+  refresh();
+};
+function renderOrder() {
+  if (document.activeElement !== $("order")) $("order").value = state.order || "";
+}
+{
+  const sel = $("schedRate");
+  sel.append(new Option("пауза", "0"));
+  for (const v of [1, 2, 3, 5, 10, 20, 50]) sel.append(new Option(`не быстрее ${v} MB/s`, v + "MB/s"));
+}
+let schedEdited = false; // keep what the user is typing
+for (const id of ["schedOn", "schedFrom", "schedTo", "schedRate"]) $(id).addEventListener("input", () => { schedEdited = true; });
+$("schedApply").onclick = async () => {
+  try {
+    await post("/ui/api/schedule", { enabled: $("schedOn").checked, from: $("schedFrom").value, to: $("schedTo").value, rate: $("schedRate").value });
+    schedEdited = false;
+    toast($("schedOn").checked ? "Расписание сохранено" : "Расписание выключено");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  refresh();
+};
+function renderSchedule() {
+  const sc = state.schedule || {};
+  if (!schedEdited) {
+    $("schedOn").checked = !!sc.enabled;
+    if (sc.from) $("schedFrom").value = sc.from;
+    if (sc.to) $("schedTo").value = sc.to;
+    const r = sc.rate > 0 ? Math.max(1, Math.round(sc.rate / MB)) + "MB/s" : "0";
+    if (![...$("schedRate").options].some(o => o.value === r)) $("schedRate").append(new Option(`не быстрее ${fmtRate(sc.rate)}`, r));
+    $("schedRate").value = r;
+  }
+  const what = sc.rate > 0 ? `не быстрее ${fmtRate(sc.rate)}` : "пауза";
+  const tz = state.obs_tz || {};
+  const zone = tz.known ? `Время — обсерватории (${tz.text}).` : "Время — этого компьютера, пока агент (1.15 или новее) не сообщил часовой пояс обсерватории.";
+  $("schedNow").textContent = !sc.enabled
+    ? "Например, ночью, пока идёт съёмка, не нагружать ASIAIR и его Wi-Fi, а днём передавать на полной скорости. " + zone
+    : state.schedule_on ? `Сейчас действует: ${what} до ${sc.to}. Файлы, запрошенные кнопкой «Скачать», при паузе всё равно передаются. ${zone}`
+    : `Включится в ${sc.from}: ${what} до ${sc.to}. ${zone}`;
+}
+let cleanEdited = false;
+for (const id of ["cleanOn", "cleanDays"]) $(id).addEventListener("input", () => { cleanEdited = true; });
+$("cleanApply").onclick = async () => {
+  const days = +$("cleanDays").value;
+  if ($("cleanOn").checked && !confirm(`Удалять на ASIAIR файлы старше ${days} дн., которые уже получены сюда и проверены?\n\nКопии на этом компьютере останутся. Проверка раз в 10 минут, первая — сейчас.`)) return;
+  try {
+    await post("/ui/api/cleanup", { enabled: $("cleanOn").checked, days });
+    cleanEdited = false;
+    toast($("cleanOn").checked ? "Автоочистка включена" : "Автоочистка выключена");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  refresh();
+};
+function renderCleanup() {
+  const c = state.cleanup || {};
+  if (!cleanEdited) {
+    $("cleanOn").checked = !!c.enabled;
+    if (c.days) $("cleanDays").value = c.days;
+  }
+  const last = c.last_run && !c.last_run.startsWith("0001")
+    ? `последняя проверка ${new Date(c.last_run).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}: ` +
+      (c.last_n ? `на удаление ${c.last_n} файл(ов)` : "удалять нечего") : "";
+  $("cleanNow").textContent = !c.enabled ? "Выключена." : `Включена: старше ${c.days} дн.` + (last ? "; " + last : "");
+}
+
+// ---------- the Moon ----------
+// Low-precision positions (after V. Agafonkin's SunCalc, from Meeus):
+// about 0.5° for the altitude and a percent for the illumination.
+const moonCalc = (() => {
+  const rad = Math.PI / 180, e = rad * 23.4397;
+  const toDays = t => t / 864e5 - 0.5 + 2440588 - 2451545;
+  const ra = (l, b) => Math.atan2(Math.sin(l) * Math.cos(e) - Math.tan(b) * Math.sin(e), Math.cos(l));
+  const dec = (l, b) => Math.asin(Math.sin(b) * Math.cos(e) + Math.cos(b) * Math.sin(e) * Math.sin(l));
+  const sun = d => {
+    const M = rad * (357.5291 + 0.98560028 * d);
+    const L = M + rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M)) + rad * 102.9372 + Math.PI;
+    return { ra: ra(L, 0), dec: dec(L, 0) };
+  };
+  const moon = d => {
+    const L = rad * (218.316 + 13.176396 * d), M = rad * (134.963 + 13.064993 * d), F = rad * (93.272 + 13.229350 * d);
+    const l = L + rad * 6.289 * Math.sin(M), b = rad * 5.128 * Math.sin(F);
+    return { ra: ra(l, b), dec: dec(l, b), dist: 385001 - 20905 * Math.cos(M) };
+  };
+  return (t, lat, lon) => {
+    const d = toDays(t), m = moon(d), s = sun(d), sdist = 149598000;
+    const phi = Math.acos(Math.sin(s.dec) * Math.sin(m.dec) + Math.cos(s.dec) * Math.cos(m.dec) * Math.cos(s.ra - m.ra));
+    const inc = Math.atan2(sdist * Math.sin(phi), m.dist - sdist * Math.cos(phi));
+    const angle = Math.atan2(Math.cos(s.dec) * Math.sin(s.ra - m.ra), Math.sin(s.dec) * Math.cos(m.dec) - Math.cos(s.dec) * Math.sin(m.dec) * Math.cos(s.ra - m.ra));
+    const out = { illum: Math.round((1 + Math.cos(inc)) / 2 * 100), waxing: angle < 0 };
+    if (lat !== null) {
+      const H = rad * (280.16 + 360.9856235 * d) + rad * lon - m.ra, p = rad * lat;
+      let h = Math.asin(Math.sin(p) * Math.sin(m.dec) + Math.cos(p) * Math.cos(m.dec) * Math.cos(H));
+      const hr = Math.max(h, 0);
+      h += 0.0002967 / Math.tan(hr + 0.00312536 / (hr + 0.08901179)); // refraction
+      out.alt = Math.round(h / rad);
+    }
+    return out;
+  };
+})();
+const siteSet = () => !!(state && state.site && state.site.set);
+const moonCache = new Map();
+function moonOf(f) {
+  const t = new Date(f.mtime).getTime();
+  if (!t || t < 946684800000) return null; // no real capture time
+  const site = siteSet() ? state.site : null;
+  const key = f.path + "|" + t + "|" + (site ? site.lat + "," + site.lon : "");
+  let m = moonCache.get(key);
+  if (!m) {
+    m = moonCalc(t, site ? site.lat : null, site ? site.lon : 0);
+    if (moonCache.size > 50000) moonCache.clear();
+    moonCache.set(key, m);
+  }
+  return m;
+}
+const phaseName = m => m.illum <= 3 ? "новолуние" : m.illum >= 97 ? "полнолуние" : (m.waxing ? "растущая" : "убывающая");
+function moonTag(f) {
+  if (frameKind(f.name) !== "light") return "";
+  const m = moonOf(f);
+  if (!m) return "";
+  let t = ` · ☾ ${m.illum}%`;
+  if (m.alt !== undefined) t += m.alt < 0 ? " под гор." : ` ${m.alt}°`;
+  return el("span", { className: "muted moon", textContent: t,
+    title: `Луна в момент съёмки: ${phaseName(m)}, освещена на ${m.illum}%` + (m.alt !== undefined ? `, ${m.alt < 0 ? "под горизонтом" : "высота " + m.alt + "°"}` : " (высота — после ввода координат обсерватории)") });
+}
+function moonSummary(ms) {
+  if (!ms.length) return "—";
+  const lo = Math.min(...ms.map(m => m.illum)), hi = Math.max(...ms.map(m => m.illum));
+  let t = lo === hi ? `${lo}%` : `${lo}–${hi}%`;
+  if (ms[0].alt !== undefined) {
+    const up = ms.filter(m => m.alt >= 0);
+    t += !up.length ? ", под горизонтом" : `, до ${Math.max(...up.map(m => m.alt))}°` + (up.length < ms.length ? ` (${Math.round(100 * up.length / ms.length)}% кадров над гор.)` : "");
+  }
+  return t;
+}
+$("siteApply").onclick = async () => {
+  const lat = parseFloat($("siteLat").value), lon = parseFloat($("siteLon").value);
+  if (isNaN(lat) || isNaN(lon)) return alert("Введите широту и долготу, например 55.7558 и 37.6173");
+  try { await post("/ui/api/site", { lat, lon }); siteEdited = false; toast("Координаты сохранены"); summaryKey = ""; }
+  catch (e) { alert("Ошибка: " + e.message); }
+  refresh();
+};
+$("siteDetect").onclick = async () => {
+  try { await post("/ui/api/site", { detect: true }); siteEdited = false; toast("Координаты взяты из снимков"); summaryKey = ""; }
+  catch (e) { alert(e.message); }
+  refresh();
+};
+let siteEdited = false;
+for (const id of ["siteLat", "siteLon"]) $(id).addEventListener("input", () => { siteEdited = true; });
+function renderSite() {
+  const s = state.site || {};
+  if (!siteEdited && s.set) { $("siteLat").value = s.lat; $("siteLon").value = s.lon; }
+  $("siteNow").textContent = s.set ? `Заданы: ${(+s.lat).toFixed(4)}°, ${(+s.lon).toFixed(4)}°` + (s.source ? ` — из ${s.source.split("/").pop()}` : "")
+    : "Не заданы: высота Луны не считается.";
+  $("fMoonAlt").disabled = !s.set;
+  $("fMoonAlt").title = s.set ? "Высота Луны над горизонтом в момент съёмки" : "Нужны координаты обсерватории (блок «Координаты обсерватории» в настройках)";
+}
+
+// ---------- summary by night and object ----------
+// Times here are "wall clock at the observatory": a Date whose UTC fields
+// hold the observatory's local time.
+const nightFmt = d => { // night of d: from noon to noon, named by its evening
+  const e = new Date(d.getTime() - 12 * 3600e3);
+  const n = new Date(e.getTime() + 86400e3);
+  const dd = x => String(x.getUTCDate()).padStart(2, "0") + "." + String(x.getUTCMonth() + 1).padStart(2, "0");
+  return { key: `${e.getUTCFullYear()}-${String(e.getUTCMonth() + 1).padStart(2, "0")}-${String(e.getUTCDate()).padStart(2, "0")}`, label: `${dd(e)} → ${dd(n)}` };
+};
+// the observatory's offset from UTC in ms: reported by the agent, else this browser's
+const obsOffset = t => state && state.obs_tz && state.obs_tz.known ? state.obs_tz.offset * 1000 : -new Date(t).getTimezoneOffset() * 60e3;
+function frameInfo(f) {
+  const kind = frameKind(f.name);
+  // ASIAIR names hold the local time of the observatory; the file time is absolute
+  let when = null;
+  const m = f.name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (m) when = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  if (!when || isNaN(when)) { const t = new Date(f.mtime).getTime(); when = new Date(t + obsOffset(t)); }
+  let exp = 0;
+  const e = f.name.match(/(?:^|_)(\d+(?:\.\d+)?)(ms|s)(?=_|\.)/i);
+  if (e) exp = e[2].toLowerCase() === "ms" ? +e[1] / 1000 : +e[1];
+  let object = "";
+  if (kind === "light") {
+    const parts = f.path.split("/"), i = parts.findIndex(p => p.toLowerCase() === "light");
+    if (i >= 0 && i < parts.length - 2) object = parts[i + 1];
+    else { const o = f.name.match(/^light_([^_]+)_/i); if (o) object = o[1]; }
+  }
+  return { kind, when, exp, object };
+}
+function fmtExp(sec) {
+  if (sec >= 3600) {
+    const h = Math.floor(sec / 3600), m = Math.round(sec % 3600 / 60);
+    return m ? `${h} ч ${m} мин` : `${h} ч`;
+  }
+  if (sec >= 60) return `${+(sec / 60).toFixed(1)} мин`;
+  if (sec >= 1) return `${+sec.toFixed(1)} с`;
+  return `${+(sec * 1000).toFixed(1)} мс`;
+}
+const kindLabel = Object.fromEntries(kindGroups);
+let summaryKey = "";
+function renderSummary() {
+  if ($("summaryPanel").classList.contains("folded")) return;
+  const key = state.files.length + "|" + state.files.reduce((n, f) => n + (f.local ? 1 : 0), 0) + "|" + $("summaryAll").checked + "|" + JSON.stringify(state.site || {});
+  if (key === summaryKey) return; // nothing changed
+  summaryKey = key;
+  const groups = new Map(), objects = new Map();
+  for (const f of state.files) {
+    if (f.status === "filtered") continue;
+    const fi = frameInfo(f);
+    if (fi.kind === "other") continue;
+    const night = nightFmt(fi.when);
+    const k = `${night.key}|${fi.kind}|${fi.object}`;
+    let g = groups.get(k);
+    if (!g) groups.set(k, g = { night, kind: fi.kind, object: fi.object, n: 0, here: 0, total: 0, exps: new Set(), moon: [] });
+    if (fi.kind === "light") { const m = moonOf(f); if (m) g.moon.push(m); }
+    g.n++; g.total += fi.exp; if (fi.exp) g.exps.add(fi.exp);
+    if (f.local) g.here++;
+    if (fi.kind === "light") {
+      const o = objects.get(fi.object) || { n: 0, total: 0, nights: new Set() };
+      o.n++; o.total += fi.exp; o.nights.add(night.key);
+      objects.set(fi.object, o);
+    }
+  }
+  const order = { light: 0, flat: 1, darkflat: 2, dark: 3, bias: 4 };
+  const rows = [...groups.values()].sort((a, b) => b.night.key.localeCompare(a.night.key) || order[a.kind] - order[b.kind] || a.object.localeCompare(b.object));
+  const nights = [...new Set(rows.map(r => r.night.key))];
+  const shown = $("summaryAll").checked ? nights : nights.slice(0, 7);
+  const body = $("summaryBody");
+  body.replaceChildren();
+  let prev = "";
+  for (const r of rows) {
+    if (!shown.includes(r.night.key)) continue;
+    const tr = el("tr", { className: r.night.key !== prev ? "night" : "" });
+    const td = (t, cls) => el("td", { textContent: t, className: cls || "" });
+    tr.append(td(r.night.key !== prev ? r.night.label : ""), td(r.object || "—"), td(kindLabel[r.kind] || r.kind),
+      td(String(r.n), "num"), td([...r.exps].sort((a, b) => a - b).map(fmtExp).join(", ") || "—", "num"),
+      td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
+    prev = r.night.key;
+    body.append(tr);
+  }
+  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 8, className: "muted", textContent: "Кадров с типом в имени (Light, Dark, Flat, Bias) пока нет." })));
+  $("summaryInfo").textContent = nights.length ? `ночей: ${nights.length}` + (shown.length < nights.length ? `, показаны последние ${shown.length}` : "") : "";
+  const tot = [...objects].sort((a, b) => b[1].total - a[1].total)
+    .map(([o, v]) => `${o || "без имени"}: ${v.n} Light, ${fmtExp(v.total)} за ${v.nights.size} ноч${v.nights.size === 1 ? "ь" : v.nights.size < 5 ? "и" : "ей"}`);
+  $("summaryTotals").textContent = tot.length ? "Всего по объектам — " + tot.join(" · ") : "";
+}
+$("summaryAll").onchange = () => { summaryKey = ""; renderSummary(); };
+$("summaryHead").addEventListener("click", () => { summaryKey = ""; setTimeout(renderSummary); });
+
+// ---------- speed chart ----------
+let speedData = [], speedTimer = null;
+async function loadSpeed() {
+  if ($("speedPanel").classList.contains("folded")) return;
+  try {
+    const r = await fetch("/ui/api/speed?hours=" + $("speedHours").value);
+    if (r.ok) speedData = await r.json() || [];
+  } catch (e) { return; }
+  drawSpeed();
+}
+$("speedHours").onchange = () => { store.set("speedHours", $("speedHours").value); loadSpeed(); };
+$("speedHead").addEventListener("click", () => setTimeout(loadSpeed));
+const bottleText = { network: "сеть до приёмника", read: "чтение с ASIAIR", limit: "ограничение скорости" };
+function drawSpeed() {
+  const box = $("speedChart"), W = box.clientWidth || 600, H = box.clientHeight || 180;
+  const L = 64, R = 8, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
+  const hours = +$("speedHours").value, t1 = Date.now(), t0 = t1 - hours * 3600e3;
+  const pts = speedData.map(p => ({ ...p, ts: new Date(p.t).getTime() })).filter(p => p.ts >= t0);
+  const act = pts.filter(p => p.active);
+  const peak = Math.max(1, ...act.map(p => p.speed), ...act.filter(p => p.rate > 0).map(p => p.rate));
+  // round the top of the scale to a nice number of MB/s (the unit of the sliders)
+  const unit = 1 << 20, pk = peak / unit * 1.05;
+  const step = [1, 2, 2.5, 5, 10].map(m => m * 10 ** Math.floor(Math.log10(pk / 3))).find(v => v * 3 >= pk) * unit;
+  const top = step * 3;
+  const tickLabel = v => `${+(v / unit).toFixed(2)} MB/s`;
+  const x = ts => L + (ts - t0) / (t1 - t0) * pw, y = v => T + ph - Math.min(v, top) / top * ph;
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Скорость передачи по минутам" });
+  const grid = mk("g", { class: "grid" }), axis = mk("g", { class: "axis" });
+  for (let i = 0; i <= 3; i++) {
+    const v = step * i, yy = y(v);
+    grid.append(mk("line", { x1: L, x2: W - R, y1: yy, y2: yy }));
+    axis.append(mk("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, i ? tickLabel(v) : "0"));
+  }
+  const tick = hours <= 1 ? 15 * 60e3 : hours <= 6 ? 3600e3 : 3 * 3600e3;
+  for (let ts = Math.ceil(t0 / tick) * tick; ts <= t1; ts += tick) {
+    const d = new Date(ts);
+    axis.append(mk("text", { x: x(ts), y: H - 6, "text-anchor": "middle" }, d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
+  }
+  svg.append(grid, axis);
+  // speed: one path per run of active minutes; the limit as a dashed step line
+  let line = "", area = "", lim = "", run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const seg = run.map((p, i) => `${i ? "L" : "M"}${x(p.ts).toFixed(1)},${y(p.speed).toFixed(1)}`).join("");
+    line += seg;
+    area += seg + `L${x(run[run.length - 1].ts).toFixed(1)},${y(0)}L${x(run[0].ts).toFixed(1)},${y(0)}Z`;
+    run = [];
+  };
+  let prevTs = null, limRun = false;
+  for (const p of pts) {
+    if (!p.active || (prevTs !== null && p.ts - prevTs > 90e3)) flush();
+    if (p.active) run.push(p);
+    if (p.rate > 0 && p.active) { lim += `${limRun ? "L" : "M"}${x(p.ts).toFixed(1)},${y(p.rate).toFixed(1)}`; limRun = true; } else limRun = false;
+    prevTs = p.ts;
+  }
+  flush();
+  if (area) svg.append(mk("path", { class: "area", d: area }));
+  if (lim) svg.append(mk("path", { class: "limit", d: lim }));
+  if (line) svg.append(mk("path", { class: "speed", d: line }));
+  if (!act.length) svg.append(mk("text", { class: "empty", x: L + pw / 2, y: T + ph / 2, "text-anchor": "middle" }, "за это время файлы не передавались"));
+  const cross = mk("line", { class: "cross", y1: T, y2: T + ph, visibility: "hidden" }), dot = mk("circle", { class: "dot", r: 4, visibility: "hidden" });
+  svg.append(cross, dot);
+  box.replaceChildren(svg);
+  const tip = el("div", { className: "tip", hidden: true });
+  box.append(tip);
+  // hover: the nearest minute
+  svg.addEventListener("pointermove", ev => {
+    const r = svg.getBoundingClientRect(), mx = (ev.clientX - r.left) * W / r.width;
+    let best = null;
+    for (const p of pts) if (!best || Math.abs(x(p.ts) - mx) < Math.abs(x(best.ts) - mx)) best = p;
+    if (!best || Math.abs(x(best.ts) - mx) > 20) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; return; }
+    const px = x(best.ts);
+    cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", y(best.speed)); dot.setAttribute("visibility", best.active ? "visible" : "hidden");
+    tip.replaceChildren();
+    const time = new Date(best.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    tip.append(el("b", { textContent: time }));
+    const lines = best.active ? [`скорость: ${fmtBytes(best.speed)}/s (пик ${fmtBytes(best.max)}/s)`, `лимит: ${fmtRate(best.rate)}`]
+      .concat(best.streams ? [`одновременно файлов: ${best.streams}`] : [])
+      .concat(best.bottleneck ? [`упиралось в: ${bottleText[best.bottleneck] || best.bottleneck}`] : []) : ["файлы не передавались"];
+    for (const l of lines) tip.append(el("div", { textContent: l }));
+    tip.hidden = false;
+    const tx = px * r.width / W;
+    tip.style.left = Math.min(Math.max(0, tx + 12), r.width - tip.offsetWidth) + "px";
+    tip.style.top = "0px";
+  });
+  svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; });
+  const a = act.length ? act.reduce((s, p) => s + p.speed, 0) / act.length : 0;
+  $("speedSummary").textContent = act.length ? `в среднем ${fmtBytes(a)}/s за ${act.length} мин передачи, пик ${fmtBytes(Math.max(...act.map(p => p.max)))}/s` : "";
+}
+$("speedHours").value = store.get("speedHours", "6");
+addEventListener("resize", () => { if (speedData.length) drawSpeed(); });
+loadSpeed();
+setInterval(loadSpeed, 60e3);
+
 // ---------- rate slider ----------
 // Positions 1..100 are MB/s in steps of 1, 101 is "no limit". The agent's
 // own limit is the ceiling: the receiver can only lower it, so the slider
@@ -1409,7 +1874,7 @@ $("setupToggle").onclick = () => {
 // every settings and status panel folds by its title
 {
   const folded = new Set(store.get("foldedPanels", []));
-  document.querySelectorAll("main > .grid > .panel > h2:first-child, #setupGrid > .panel > h2:first-child").forEach(h => {
+  document.querySelectorAll("main > .grid > .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2").forEach(h => {
     const key = h.textContent.trim();
     h.classList.add("fold");
     h.title = "Свернуть или развернуть";

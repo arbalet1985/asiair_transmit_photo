@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -80,6 +81,7 @@ type Agent struct {
 	syncSession string             // random per run: the receiver orders statuses by it and syncSeq
 	syncSeq     uint64             // poll loop only
 	uploadSeq   uint64             // guarded by mu
+	order       string             // guarded by mu; which files first, set on the receiver
 	cancelSync  context.CancelFunc // ends the held sync request; guarded by mu
 
 	active  map[string]*upload // files being sent now; guarded by mu
@@ -737,17 +739,46 @@ func (a *Agent) next(onlyFetch bool) (source.File, bool) {
 		if pass == 1 && onlyFetch {
 			break
 		}
-		for _, f := range a.queue {
+		best, found := source.File{}, false
+		for i := range a.queue {
+			f := a.queue[i]
+			if a.order == protocol.OrderNewest {
+				f = a.queue[len(a.queue)-1-i] // the queue is oldest first
+			}
 			if a.active[f.Path] != nil || a.isDeleted(f.Path) || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
 				continue
 			}
 			if t, ok := a.retryAt[f.Path]; ok && now.Before(t) {
 				continue
 			}
-			return f, true
+			if a.order != protocol.OrderLights || FrameKind(f.Path) == "light" {
+				return f, true
+			}
+			if !found { // a calibration frame: only when there is no Light left
+				best, found = f, true
+			}
+		}
+		if found {
+			return best, true
 		}
 	}
 	return source.File{}, false
+}
+
+var frameRe = regexp.MustCompile(`(?:^|[^a-z])(light|dark|flat|bias)(?:[^a-z]|$)`)
+
+// FrameKind tells the frame type from the file name ("Light_M31_300.0s_….fit"):
+// "light", "dark", "flat", "bias", "darkflat" or "".
+func FrameKind(p string) string {
+	n := strings.ToLower(path.Base(p))
+	if strings.Contains(n, "darkflat") || strings.Contains(n, "flatdark") ||
+		strings.Contains(n, "dark_flat") || strings.Contains(n, "flat_dark") {
+		return "darkflat"
+	}
+	if m := frameRe.FindStringSubmatch(n); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 func (a *Agent) dequeue(p string) {
@@ -1020,6 +1051,8 @@ func (a *Agent) Status() protocol.AgentStatus {
 	a.status.Rate = a.lim.Rate()
 	own := a.localRate.Load()
 	a.status.OwnRate = &own
+	name, off := time.Now().Zone()
+	a.status.TZName, a.status.TZOffset = name, &off
 	st := a.status
 	// overall progress also counts the parts of interrupted files already at
 	// the receiver (the file being sent is counted by UploadDone)
@@ -1075,6 +1108,18 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	held = resp.Rev != 0
 	a.mu.Lock()
 	a.remoteRate = resp.MaxRate
+	if a.status.Schedule != resp.Schedule {
+		if resp.Schedule != "" {
+			log.Printf("Агент: расписание приёмника: %s", resp.Schedule)
+		} else if a.status.Schedule != "" {
+			log.Printf("Агент: окно расписания приёмника закончилось")
+		}
+		a.status.Schedule = resp.Schedule
+	}
+	if a.order != resp.Order {
+		a.order = resp.Order
+		log.Printf("Агент: порядок передачи: %s", orderText(resp.Order))
+	}
 	a.mu.Unlock()
 	a.applyRate()
 	a.setStreams(resp.Streams)
@@ -1220,4 +1265,14 @@ func effectiveRate(own int64, remote *int64) int64 {
 		return *remote
 	}
 	return own
+}
+
+func orderText(o string) string {
+	switch o {
+	case protocol.OrderNewest:
+		return "сначала новые"
+	case protocol.OrderLights:
+		return "сначала Light, потом калибровочные"
+	}
+	return "сначала старые"
 }
