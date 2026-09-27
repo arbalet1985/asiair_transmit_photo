@@ -731,38 +731,60 @@ func (a *Agent) updateQueueStatus() {
 func (a *Agent) next(onlyFetch bool) (source.File, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if up := a.upcomingLocked(onlyFetch, 1); len(up) > 0 {
+		return up[0], true
+	}
+	return source.File{}, false
+}
+
+// upcomingLocked returns up to n files to upload next, in the order they
+// will go: files requested on the receiver page first, then the rest in
+// the order set on the receiver (with "lights", calibration frames only
+// after the last Light). onlyFetch (the transfer is paused) returns only
+// requested files. Files being sent or waiting for a retry are skipped.
+// Caller holds a.mu.
+func (a *Agent) upcomingLocked(onlyFetch bool, n int) []source.File {
 	if a.diskFull != "" {
-		return source.File{}, false // the receiver would refuse even requested files
+		return nil // the receiver would refuse even requested files
 	}
 	now := time.Now()
-	for pass := 0; pass < 2; pass++ {
+	var out, later []source.File
+	taken := map[string]bool{}
+	for pass := 0; pass < 2 && len(out) < n; pass++ {
 		if pass == 1 && onlyFetch {
 			break
 		}
-		best, found := source.File{}, false
+		later = later[:0]
 		for i := range a.queue {
 			f := a.queue[i]
 			if a.order == protocol.OrderNewest {
 				f = a.queue[len(a.queue)-1-i] // the queue is oldest first
 			}
-			if a.active[f.Path] != nil || a.isDeleted(f.Path) || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
+			if taken[f.Path] || a.active[f.Path] != nil || a.isDeleted(f.Path) || a.isSent(f) || pass == 0 && !a.fetch[f.Path] {
 				continue
 			}
 			if t, ok := a.retryAt[f.Path]; ok && now.Before(t) {
 				continue
 			}
-			if a.order != protocol.OrderLights || FrameKind(f.Path) == "light" {
-				return f, true
+			if a.order == protocol.OrderLights && FrameKind(f.Path) != "light" {
+				if len(later) < n {
+					later = append(later, f) // a calibration frame: after the Light frames
+				}
+				continue
 			}
-			if !found { // a calibration frame: only when there is no Light left
-				best, found = f, true
+			out, taken[f.Path] = append(out, f), true
+			if len(out) == n {
+				return out
 			}
 		}
-		if found {
-			return best, true
+		for _, f := range later {
+			if len(out) == n {
+				break
+			}
+			out, taken[f.Path] = append(out, f), true
 		}
 	}
-	return source.File{}, false
+	return out
 }
 
 var frameRe = regexp.MustCompile(`(?:^|[^a-z])(light|dark|flat|bias)(?:[^a-z]|$)`)
@@ -1046,6 +1068,10 @@ func (a *Agent) Status() protocol.AgentStatus {
 		a.status.Uploading, a.status.UploadDone, a.status.UploadSize = first.Path, first.Done, first.Size
 	}
 	a.status.Streams = int(a.streams.Load())
+	a.status.Next = a.status.Next[:0:0]
+	for _, f := range a.upcomingLocked(a.paused.Load(), 3) {
+		a.status.Next = append(a.status.Next, protocol.Upload{Path: f.Path, Size: f.Size, Done: min(a.partial[f.Path], f.Size)})
+	}
 	a.status.Diag = a.diag.result(a.status.Streams)
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
