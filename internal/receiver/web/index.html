@@ -152,6 +152,10 @@
   .uitem .line { display: flex; gap: 8px; justify-content: space-between; }
   .uitem .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .uitem .num { flex: none; color: var(--muted); font-size: 12px; }
+  .unext { margin: 2px 0 4px; font-size: 12px; color: var(--muted); }
+  .unext div { display: flex; gap: 8px; justify-content: space-between; }
+  .unext .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .unext .num { flex: none; }
   .diag { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--row); font-size: 13px; }
   .diag b { font-weight: 600; }
 
@@ -263,6 +267,7 @@
       <div class="xfer">
         <h3 id="uHead">Передаётся</h3>
         <div id="uList"><div class="line">—</div></div>
+        <div class="unext" id="uNext" hidden></div>
         <div class="line muted" id="uSpeed">—</div>
         <div class="line diag" id="uDiag" hidden></div>
         <h3>Всего</h3>
@@ -1429,6 +1434,18 @@ function renderUploads(a) {
     num.textContent = `${fmtBytes(u.done)} из ${fmtBytes(u.size)}`;
     fill.style.width = u.size ? (100 * u.done / u.size).toFixed(1) + "%" : "0";
     bar.append(fill); line.append(name, num); item.append(line, bar); list.append(item);
+  }
+  // the next files, as the agent will take them
+  const next = state.agent_online && a.next ? a.next : [];
+  $("uNext").hidden = !next.length;
+  $("uNext").replaceChildren();
+  if (next.length) {
+    $("uNext").append(el("div", { textContent: "Следующие:" }));
+    for (const f of next) {
+      const name = el("span", { className: "name", textContent: f.path.split("/").pop(), title: f.path });
+      const num = el("span", { className: "num", textContent: f.done > 0 ? `${fmtBytes(f.size)}, продолжится с ${Math.floor(100 * f.done / f.size)}%` : fmtBytes(f.size) });
+      $("uNext").append(el("div", {}, name, num));
+    }
   }
   let sp = `лимит: ${fmtRate(a.rate)}`;
   if (ups.length) {

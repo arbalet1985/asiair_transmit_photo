@@ -70,6 +70,9 @@ type AgentStatus struct {
 	Rate       int64   `json:"rate"`  // bytes/s, limit in effect (0 = unlimited)
 	// Uploads: the files being sent now, several at once with Streams > 1.
 	Uploads []Upload `json:"uploads,omitempty"`
+	// Next: the files to be sent next (up to 3), in order; Done is what the
+	// receiver already has of an interrupted file.
+	Next []Upload `json:"next,omitempty"`
 	// Streams: how many files the agent sends at once (set on the receiver).
 	Streams int `json:"streams,omitempty"`
 	// Diag: where the transfer spends its time, to find the bottleneck.
