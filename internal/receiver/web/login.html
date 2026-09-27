@@ -37,21 +37,29 @@
     <div><h1>ASIAIR — приём фото</h1><div class="muted">вход с телефона</div></div>
   </div>
   <input type="password" id="pw" placeholder="Пароль" autocomplete="current-password" required autofocus>
+  <input type="text" id="code" placeholder="Код из приложения (6 цифр)" inputmode="numeric" autocomplete="one-time-code" maxlength="7" hidden style="margin-top:10px">
   <button id="go">Войти</button>
   <div class="err" id="err"></div>
   <div class="muted">Пароль задаётся на странице приёмника на домашнем компьютере, в блоке «Доступ с телефона».</div>
 </form>
 <script>
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
+let needCode = false;
+fetch("/login/info").then(r => r.json()).then(v => {
+  needCode = !!v.totp;
+  const c = document.getElementById("code");
+  c.hidden = !needCode; c.required = needCode;
+}).catch(() => {});
 document.getElementById("f").onsubmit = async e => {
   e.preventDefault();
   const btn = document.getElementById("go"), err = document.getElementById("err");
   btn.disabled = true; err.textContent = "";
   try {
     const r = await fetch("/login", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: document.getElementById("pw").value }) });
+      body: JSON.stringify({ password: document.getElementById("pw").value, code: document.getElementById("code").value.replace(/\s/g, "") }) });
     if (r.ok) { location.replace("/"); return; }
     err.textContent = (await r.text()).trim() || "Не удалось войти";
+    if (needCode) document.getElementById("code").value = ""; // each code works once
   } catch (x) { err.textContent = "Нет связи с приёмником"; }
   btn.disabled = false;
 };

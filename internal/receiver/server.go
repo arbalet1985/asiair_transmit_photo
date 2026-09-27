@@ -85,6 +85,8 @@ type Server struct {
 
 	// remote access to the page (remote.go)
 	remoteMu  sync.Mutex // guards cfg.Remote* and the fields below
+	totpNew   string     // secret being set up, until its first code is confirmed
+	totp      totpGuard  // one-time codes are accepted once
 	sess      *sessions
 	lim       *limiter
 	tsWebStop context.CancelFunc // the page on ports 443/80 of the node runs

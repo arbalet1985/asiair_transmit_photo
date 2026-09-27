@@ -55,6 +55,9 @@ tailscale: false
 remote_internet: false
 remote_tailscale: false
 remote_password: ""
+# Секрет одноразовых кодов (приложение-аутентификатор) — второй шаг входа
+# с телефона. Включается на веб-странице; пусто — вход только по паролю.
+remote_totp: ""
 
 log_file: asiair-receiver.log
 # Журнал каждый день начинается заново; прошлые дни лежат рядом
