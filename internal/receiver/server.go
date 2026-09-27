@@ -114,6 +114,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 		reserve: reserve, minFree: cfg.MinFree, stopping: make(chan struct{}), cleanupNow: make(chan struct{}, 1),
 		sess: loadSessions(filepath.Join(cfg.DataDir, "sessions.json")), lim: newLimiter()}
 	s.updater = newUpdater(s)
+	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
 		if err != nil {
@@ -163,6 +164,7 @@ func (s *Server) Run(ctx context.Context) error {
 	log.Printf("Приёмник: версия %s", protocol.Version)
 	go s.updater.run(ctx)
 	go s.automation(ctx)
+	defer s.speed.save() // the chart history survives a restart
 	if s.cfg.TailscaleOn {
 		if err := s.startTailscale(); err != nil {
 			log.Printf("Приёмник: Tailscale не запущен: %v", err)
