@@ -65,8 +65,16 @@ func TestAgentUpdate(t *testing.T) {
 	}
 	srv.UpdateAPI = gh.URL
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go srv.Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.Run(ctx)
+	}()
+	// stop the receiver before its data folder is removed (it saves on exit)
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	srv.updater.trigger(false)
 	deadline := time.Now().Add(5 * time.Second)
 	for srv.updater.info().Agent != "1.2.0" {

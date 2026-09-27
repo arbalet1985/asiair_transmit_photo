@@ -2,9 +2,11 @@ package receiver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -169,7 +171,7 @@ func (s *State) applySchedule(resp *protocol.SyncResponse, now time.Time) {
 func (s *Server) automation(ctx context.Context) {
 	first := s.state.Snapshot()
 	active := scheduleActive(&first, time.Now())
-	lastCleanup := time.Time{}
+	lastCleanup, lastSave := time.Time{}, time.Now()
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	for {
@@ -184,6 +186,10 @@ func (s *Server) automation(ctx context.Context) {
 				log.Printf("Приёмник: расписание: окно закончилось")
 			}
 			s.state.Bump()
+		}
+		if now.Sub(lastSave) >= 5*time.Minute {
+			lastSave = now
+			s.speed.save()
 		}
 		if now.Sub(lastCleanup) >= 10*time.Minute {
 			lastCleanup = now
@@ -288,12 +294,61 @@ type speedSample struct {
 	n          int
 }
 
-const speedLogLen = 24 * 60
+const speedLogLen = 7 * 24 * 60
 
-// speedLog keeps the last 24 hours of the agent speed, per minute.
+// speedLog keeps the last 7 days of the agent speed, per minute. It is
+// saved to file (in the data folder) now and then and when the receiver
+// stops, so the chart survives a restart.
 type speedLog struct {
 	mu      sync.Mutex
 	samples []speedSample
+	file    string
+	dirty   bool
+}
+
+// load reads the saved history; a missing or broken file starts empty.
+func (l *speedLog) load(file string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.file = file
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return
+	}
+	var saved []speedSample
+	if err := json.Unmarshal(b, &saved); err != nil {
+		log.Printf("Приёмник: история скорости %s не прочитана: %v", file, err)
+		return
+	}
+	cutoff := now.Add(-speedLogLen * time.Minute)
+	for _, s := range saved {
+		if s.T.After(cutoff) && !s.T.After(now) {
+			l.samples = append(l.samples, s)
+		}
+	}
+	sort.Slice(l.samples, func(i, j int) bool { return l.samples[i].T.Before(l.samples[j].T) })
+}
+
+// save writes the history if it changed since the last save.
+func (l *speedLog) save() {
+	l.mu.Lock()
+	if !l.dirty || l.file == "" {
+		l.mu.Unlock()
+		return
+	}
+	b, err := json.Marshal(l.samples)
+	l.dirty = false
+	file := l.file
+	l.mu.Unlock()
+	if err == nil {
+		tmp := file + ".tmp"
+		if err = os.WriteFile(tmp, b, 0o644); err == nil {
+			err = os.Rename(tmp, file)
+		}
+	}
+	if err != nil {
+		log.Printf("Приёмник: история скорости не сохранена: %v", err)
+	}
 }
 
 func (l *speedLog) add(st protocol.AgentStatus, now time.Time) {
@@ -306,6 +361,7 @@ func (l *speedLog) add(st protocol.AgentStatus, now time.Time) {
 			l.samples = append(l.samples[:0:0], l.samples[len(l.samples)-speedLogLen:]...)
 		}
 	}
+	l.dirty = true
 	s := &l.samples[len(l.samples)-1]
 	active := st.Uploading != "" || len(st.Uploads) > 0
 	s.n++
@@ -335,7 +391,7 @@ func (l *speedLog) list(since time.Time) []speedSample {
 
 func (s *Server) handleUISpeed(w http.ResponseWriter, r *http.Request) {
 	hours := 6
-	if h, err := strconv.Atoi(r.URL.Query().Get("hours")); err == nil && h >= 1 && h <= 24 {
+	if h, err := strconv.Atoi(r.URL.Query().Get("hours")); err == nil && h >= 1 && h <= speedLogLen/60 {
 		hours = h
 	}
 	writeJSON(w, s.speed.list(time.Now().Add(-time.Duration(hours)*time.Hour)))

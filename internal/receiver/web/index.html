@@ -310,11 +310,13 @@
           <option value="1">за 1 час</option>
           <option value="6" selected>за 6 часов</option>
           <option value="24">за 24 часа</option>
+          <option value="72">за 3 дня</option>
+          <option value="168">за 7 дней</option>
         </select>
         <span class="muted" id="speedSummary"></span>
       </div>
       <div class="chart" id="speedChart"></div>
-      <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Разрывы — минуты, когда файлы не передавались. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История хранится с момента запуска приёмника.</div>
+      <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Разрывы — минуты, когда файлы не передавались. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История за 7 дней сохраняется в папке данных приёмника (<b>speed-log.json</b>) и остаётся после перезапуска.</div>
     </div>
   </section>
 
@@ -1708,7 +1710,7 @@ function drawSpeed() {
   const hours = +$("speedHours").value, t1 = Date.now(), t0 = t1 - hours * 3600e3;
   const pts = speedData.map(p => ({ ...p, ts: new Date(p.t).getTime() })).filter(p => p.ts >= t0);
   const act = pts.filter(p => p.active);
-  const peak = Math.max(1, ...act.map(p => p.speed), ...act.filter(p => p.rate > 0).map(p => p.rate));
+  const peak = act.reduce((m, p) => Math.max(m, p.speed, p.rate > 0 ? p.rate : 0), 1);
   // round the top of the scale to a nice number of MB/s (the unit of the sliders)
   const unit = 1 << 20, pk = peak / unit * 1.05;
   const step = [1, 2, 2.5, 5, 10].map(m => m * 10 ** Math.floor(Math.log10(pk / 3))).find(v => v * 3 >= pk) * unit;
@@ -1724,10 +1726,22 @@ function drawSpeed() {
     grid.append(mk("line", { x1: L, x2: W - R, y1: yy, y2: yy }));
     axis.append(mk("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, i ? tickLabel(v) : "0"));
   }
-  const tick = hours <= 1 ? 15 * 60e3 : hours <= 6 ? 3600e3 : 3 * 3600e3;
-  for (let ts = Math.ceil(t0 / tick) * tick; ts <= t1; ts += tick) {
-    const d = new Date(ts);
-    axis.append(mk("text", { x: x(ts), y: H - 6, "text-anchor": "middle" }, d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
+  if (hours <= 24) {
+    const tick = hours <= 1 ? 15 * 60e3 : hours <= 6 ? 3600e3 : 3 * 3600e3;
+    // ticks on round local times
+    const off = new Date(t0).getTimezoneOffset() * 60e3;
+    for (let ts = Math.ceil((t0 - off) / tick) * tick + off; ts <= t1; ts += tick) {
+      axis.append(mk("text", { x: x(ts), y: H - 6, "text-anchor": "middle" }, new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
+    }
+  } else {
+    // a tick at every local midnight (every other one for a week on a narrow screen), dated
+    const every = hours > 72 && pw < 500 ? 2 : 1;
+    const d = new Date(t0); d.setHours(24, 0, 0, 0);
+    for (let i = 0; d.getTime() <= t1; i++, d.setDate(d.getDate() + 1)) {
+      if (i % every) continue;
+      grid.append(mk("line", { x1: x(d.getTime()), x2: x(d.getTime()), y1: T, y2: T + ph }));
+      axis.append(mk("text", { x: x(d.getTime()), y: H - 6, "text-anchor": "middle" }, d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })));
+    }
   }
   svg.append(grid, axis);
   // speed: one path per run of active minutes; the limit as a dashed step line
@@ -1766,7 +1780,7 @@ function drawSpeed() {
     cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
     dot.setAttribute("cx", px); dot.setAttribute("cy", y(best.speed)); dot.setAttribute("visibility", best.active ? "visible" : "hidden");
     tip.replaceChildren();
-    const time = new Date(best.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    const time = new Date(best.ts).toLocaleString("ru-RU", hours > 24 ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
     tip.append(el("b", { textContent: time }));
     const lines = best.active ? [`скорость: ${fmtBytes(best.speed)}/s (пик ${fmtBytes(best.max)}/s)`, `лимит: ${fmtRate(best.rate)}`]
       .concat(best.streams ? [`одновременно файлов: ${best.streams}`] : [])
@@ -1779,7 +1793,8 @@ function drawSpeed() {
   });
   svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; });
   const a = act.length ? act.reduce((s, p) => s + p.speed, 0) / act.length : 0;
-  $("speedSummary").textContent = act.length ? `в среднем ${fmtBytes(a)}/s за ${act.length} мин передачи, пик ${fmtBytes(Math.max(...act.map(p => p.max)))}/s` : "";
+  const dur = act.length >= 120 ? `${+(act.length / 60).toFixed(1)} ч` : `${act.length} мин`;
+  $("speedSummary").textContent = act.length ? `в среднем ${fmtBytes(a)}/s за ${dur} передачи, пик ${fmtBytes(act.reduce((m, p) => Math.max(m, p.max), 0))}/s` : "";
 }
 $("speedHours").value = store.get("speedHours", "6");
 addEventListener("resize", () => { if (speedData.length) drawSpeed(); });

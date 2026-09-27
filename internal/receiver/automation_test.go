@@ -2,6 +2,8 @@ package receiver
 
 import (
 	"math"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +130,28 @@ func TestScheduleObservatoryZone(t *testing.T) {
 	p.Status.TZOffset, p.Status.TZName = &ny, "-0430"
 	if z := newObsTZ(p.Status); z.Text != "UTC-4:30" || z.Offset != ny {
 		t.Fatalf("%+v", z)
+	}
+}
+
+// The speed history is saved and read back; minutes older than 7 days go.
+func TestSpeedLogSaved(t *testing.T) {
+	file := t.TempDir() + "/speed-log.json"
+	now := time.Now().Truncate(time.Minute)
+	var l speedLog
+	l.load(file, now) // no file yet
+	l.add(protocol.AgentStatus{Speed: 1000, Uploading: "a", Streams: 3}, now.Add(-8*24*time.Hour))
+	l.add(protocol.AgentStatus{Speed: 2000, Uploading: "a", Streams: 3}, now.Add(-time.Hour))
+	l.add(protocol.AgentStatus{Speed: 3000, Uploading: "a"}, now.Add(-time.Minute))
+	l.save()
+	var back speedLog
+	back.load(file, now)
+	got := back.list(time.Time{})
+	if len(got) != 2 || got[0].Speed != 2000 || !got[0].Active || got[0].Streams != 3 || got[1].Speed != 3000 {
+		t.Fatalf("%+v", got)
+	}
+	back.add(protocol.AgentStatus{Speed: 5}, now)
+	back.save()
+	if b, err := os.ReadFile(file); err != nil || !strings.Contains(string(b), `"speed":5`) {
+		t.Fatalf("not saved again: %v", err)
 	}
 }
