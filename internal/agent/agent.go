@@ -18,7 +18,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -579,6 +578,7 @@ func (a *Agent) excluded(p string) bool {
 }
 
 func (a *Agent) scan(ctx context.Context) error {
+	defer a.updateSpace(ctx)
 	var files, filtered []source.File
 	// the whole tree is listed so the receiver can show it; filtered files
 	// are reported but never transferred
@@ -787,21 +787,8 @@ func (a *Agent) upcomingLocked(onlyFetch bool, n int) []source.File {
 	return out
 }
 
-var frameRe = regexp.MustCompile(`(?:^|[^a-z])(light|dark|flat|bias)(?:[^a-z]|$)`)
-
-// FrameKind tells the frame type from the file name ("Light_M31_300.0s_….fit"):
-// "light", "dark", "flat", "bias", "darkflat" or "".
-func FrameKind(p string) string {
-	n := strings.ToLower(path.Base(p))
-	if strings.Contains(n, "darkflat") || strings.Contains(n, "flatdark") ||
-		strings.Contains(n, "dark_flat") || strings.Contains(n, "flat_dark") {
-		return "darkflat"
-	}
-	if m := frameRe.FindStringSubmatch(n); m != nil {
-		return m[1]
-	}
-	return ""
-}
+// FrameKind tells the frame type from the file name: see protocol.FrameKind.
+func FrameKind(p string) string { return protocol.FrameKind(p) }
 
 func (a *Agent) dequeue(p string) {
 	q := a.queue[:0]
@@ -1301,4 +1288,23 @@ func orderText(o string) string {
 		return "сначала Light, потом калибровочные"
 	}
 	return "сначала старые"
+}
+
+// updateSpace asks the ASIAIR how much room its storages have left.
+func (a *Agent) updateSpace(ctx context.Context) {
+	sp, ok := a.source().(source.Spacer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	var out []protocol.StorageSpace
+	for _, s := range sp.Space(ctx) {
+		out = append(out, protocol.StorageSpace{Share: s.Share, Free: int64(s.Free), Total: int64(s.Total)})
+	}
+	a.mu.Lock()
+	if out != nil || !a.status.Connected {
+		a.status.Storage = out
+	}
+	a.mu.Unlock()
 }

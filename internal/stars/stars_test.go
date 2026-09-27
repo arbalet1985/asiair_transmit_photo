@@ -1,0 +1,67 @@
+package stars
+
+import (
+	"math"
+	"math/rand"
+	"testing"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+)
+
+// frame draws n Gaussian stars of the given sigma on a noisy background.
+// transparency scales the stars (clouds make them fainter).
+func frame(n int, sigma, transparency float64, seed int64) *fits.Image {
+	const w, h = 800, 600
+	rnd := rand.New(rand.NewSource(seed))
+	d := make([]float32, w*h)
+	for i := range d {
+		d[i] = float32(0.05 + rnd.NormFloat64()*0.002)
+	}
+	for s := 0; s < n; s++ {
+		cx, cy := 30+rnd.Float64()*(w-60), 30+rnd.Float64()*(h-60)
+		u := rnd.Float64()
+		amp := (0.02 + 0.5*u*u*u) * transparency // many faint stars, few bright ones
+		r := int(5 * sigma)
+		for y := int(cy) - r; y <= int(cy)+r; y++ {
+			for x := int(cx) - r; x <= int(cx)+r; x++ {
+				dx, dy := float64(x)-cx, float64(y)-cy
+				d[y*w+x] += float32(amp * math.Exp(-(dx*dx+dy*dy)/(2*sigma*sigma)))
+			}
+		}
+	}
+	// hot pixels
+	for i := 0; i < 200; i++ {
+		d[rnd.Intn(len(d))] = 0.9
+	}
+	return &fits.Image{Width: w, Height: h, Channels: 1, Data: d, Binning: 1}
+}
+
+func TestMeasure(t *testing.T) {
+	// the HFR of a Gaussian star is sigma·√(π/2)
+	sharp := Measure(frame(150, 1.5, 1, 1))
+	want := 1.5 * math.Sqrt(math.Pi/2)
+	if math.Abs(sharp.HFR-want)/want > 0.2 {
+		t.Errorf("sharp: HFR %.2f, want about %.2f", sharp.HFR, want)
+	}
+	if sharp.Stars < 110 || sharp.Stars > 150 {
+		t.Errorf("sharp: %d stars of 150 (hot pixels must not count)", sharp.Stars)
+	}
+	soft := Measure(frame(150, 3, 1, 1))
+	if soft.HFR < 1.6*sharp.HFR {
+		t.Errorf("out of focus: HFR %.2f vs %.2f", soft.HFR, sharp.HFR)
+	}
+	clouds := Measure(frame(150, 1.5, 0.25, 1))
+	if float64(clouds.Stars) > 0.7*float64(sharp.Stars) {
+		t.Errorf("clouds: %d stars vs %d", clouds.Stars, sharp.Stars)
+	}
+	empty := Measure(frame(0, 1.5, 1, 2))
+	if empty.Stars != 0 || empty.HFR != 0 {
+		t.Errorf("empty frame: %+v", empty)
+	}
+	// binning is undone
+	img := frame(150, 1.5, 1, 1)
+	img.Binning = 2
+	if b := Measure(img); math.Abs(b.HFR-2*sharp.HFR) > 1e-9 {
+		t.Errorf("binned: %.2f", b.HFR)
+	}
+}

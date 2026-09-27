@@ -61,6 +61,7 @@ var localOnly = map[string]bool{
 	"/ui/api/mkdir":     true,
 	"/ui/api/destdir":   true,
 	"/ui/api/startup":   true,
+	"/ui/api/open":      true, // opens a window on this computer
 }
 
 // ---------- password ----------

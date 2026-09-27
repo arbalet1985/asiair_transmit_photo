@@ -37,6 +37,10 @@ type uiFile struct {
 	Progress   float64   `json:"progress,omitempty"` // 0..1 for uploading/partial
 	Error      string    `json:"error,omitempty"`
 	RetryAt    time.Time `json:"retry_at,omitempty"`
+	// Light frames received here: stars found and their median HFR in pixels.
+	Measured bool    `json:"q,omitempty"`
+	HFR      float64 `json:"hfr,omitempty"`
+	Stars    int     `json:"stars,omitempty"`
 }
 
 // uiTotals summarise the transfer of everything the agent transfers.

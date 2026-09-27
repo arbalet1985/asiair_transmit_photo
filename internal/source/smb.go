@@ -403,3 +403,29 @@ func (s *SMB) Probe(ctx context.Context) (*ProbeResult, error) {
 	}
 	return res, nil
 }
+
+// Space reports the free space of every ASIAIR share that answers.
+func (s *SMB) Space(ctx context.Context) []ShareSpace {
+	s.mu.Lock()
+	err := s.connect(ctx)
+	s.mu.Unlock()
+	if err != nil {
+		return nil
+	}
+	var out []ShareSpace
+	for _, name := range s.shareNames() {
+		m, err := s.share(ctx, name)
+		if err != nil {
+			continue
+		}
+		st, err := m.WithContext(ctx).Statfs(".")
+		if err != nil {
+			continue
+		}
+		bs := st.BlockSize()
+		if total := st.TotalBlockCount() * bs; total > 0 {
+			out = append(out, ShareSpace{Share: name, Free: st.AvailableBlockCount() * bs, Total: total})
+		}
+	}
+	return out
+}

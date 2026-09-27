@@ -184,3 +184,16 @@ func New(link string, defaultShares []string, user, password, domain string) (So
 	}
 	return NewSMB(l, defaultShares, user, password, domain), nil
 }
+
+// Space reports the free space of the disk with the folder.
+func (d *Dir) Space(ctx context.Context) []ShareSpace {
+	root, err := d.base()
+	if err != nil {
+		return nil
+	}
+	free, total, err := diskSpace(root)
+	if err != nil || total == 0 {
+		return nil
+	}
+	return []ShareSpace{{Share: d.share, Free: free, Total: total}}
+}

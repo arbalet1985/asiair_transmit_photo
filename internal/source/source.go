@@ -162,3 +162,15 @@ func ReplaceHost(link, ip string) (string, error) {
 	}
 	return link[:i] + host + link[i+len(l.Host):], nil
 }
+
+// ShareSpace is the free space of one ASIAIR storage.
+type ShareSpace struct {
+	Share string
+	Free  uint64 // bytes available
+	Total uint64
+}
+
+// Spacer is a source that can tell the free space of its storages.
+type Spacer interface {
+	Space(ctx context.Context) []ShareSpace
+}
