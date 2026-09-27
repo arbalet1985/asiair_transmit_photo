@@ -64,6 +64,9 @@ type Server struct {
 
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
+	speed      speedLog      // the agent speed of the last hours, for the chart
+	cleanupNow chan struct{} // run the ASIAIR cleanup at once (setting changed)
+
 	// Firewall manages the Windows firewall rule (set by the program).
 	Firewall Firewall
 	fw       fwCache
@@ -108,7 +111,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, store: store, state: state, token: cfg.Token, previews: newPreviewCache(6),
-		reserve: reserve, minFree: cfg.MinFree, stopping: make(chan struct{}),
+		reserve: reserve, minFree: cfg.MinFree, stopping: make(chan struct{}), cleanupNow: make(chan struct{}, 1),
 		sess: loadSessions(filepath.Join(cfg.DataDir, "sessions.json")), lim: newLimiter()}
 	s.updater = newUpdater(s)
 	if !cfg.DisableTLS {
@@ -159,6 +162,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	log.Printf("Приёмник: версия %s", protocol.Version)
 	go s.updater.run(ctx)
+	go s.automation(ctx)
 	if s.cfg.TailscaleOn {
 		if err := s.startTailscale(); err != nil {
 			log.Printf("Приёмник: Tailscale не запущен: %v", err)
@@ -351,6 +355,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := s.state.Sync(req)
+	s.speed.add(req.Status, time.Now())
 	resp.DiskFull = s.disk().Full
 	resp.Update = s.updater.offer(req.Status)
 	writeJSON(w, resp)
@@ -427,6 +432,11 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
+	mux.HandleFunc("/ui/api/speed", s.handleUISpeed)
+	mux.HandleFunc("/ui/api/cleanup", s.handleUICleanup)
+	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)
+	mux.HandleFunc("/ui/api/order", s.handleUIOrder)
+	mux.HandleFunc("/ui/api/site", s.handleUISite)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
@@ -481,6 +491,12 @@ type uiState struct {
 	Commands      []*Command           `json:"commands"`
 	MaxRate       *int64               `json:"max_rate"`
 	Streams       int                  `json:"streams"`
+	Order         string               `json:"order"`
+	Cleanup       CleanupSettings      `json:"cleanup"`
+	Schedule      ScheduleSettings     `json:"schedule"`
+	ScheduleOn    bool                 `json:"schedule_on"` // the window is open now
+	Site          Site                 `json:"site"`
+	ObsTZ         obsTZ                `json:"obs_tz"`
 	Paused        bool                 `json:"paused"`
 	WaitStart     bool                 `json:"wait_start"`
 	Fetch         []string             `json:"fetch"`
@@ -517,6 +533,12 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Commands:      snap.Commands,
 		MaxRate:       snap.MaxRate,
 		Streams:       s.state.Streams(),
+		Order:         snap.Order,
+		Cleanup:       snap.Cleanup,
+		Schedule:      snap.Schedule,
+		ScheduleOn:    scheduleActive(&snap, time.Now()),
+		ObsTZ:         newObsTZ(snap.Status),
+		Site:          snap.Site,
 		Paused:        snap.Paused,
 		WaitStart:     snap.WaitStart,
 		Fetch:         snap.Fetch,

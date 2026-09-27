@@ -46,8 +46,13 @@ type persisted struct {
 	Commands []*Command `json:"commands"`
 	MaxRate  *int64     `json:"max_rate"`
 	// Streams: files the agent sends at once; 0 = protocol.DefaultStreams.
-	Streams int  `json:"streams,omitempty"`
-	Paused  bool `json:"paused"` // transfer paused from the page
+	Streams int `json:"streams,omitempty"`
+	// Order: which files the agent sends first (OrderOldest, …).
+	Order    string           `json:"order,omitempty"`
+	Cleanup  CleanupSettings  `json:"cleanup"`
+	Schedule ScheduleSettings `json:"schedule"`
+	Site     Site             `json:"site"`
+	Paused   bool             `json:"paused"` // transfer paused from the page
 	// WaitStart: a new receiver shows the ASIAIR tree but does not let the
 	// agent transfer until "Старт" is pressed on the page.
 	WaitStart bool `json:"wait_start"`
@@ -177,7 +182,8 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	}
 	s.p.LastSeen = time.Now()
 	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
-		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}}
+		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}, Order: s.p.Order}
+	s.applySchedule(&resp, time.Now())
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
 			resp.Commands = append(resp.Commands, c.Command)

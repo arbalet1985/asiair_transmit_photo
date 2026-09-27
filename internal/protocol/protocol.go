@@ -90,6 +90,12 @@ type AgentStatus struct {
 	WaitStart   bool `json:"wait_start,omitempty"` // waiting for "Старт" on the receiver page
 	// DiskFull: paused because the receiver is short of disk space (why).
 	DiskFull string `json:"disk_full,omitempty"`
+	// Schedule: the receiver's schedule window in effect ("" = none).
+	Schedule string `json:"schedule,omitempty"`
+	// Time zone of the observatory computer: the offset east of UTC in
+	// seconds (nil in old agents) and its name ("MSK", "+03").
+	TZOffset *int   `json:"tz_offset,omitempty"`
+	TZName   string `json:"tz_name,omitempty"`
 
 	// Totals over the files to transfer that are on the ASIAIR now.
 	TotalFiles int   `json:"total_files"`
@@ -136,6 +142,9 @@ type SyncResponse struct {
 	// Streams: how many files to send at once, 1..MaxStreams (0 from old
 	// receivers: one).
 	Streams int `json:"streams,omitempty"`
+	// Order: which files to send first: "" oldest (default), "newest",
+	// "lights" (Light frames before calibration frames).
+	Order string `json:"order,omitempty"`
 	// Paused: the transfer is paused from the receiver page.
 	Paused bool `json:"paused,omitempty"`
 	// WaitStart: the transfer has not been started on the receiver page yet
@@ -147,6 +156,9 @@ type SyncResponse struct {
 	// DiskFull: the receiver keeps too little free space and accepts no
 	// files until it is freed; the text says why.
 	DiskFull string `json:"disk_full,omitempty"`
+	// Schedule: the schedule window in effect, e.g. "с 22:00 до 06:00 —
+	// пауза" (its pause or limit is already in Paused and MaxRate).
+	Schedule string `json:"schedule,omitempty"`
 	// Update offers a new agent version; the program is downloaded from
 	// /api/update/agent.
 	Update *UpdateOffer `json:"update,omitempty"`
@@ -183,6 +195,13 @@ type Diag struct {
 const (
 	MaxStreams     = 8
 	DefaultStreams = 3
+)
+
+// Transfer orders (SyncResponse.Order).
+const (
+	OrderOldest = ""
+	OrderNewest = "newest"
+	OrderLights = "lights"
 )
 
 // UpdateOffer describes the agent program the receiver can hand out.
