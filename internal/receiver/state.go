@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +54,8 @@ type persisted struct {
 	ReadBlock int64 `json:"read_block,omitempty"`
 	// ReadDepth: reads of one file in flight; 0 = the agent's default.
 	ReadDepth int `json:"read_depth,omitempty"`
+	// SpeedResults: the last finished speed test of each kind.
+	SpeedResults map[string]protocol.SpeedResult `json:"speed_results,omitempty"`
 	// Order: which files the agent sends first (OrderOldest, …).
 	Order    string           `json:"order,omitempty"`
 	Cleanup  CleanupSettings  `json:"cleanup"`
@@ -87,6 +90,8 @@ type State struct {
 
 	session string // agent run and request number of the status kept
 	seq     uint64
+
+	speedTest *protocol.SpeedTest // asked on the page, until the agent reports it
 }
 
 // bump marks a change for the agent. Caller holds s.mu.
@@ -190,12 +195,49 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), ReadBlock: s.p.ReadBlock, ReadDepth: s.p.ReadDepth, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
 		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}, Order: s.p.Order}
 	s.applySchedule(&resp, time.Now())
+	if r := s.p.Status.SpeedTest; r != nil && !r.Running && r.ID != s.p.SpeedResults[r.Kind].ID {
+		if s.p.SpeedResults == nil {
+			s.p.SpeedResults = map[string]protocol.SpeedResult{}
+		}
+		s.p.SpeedResults[r.Kind] = *r
+		s.save()
+	}
+	if t := s.speedTest; t != nil {
+		if r := s.p.Status.SpeedTest; r != nil && r.ID == t.ID && !r.Running {
+			s.speedTest = nil // done
+		} else {
+			resp.SpeedTest = t
+		}
+	}
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
 			resp.Commands = append(resp.Commands, c.Command)
 		}
 	}
 	return resp
+}
+
+// StartSpeedTest asks the agent for a speed test (protocol.SpeedTest*).
+func (s *State) StartSpeedTest(kind string) (*protocol.SpeedTest, error) {
+	if kind != protocol.SpeedTestNetwork && kind != protocol.SpeedTestASIAIR {
+		return nil, fmt.Errorf("неизвестная проверка %q", kind)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.speedTest != nil || (s.p.Status.SpeedTest != nil && s.p.Status.SpeedTest.Running) {
+		return nil, errors.New("проверка уже идёт — дождитесь результата")
+	}
+	s.speedTest = &protocol.SpeedTest{ID: time.Now().UnixNano(), Kind: kind}
+	s.bump()
+	return s.speedTest, nil
+}
+
+// SpeedTestPending is the test asked on the page that the agent has not
+// finished yet.
+func (s *State) SpeedTestPending() *protocol.SpeedTest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.speedTest
 }
 
 // Result applies a command result and returns the command (nil if unknown).

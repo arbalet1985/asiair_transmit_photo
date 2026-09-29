@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,14 +23,37 @@ import (
 type diag struct {
 	bytes, readNs, limitNs, netNs atomic.Int64
 
-	mu    sync.Mutex
-	start time.Time     // of the current window
-	last  protocol.Diag // result of the last full window
-	when  time.Time     // when last was measured
-	path  string        // Tailscale path to the receiver
+	mu     sync.Mutex
+	shares map[string]*shareTime // reading per ASIAIR storage in the window
+	start  time.Time             // of the current window
+	last   protocol.Diag         // result of the last full window
+	when   time.Time             // when last was measured
+	path   string                // Tailscale path to the receiver
 }
 
 const diagWindow = 3 * time.Second
+
+// shareTime is the reading of one storage: bytes and time spent waiting.
+type shareTime struct{ bytes, ns int64 }
+
+func (d *diag) addShare(share string, n int, ns int64) {
+	d.mu.Lock()
+	if d.shares == nil {
+		d.shares = map[string]*shareTime{}
+	}
+	st := d.shares[share]
+	if st == nil {
+		st = &shareTime{}
+		d.shares[share] = st
+	}
+	st.bytes += int64(n)
+	st.ns += ns
+	d.mu.Unlock()
+}
+
+// shareMinWait: less waiting than this in a window means the storage did
+// not hold the sending back, and its speed cannot be told.
+const shareMinWait = 150 * time.Millisecond
 
 // result returns the measurement of the last window (or none when nothing
 // was sent for a while). streams is the number of files sent at once.
@@ -44,6 +68,7 @@ func (d *diag) result(streams int) *protocol.Diag {
 		read, limit, net := d.readNs.Swap(0), d.limitNs.Swap(0), d.netNs.Swap(0)
 		n := d.bytes.Swap(0)
 		d.start = now
+		defer func() { d.shares = nil }() // a new window
 		if total := read + limit + net; total > int64(100*time.Millisecond) && n > 0 {
 			d.last = protocol.Diag{
 				Read: float64(read) / float64(total), Limit: float64(limit) / float64(total),
@@ -51,6 +76,20 @@ func (d *diag) result(streams int) *protocol.Diag {
 			}
 			if read > total/5 { // too little reading to tell its speed otherwise
 				d.last.ReadSpeed = float64(n) / (float64(read) / 1e9)
+			}
+			names := make([]string, 0, len(d.shares))
+			for name, st := range d.shares {
+				if st.bytes > 0 {
+					names = append(names, name)
+				}
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				st, sr := d.shares[name], protocol.ShareRead{Share: name}
+				if st.ns >= int64(shareMinWait) {
+					sr.Speed = float64(st.bytes) / (float64(st.ns) / 1e9)
+				}
+				d.last.Shares = append(d.last.Shares, sr)
 			}
 			d.when = now
 		}
@@ -131,8 +170,9 @@ func (b *timedBody) Read(p []byte) (int, error) {
 }
 
 type timedSource struct {
-	r io.Reader
-	d *diag
+	r     io.Reader
+	d     *diag
+	share string // ASIAIR storage of the file
 }
 
 func (s *timedSource) Read(p []byte) (int, error) {
@@ -141,6 +181,7 @@ func (s *timedSource) Read(p []byte) (int, error) {
 	ns := int64(time.Since(start))
 	s.d.readNs.Add(ns)
 	s.d.limitNs.Add(-ns) // it is inside the timedBody read
+	s.d.addShare(s.share, n, ns)
 	return n, err
 }
 
