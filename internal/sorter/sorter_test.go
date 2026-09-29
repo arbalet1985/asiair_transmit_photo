@@ -236,3 +236,28 @@ func TestInPlace(t *testing.T) {
 		t.Fatalf("%d %+v", l.Frames(), l.Items[1])
 	}
 }
+
+func TestNights(t *testing.T) {
+	nan := math.NaN()
+	frames := []Frame{
+		frame(Light, "M 31", "Ha", "2026-09-26", 300, 100, -10),
+		frame(Light, "M 31", "Ha", "2026-09-26", 120, 100, -10),
+		frame(Light, "M 31", "Ha", "2026-09-27", 300, 100, -10),
+		frame(Flat, "", "Ha", "2026-09-26", 1.5, 100, nan),
+		frame(Light, "NGC 7000", "", "2026-09-27", 60, 100, -10),
+	}
+	frames[1].Rel = "other.fit"
+	rows := Plan(frames).Nights("")
+	if len(rows) != 4 || rows[0].Night != "2026-09-27" || rows[2].Kind != Light || rows[2].Frames != 2 || rows[2].ExposureText() != "120s, 300s" || rows[3].Kind != Flat {
+		for _, r := range rows {
+			t.Logf("%+v", *r)
+		}
+		t.Fatal("rows")
+	}
+	if got := ObjectTotals(rows); got != "M 31: 3 Light, 12 мин за 2 ночи · NGC 7000: 1 Light, 1 мин за 1 ночь" {
+		t.Fatal(got)
+	}
+	if NightLabel("2026-09-30") != "30.09 – 01.10" {
+		t.Fatal(NightLabel("2026-09-30"))
+	}
+}
