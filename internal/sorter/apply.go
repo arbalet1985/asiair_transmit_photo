@@ -34,6 +34,7 @@ type Options struct {
 // Result counts what Apply did.
 type Result struct {
 	Placed, Skipped, Calibration int
+	CalibrationThere             int   // calibration already in the session folders
 	Sessions                     int   // session folders renamed to a new layout
 	Moved                        int   // library frames moved to a new layout
 	Downloaded                   int64 // bytes fetched from a receiver
@@ -211,6 +212,8 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 					fail(fmt.Errorf("%s: %w", it.Frame.Rel, err))
 				} else if placed {
 					r.Calibration++
+				} else {
+					r.CalibrationThere++
 				}
 				step(it.Frame.Rel)
 			}
