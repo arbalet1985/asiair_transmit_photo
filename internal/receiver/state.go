@@ -91,7 +91,8 @@ type State struct {
 	session string // agent run and request number of the status kept
 	seq     uint64
 
-	speedTest *protocol.SpeedTest // asked on the page, until the agent reports it
+	speedTest *protocol.SpeedTest   // asked on the page, until the agent reports it
+	logsReq   *protocol.LogsRequest // likewise
 }
 
 // bump marks a change for the agent. Caller holds s.mu.
@@ -209,6 +210,7 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 			resp.SpeedTest = t
 		}
 	}
+	s.logsForSync(&resp)
 	for _, c := range s.p.Commands {
 		if c.Status == StatusPending {
 			resp.Commands = append(resp.Commands, c.Command)

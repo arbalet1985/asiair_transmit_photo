@@ -54,6 +54,11 @@ func Backup(exe string) string {
 }
 
 func pendingFile(exe string) string  { return exe + ".update.json" }
+
+// WatchLog is the log of the watchdog of the updates of exe.
+func WatchLog(exe string) string {
+	return filepath.Join(filepath.Dir(exe), strings.TrimSuffix(filepath.Base(exe), filepath.Ext(exe))+"-update.log")
+}
 func rollbackFile(exe string) string { return exe + ".rollback.json" }
 
 func writeJSON(name string, v any) error {
@@ -146,7 +151,7 @@ func Healthy(exe, version string) {
 // Watch is the watchdog: it waits for the new version to report that it
 // works and otherwise puts the old program back and starts it.
 func Watch(exe string) error {
-	lf, err := os.OpenFile(filepath.Join(filepath.Dir(exe), strings.TrimSuffix(filepath.Base(exe), filepath.Ext(exe))+"-update.log"),
+	lf, err := os.OpenFile(WatchLog(exe),
 		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err == nil {
 		defer lf.Close()

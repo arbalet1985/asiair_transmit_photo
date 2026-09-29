@@ -292,6 +292,7 @@
         <dt>Место на ASIAIR</dt><dd id="aSpace">—</dd>
         <dt>Отправлено</dt><dd id="aSent">—</dd>
         <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
+        <dt>Журналы</dt><dd id="aLogs"><button id="logsBtn" title="Агент пришлёт свои журналы за последние 3 дня (и журнал обновлений); скачаются вместе с журналами приёмника">Получить с агента</button> <span id="logsNow" class="muted"></span><div id="logsList"></div></dd>
       </dl>
     </section>
     <section class="panel" id="speedPanel">
@@ -1276,6 +1277,7 @@ function renderStatus() {
   renderRate();
   renderBlock();
   renderSpeedTest();
+  renderLogs();
   renderStreams();
   renderOrder();
   renderSchedule();
@@ -1648,6 +1650,27 @@ function renderStreams() {
   $("streamsNow").textContent = !a.version ? "" :
     a.streams ? (a.streams === state.streams ? "" : `у агента сейчас: ${a.streams}`) : "агент старой версии передаёт по одному файлу";
 }
+
+// ---------- logs of the agent ----------
+function renderLogs() {
+  const a = state.agent || {}, r = a.logs, pending = state.logs_pending;
+  const busy = !!pending || !!(r && r.running);
+  $("logsBtn").disabled = busy || !state.agent_online || (a.version && !a.can_logs);
+  let now = "";
+  if (a.version && !a.can_logs) now = "агент этой версии не умеет присылать журналы — нужна новая версия";
+  else if (busy) now = state.agent_online ? "агент собирает и отправляет журналы…" : "журналы придут, когда агент выйдет на связь";
+  else if (r && r.error) now = "не удалось: " + r.error;
+  $("logsNow").textContent = now;
+  $("logsNow").className = r && r.error && !busy ? "err" : "muted";
+  const list = state.agent_logs || [];
+  $("logsList").replaceChildren(...list.slice(0, 3).map((f, i) => el("div", {},
+    el("a", { href: "/ui/logs.zip?name=" + encodeURIComponent(f.name), textContent: (i ? "" : "⤓ ") + "журналы от " + fmtTime(f.time), title: "Журналы агента и приёмника одним архивом" }),
+    el("span", { className: "muted", textContent: " · " + fmtBytes(f.size) }))));
+}
+$("logsBtn").onclick = async () => {
+  try { await post("/ui/api/agentlogs", { days: 3 }); refresh(); }
+  catch (e) { alert("Ошибка: " + e.message); }
+};
 
 // ---------- speed tests ----------
 function renderSpeedTest() {

@@ -227,6 +227,7 @@ func (s *Server) apiHandler() http.Handler {
 	mux.HandleFunc("/api/result", s.handleResult)
 	mux.HandleFunc("/api/update/agent", s.handleUpdateAgent)
 	mux.HandleFunc("/api/speedtest", s.handleSpeedTest)
+	mux.HandleFunc("/api/logs", s.handleAgentLogs)
 	return s.auth(mux)
 }
 
@@ -456,6 +457,8 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
 	mux.HandleFunc("/ui/api/readblock", s.handleUIReadBlock)
 	mux.HandleFunc("/ui/api/speedtest", s.handleUISpeedTest)
+	mux.HandleFunc("/ui/api/agentlogs", s.handleUIAgentLogs)
+	mux.HandleFunc("/ui/logs.zip", s.handleUILogsZip)
 	mux.HandleFunc("/ui/api/speed", s.handleUISpeed)
 	mux.HandleFunc("/ui/api/cleanup", s.handleUICleanup)
 	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)
@@ -519,6 +522,8 @@ type uiState struct {
 	Streams       int                             `json:"streams"`
 	ReadBlock     readBlockInfo                   `json:"read_block"`
 	SpeedPending  *protocol.SpeedTest             `json:"speed_pending,omitempty"`
+	LogsPending   *protocol.LogsRequest           `json:"logs_pending,omitempty"`
+	AgentLogs     []agentLogsFile                 `json:"agent_logs,omitempty"`
 	SpeedResults  map[string]protocol.SpeedResult `json:"speed_results,omitempty"`
 	Order         string                          `json:"order"`
 	Cleanup       CleanupSettings                 `json:"cleanup"`
@@ -571,6 +576,8 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		MaxRate:      snap.MaxRate,
 		Streams:      s.state.Streams(),
 		SpeedPending: s.state.SpeedTestPending(),
+		LogsPending:  s.state.LogsPending(),
+		AgentLogs:    s.agentLogs(),
 		SpeedResults: snap.SpeedResults,
 		ReadBlock: readBlockInfo{Set: snap.ReadBlock, Default: source.DefaultReadBlock, Min: source.MinReadBlock, Max: source.MaxReadBlock,
 			DepthSet: snap.ReadDepth, DepthDefault: source.DefaultReadDepth, DepthMax: source.MaxReadDepth},
