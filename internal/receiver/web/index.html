@@ -29,7 +29,7 @@
   main { padding: 16px 20px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
   .panel h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px; }
   #setupGrid { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
   .kv.stale dd { color: var(--muted); }
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
@@ -47,6 +47,7 @@
   button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   button:disabled { opacity: .5; cursor: default; }
   input[type=text], input[type=search], select { border: 1px solid var(--border); background: var(--bg); padding: 5px 8px; border-radius: 6px; }
+  select { max-width: 100%; text-overflow: ellipsis; }
   .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
   .toolbar .spacer { flex: 1; }
   .progress { height: 6px; background: var(--row); border-radius: 3px; overflow: hidden; margin-top: 4px; }
@@ -57,6 +58,9 @@
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
   td.name { white-space: normal; overflow-wrap: anywhere; }
+  th.sort { cursor: pointer; user-select: none; }
+  th.sort:hover, th.sort.on { color: var(--text); }
+  th.sort::after { content: attr(data-arrow); }
   tr.folder td { background: var(--row); font-weight: 600; cursor: pointer; }
   tr.file:hover td { background: var(--row); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -108,7 +112,11 @@
   .setupbar { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
   .setupbar button { border: 0; background: none; padding: 0; font-weight: 600; font-size: 14px; color: var(--text); }
   .setupbar button:hover { color: var(--accent); }
-  #setupWrap.folded #setupGrid { display: none; }
+  #setupWrap.folded #setupGrid, #infoWrap.folded #infoGrid { display: none; }
+  /* a grid or flex item is never wider than its column: a long file name or
+     a wide table scrolls inside its panel instead of widening the page */
+  main > *, .grid > *, .col > * { min-width: 0; }
+  .col { display: grid; gap: 16px; align-content: start; }
   .panel > h2.fold:first-child { cursor: pointer; user-select: none; }
   .panel > h2.fold:first-child::before { content: "▾ "; color: var(--muted); }
   .panel.folded > h2.fold:first-child::before { content: "▸ "; }
@@ -134,6 +142,11 @@
 
   /* rate slider: the part above the agent's own limit is grey and locked */
   .rate output { display: block; font-weight: 600; margin-bottom: 2px; }
+  .rhead { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+  .unlock { color: var(--muted); font-size: 13px; white-space: nowrap; cursor: pointer; }
+  /* a locked slider: changed only after "изменить" is ticked */
+  #rateRange:disabled, #blockRange:disabled { cursor: default; opacity: .55; }
+  #blockRange { display: block; width: 100%; margin: 0; accent-color: var(--accent); }
   #rateRange { --thumb: 18px; --fill: 0; --lim: 1; display: block; width: 100%; height: 22px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
   #rateRange::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: var(--track); }
   #rateRange::-moz-range-track { height: 8px; border-radius: 4px; background: var(--track); }
@@ -214,6 +227,7 @@
     header h1 { font-size: 15px; flex-basis: 100%; }
     #destDir, #hdrVersion { display: none; }
     main { padding: 10px 8px 24px; gap: 10px; }
+    .col { gap: 10px; }
     .panel { padding: 12px; border-radius: 10px; }
     .grid { grid-template-columns: 1fr; gap: 10px; }
     button { min-height: 40px; padding: 6px 14px; }
@@ -227,25 +241,12 @@
     .toolbar .spacer { display: none; }
     .kv { gap: 4px 10px; }
     .fbar { width: 80px; }
-    /* the file list: every file is a small card */
-    .tablewrap { overflow: visible; }
-    #filesTable thead { display: none; }
-    #filesTable, #filesTable tbody { display: block; }
-    #filesTable tr.folder { display: flex; align-items: center; gap: 8px; padding: 8px 6px; background: var(--row); border-radius: 8px; margin-top: 10px; }
-    #filesTable tr.folder td { display: block; padding: 0; border: 0; background: none; }
-    #filesTable tr.folder td.name { flex: 1; min-width: 0; font-size: 14px; }
-    #filesTable tr.folder td.name .fbar { display: block; width: auto; margin: 6px 0 2px; }
+    /* the file list stays a table: it scrolls sideways inside its panel */
+    #filesTable td.name { min-width: 190px; font-size: 13px; }
+    #filesTable tr.file td { vertical-align: top; }
+    #filesTable tr.folder td.name { font-size: 14px; }
     #filesTable tr.folder td.name button { margin: 6px 6px 0 0; }
-    #filesTable tr.file { display: grid; grid-template-columns: 32px 1fr auto; grid-template-areas: "cb name name" "cb date size" "cb status remote";
-      gap: 2px 8px; padding: 8px 6px; border-bottom: 1px solid var(--border); align-items: center; }
-    #filesTable tr.file td { display: block; padding: 0; border: 0; white-space: normal; }
-    #filesTable tr.file td:nth-child(1) { grid-area: cb; align-self: start; padding-top: 2px; }
-    #filesTable tr.file td:nth-child(2) { grid-area: name; font-weight: 500; }
-    #filesTable tr.file td:nth-child(3) { grid-area: size; font-size: 13px; color: var(--muted); }
-    #filesTable tr.file td:nth-child(4) { grid-area: date; font-size: 13px; color: var(--muted); }
-    #filesTable tr.file td:nth-child(5) { grid-area: status; }
-    #filesTable tr.file td:nth-child(6) { grid-area: remote; text-align: right; }
-    #filesTable tr.file:hover td { background: none; }
+    #filesTable th { font-size: 13px; padding: 8px; }
     #cmds td { white-space: normal; }
     dialog { width: calc(100vw - 16px); max-height: calc(100vh - 32px); overflow: auto; padding: 14px; }
     #viewer { width: 100vw; height: 100vh; height: 100dvh; max-height: none; border-radius: 0; border: 0; overflow: hidden; }
@@ -270,7 +271,13 @@
   <button id="logoutBtn" hidden title="Выйти на этом телефоне">Выйти</button>
 </header>
 <main>
-  <div class="grid">
+  <div id="infoWrap">
+  <div class="setupbar">
+    <button id="infoToggle" title="Свернуть или развернуть общую информацию">▾ Общая информация</button>
+    <span class="muted" id="infoSummary"></span>
+  </div>
+  <div class="grid" id="infoGrid">
+    <div class="col">
     <section class="panel">
       <h2>Агент в обсерватории</h2>
       <div class="line err" id="aStale" hidden style="margin-bottom:8px"></div>
@@ -285,6 +292,24 @@
         <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
       </dl>
     </section>
+    <section class="panel" id="speedPanel">
+      <h2 class="fold" id="speedHead">Скорость передачи</h2>
+      <div class="fbody">
+        <div class="toolbar">
+          <select id="speedHours" aria-label="За сколько часов">
+            <option value="1">за 1 час</option>
+            <option value="6" selected>за 6 часов</option>
+            <option value="24">за 24 часа</option>
+            <option value="72">за 3 дня</option>
+            <option value="168">за 7 дней</option>
+          </select>
+          <span class="muted" id="speedSummary"></span>
+        </div>
+        <div class="chart" id="speedChart"></div>
+        <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Разрывы — минуты, когда файлы не передавались. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История за 7 дней сохраняется в папке данных приёмника (<b>speed-log.json</b>) и остаётся после перезапуска.</div>
+      </div>
+    </section>
+    </div>
     <section class="panel">
       <h2>Передача</h2>
       <div class="toolbar">
@@ -304,11 +329,21 @@
       </div>
       <h2 style="margin-top:14px">Ограничение скорости</h2>
       <div class="rate">
-        <output id="rateVal" for="rateRange">—</output>
+        <div class="rhead"><output id="rateVal" for="rateRange">—</output>
+          <label class="unlock"><input type="checkbox" id="rateUnlock"> изменить</label></div>
         <input type="range" id="rateRange" min="1" max="101" step="1" value="40" aria-label="Ограничение скорости, MB/s">
       </div>
       <div class="rate-scale"><span>1 MB/s</span><span>без ограничения</span></div>
       <div class="hint" id="rateNow"></div>
+      <h2 style="margin-top:14px">Блок чтения с ASIAIR</h2>
+      <div class="rate">
+        <div class="rhead"><output id="blockVal" for="blockRange">—</output>
+          <label class="unlock"><input type="checkbox" id="blockUnlock"> изменить</label></div>
+        <input type="range" id="blockRange" class="steps" min="0" max="7" step="1" value="5" aria-label="Размер блока чтения с ASIAIR">
+      </div>
+      <div class="rate-scale" id="blockScale"></div>
+      <div class="hint err" id="blockAgent" hidden></div>
+      <div class="hint" id="blockNow">Сколько агент читает с ASIAIR одним запросом (до 6 запросов на файл одновременно). Меняйте по шагу и смотрите на скорость и диагностику: при чтении с ASIAIR через Wi-Fi быстрее может оказаться и меньший, и больший блок. Применяется к файлам, начатым после изменения.</div>
       <h2 style="margin-top:14px">Одновременно файлов</h2>
       <div class="toolbar">
         <select id="streams" aria-label="Сколько файлов агент передаёт одновременно"></select>
@@ -336,24 +371,7 @@
       <div class="hint" id="schedNow">Например, ночью, пока идёт съёмка, не нагружать ASIAIR и его Wi-Fi, а днём передавать на полной скорости. Время — этого компьютера.</div>
     </section>
   </div>
-
-  <section class="panel" id="speedPanel">
-    <h2 class="fold" id="speedHead">Скорость передачи</h2>
-    <div class="fbody">
-      <div class="toolbar">
-        <select id="speedHours" aria-label="За сколько часов">
-          <option value="1">за 1 час</option>
-          <option value="6" selected>за 6 часов</option>
-          <option value="24">за 24 часа</option>
-          <option value="72">за 3 дня</option>
-          <option value="168">за 7 дней</option>
-        </select>
-        <span class="muted" id="speedSummary"></span>
-      </div>
-      <div class="chart" id="speedChart"></div>
-      <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Разрывы — минуты, когда файлы не передавались. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История за 7 дней сохраняется в папке данных приёмника (<b>speed-log.json</b>) и остаётся после перезапуска.</div>
-    </div>
-  </section>
+  </div>
 
   <section class="panel" id="summaryPanel">
     <h2 class="fold" id="summaryHead">Сводка по ночам</h2>
@@ -620,11 +638,11 @@
     </div>
     </div>
     <div class="toolbar" id="syncBar" hidden></div>
-    <div class="tablewrap">
+    <div class="tablewrap" id="filesWrap">
       <table id="filesTable">
         <thead><tr>
           <th><input type="checkbox" id="selAll" title="Выбрать все видимые"></th>
-          <th>Имя</th><th class="num">Размер</th><th>Дата</th><th>Статус</th><th>ASIAIR</th>
+          <th class="sort" data-key="name">Имя</th><th class="num sort" data-key="size">Размер</th><th class="sort" data-key="mtime">Дата</th><th class="sort" data-key="status">Статус</th><th class="sort" data-key="remote">ASIAIR</th>
         </tr></thead>
         <tbody id="files"></tbody>
       </table>
@@ -651,12 +669,12 @@
 </main>
 <dialog id="viewer">
   <div class="vbar">
-    <button id="vPrev" title="Предыдущий (←)">←</button>
-    <button id="vNext" title="Следующий (→)">→</button>
     <span class="title" id="vTitle"></span>
     <span class="muted" id="vPos"></span>
     <button id="vOpen" title="Открыть папку с этим файлом на этом компьютере">📂 В папке</button>
     <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
+    <button id="vPrev" title="Предыдущий (←)">←</button>
+    <button id="vNext" title="Следующий (→)">→</button>
     <button id="vClose" title="Закрыть (Esc)">✕</button>
   </div>
   <div class="vbody">
@@ -984,8 +1002,41 @@ function fmtDur(sec) {
   return `~${h} ч ${m % 60} мин`;
 }
 
+// Sorting of the file list: by a column within every folder; the folders
+// keep their order. By date by default, as the frames were taken.
+let fileSort = store.get("fileSort", { key: "mtime", dir: 1 });
+const statusRank = { uploading: 0, partial: 1, retry: 2, changed: 3, writing: 4, queued: 5, deleting: 6, received: 7, "local-only": 8, filtered: 9 };
+const sortValue = {
+  name: f => f.name.toLowerCase(),
+  size: f => f.size || f.remote_size || 0,
+  mtime: f => f.mtime || "",
+  status: f => statusRank[f.status] ?? 5,
+  remote: f => f.pending ? 1 : f.remote ? 0 : 2,
+};
+function sortFiles(files) {
+  const order = new Map(), val = sortValue[fileSort.key] || sortValue.mtime, d = fileSort.dir;
+  for (const f of files) if (!order.has(f.folder)) order.set(f.folder, order.size);
+  return files.map((f, i) => ({ f, i, v: val(f) })).sort((a, b) =>
+    order.get(a.f.folder) - order.get(b.f.folder) || (a.v < b.v ? -d : a.v > b.v ? d : 0) || a.i - b.i).map(x => x.f);
+}
+function renderSortHeads() {
+  for (const th of document.querySelectorAll("#filesTable th.sort")) {
+    const on = th.dataset.key === fileSort.key;
+    th.classList.toggle("on", on);
+    th.dataset.arrow = on ? (fileSort.dir > 0 ? " ▲" : " ▼") : "";
+  }
+}
+for (const th of document.querySelectorAll("#filesTable th.sort")) {
+  th.title = "Сортировать по этому столбцу (в каждой папке)";
+  th.onclick = () => {
+    fileSort = th.dataset.key === fileSort.key ? { key: fileSort.key, dir: -fileSort.dir } : { key: th.dataset.key, dir: 1 };
+    store.set("fileSort", fileSort);
+    renderFiles();
+  };
+}
 function renderFiles() {
-  const files = visibleFiles();
+  const files = sortFiles(visibleFiles());
+  renderSortHeads();
   const tb = $("files");
   tb.replaceChildren();
   const grid = view === "grid";
@@ -1204,6 +1255,7 @@ function renderStatus() {
   $("hdrProgress").hidden = !t.files || t.remaining_bytes <= 0;
   $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
   renderRate();
+  renderBlock();
   renderStreams();
   renderOrder();
   renderSchedule();
@@ -1222,6 +1274,7 @@ function renderStatus() {
   const firstRun = !state.last_seen || state.last_seen.startsWith("0001");
   $("setupWrap").style.order = firstRun ? -1 : 0;
   renderSetupSummary(firstRun);
+  renderInfoSummary();
 }
 
 let minFreeEdited = false;
@@ -1983,7 +2036,7 @@ $("summaryHead").addEventListener("click", () => { summaryKey = ""; setTimeout(r
 // ---------- speed chart ----------
 let speedData = [], speedTimer = null;
 async function loadSpeed() {
-  if ($("speedPanel").classList.contains("folded")) return;
+  if ($("speedPanel").classList.contains("folded") || $("infoWrap").classList.contains("folded")) return;
   try {
     const r = await fetch("/ui/api/speed?hours=" + $("speedHours").value);
     if (r.ok) speedData = await r.json() || [];
@@ -2134,6 +2187,7 @@ $("rateRange").addEventListener("input", () => {
   paintRate(+r.value);
 });
 $("rateRange").addEventListener("change", async () => {
+  lockSlider("rate");
   const pos = +$("rateRange").value, own = state.agent.own_rate;
   const asAgent = own !== undefined && own !== null && pos >= rateLimitPos();
   try {
@@ -2143,6 +2197,62 @@ $("rateRange").addEventListener("change", async () => {
   rateBusy = false;
   refresh();
 });
+// A slider is locked until "изменить" is ticked, so a touch while scrolling
+// on a phone does not change it; it locks again after a change or a minute.
+const unlockTimers = {};
+function lockSlider(name) {
+  clearTimeout(unlockTimers[name]);
+  $(name + "Unlock").checked = false;
+  $(name + "Range").disabled = true;
+}
+for (const name of ["rate", "block"]) {
+  $(name + "Range").disabled = true;
+  $(name + "Unlock").onchange = () => {
+    clearTimeout(unlockTimers[name]);
+    $(name + "Range").disabled = !$(name + "Unlock").checked;
+    if ($(name + "Unlock").checked) unlockTimers[name] = setTimeout(() => lockSlider(name), 60e3);
+  };
+}
+
+// ---------- read block slider ----------
+// Positions 0..7 are 32 KB … 4 MB, doubling; the agent reads a file in
+// blocks of this size, up to six at once.
+const BLOCKS = [32, 64, 128, 256, 512, 1024, 2048, 4096].map(k => k * 1024);
+let blockBusy = false;
+const blockPos = n => { const i = BLOCKS.indexOf(n); return i >= 0 ? i : BLOCKS.findIndex(b => b >= n); };
+const fmtBlock = n => n >= MB ? n / MB + " MB" : n / 1024 + " KB";
+{
+  $("blockScale").append(el("span", { textContent: fmtBlock(BLOCKS[0]) }), el("span", { textContent: fmtBlock(BLOCKS[BLOCKS.length - 1]) }));
+}
+function paintBlock(pos) {
+  const rb = state.read_block || {}, n = BLOCKS[pos];
+  $("blockVal").textContent = fmtBlock(n) + (n === rb.default ? " · по умолчанию" : "");
+}
+function renderBlock() {
+  const rb = state.read_block || {}, a = state.agent || {};
+  if (!blockBusy) {
+    $("blockRange").value = Math.max(0, blockPos(rb.set || rb.default || MB));
+    paintBlock(+$("blockRange").value);
+  }
+  const want = rb.set || rb.default;
+  let now = "";
+  if (a.version && !a.read_block) now = "Агент этой версии не умеет менять блок чтения (читает по 1 MB) — нужна новая версия агента.";
+  else if (a.read_block && a.read_block !== want) now = `У агента сейчас: ${fmtBlock(a.read_block)} — новый применится при следующей связи.`;
+  $("blockAgent").textContent = now;
+  $("blockAgent").hidden = !now;
+}
+$("blockRange").addEventListener("input", () => { blockBusy = true; paintBlock(+$("blockRange").value); });
+$("blockRange").addEventListener("change", async () => {
+  lockSlider("block");
+  const n = BLOCKS[+$("blockRange").value], rb = state.read_block || {};
+  try {
+    await post("/ui/api/readblock", { bytes: n === rb.default ? 0 : n });
+    toast("Блок чтения применится при следующей связи с агентом");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  blockBusy = false;
+  refresh();
+});
+
 $("pauseBtn").onclick = async () => {
   try { await post("/ui/api/pause", { paused: !(state.paused || state.wait_start) }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
@@ -2175,10 +2285,33 @@ $("setupToggle").onclick = () => {
   store.set("setupFolded", f);
   if (state) renderSetupSummary(false);
 };
+// ---------- folding the general information ----------
+function setInfoFolded(f) {
+  $("infoWrap").classList.toggle("folded", f);
+  $("infoToggle").textContent = (f ? "▸" : "▾") + " Общая информация";
+  if (!f) setTimeout(loadSpeed); // the chart is not loaded while folded
+}
+function renderInfoSummary() {
+  if (!$("infoWrap").classList.contains("folded")) { $("infoSummary").textContent = ""; return; }
+  const a = state.agent || {}, t = state.totals || {};
+  const parts = [state.agent_online ? "агент на связи" : "агент не на связи"];
+  if (state.wait_start) parts.push("передача не запущена");
+  else if (state.paused) parts.push("пауза");
+  if (t.files) parts.push(`получено ${Math.floor(t.bytes ? 100 * t.done_bytes / t.bytes : 0)}%` + (t.remaining_bytes > 0 ? `, осталось ${fmtBytes(t.remaining_bytes)}` : ""));
+  if (state.agent_online && a.speed > 0) parts.push(`${fmtBytes(a.speed)}/s`);
+  $("infoSummary").textContent = parts.join(" · ");
+}
+setInfoFolded(store.get("infoFolded", false));
+$("infoToggle").onclick = () => {
+  const f = !$("infoWrap").classList.contains("folded");
+  setInfoFolded(f);
+  store.set("infoFolded", f);
+  if (state) renderInfoSummary();
+};
 // every settings and status panel folds by its title
 {
   const folded = new Set(store.get("foldedPanels", []));
-  document.querySelectorAll("main > .grid > .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2").forEach(h => {
+  document.querySelectorAll("#infoGrid .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2").forEach(h => {
     const key = h.textContent.trim();
     h.classList.add("fold");
     h.title = "Свернуть или развернуть";

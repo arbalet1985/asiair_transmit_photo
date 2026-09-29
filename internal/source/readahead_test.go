@@ -73,3 +73,31 @@ func TestReadAhead(t *testing.T) {
 		t.Fatalf("failing read: err %v, got %d bytes", err, len(got))
 	}
 }
+
+func TestReadBlock(t *testing.T) {
+	defer SetReadBlock(0)
+	for _, c := range []struct{ set, want int64 }{
+		{0, DefaultReadBlock},
+		{256 << 10, 256 << 10},
+		{1, MinReadBlock},
+		{1 << 30, MaxReadBlock},
+	} {
+		SetReadBlock(c.set)
+		if got := ReadBlock(); got != c.want {
+			t.Errorf("SetReadBlock(%d): %d, want %d", c.set, got, c.want)
+		}
+	}
+
+	// a small block reads the file the same
+	SetReadBlock(MinReadBlock)
+	data := make([]byte, 7*MinReadBlock+99)
+	rand.Read(data)
+	r := newReadAhead(bytes.NewReader(data), nopCloser{}, int64(len(data)))
+	if r.chunk != MinReadBlock {
+		t.Fatalf("chunk %d", r.chunk)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("small block: err %v, equal %v", err, bytes.Equal(got, data))
+	}
+}

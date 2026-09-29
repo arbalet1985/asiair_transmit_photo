@@ -79,6 +79,9 @@ type AgentStatus struct {
 	Next []Upload `json:"next,omitempty"`
 	// Streams: how many files the agent sends at once (set on the receiver).
 	Streams int `json:"streams,omitempty"`
+	// ReadBlock: the size of one read from the ASIAIR in effect, bytes
+	// (0 in old agents, which cannot change it).
+	ReadBlock int64 `json:"read_block,omitempty"`
 	// Diag: where the transfer spends its time, to find the bottleneck.
 	Diag *Diag `json:"diag,omitempty"`
 	// OwnRate is the agent's own limit (max_rate in agent.yaml), bytes/s,
@@ -149,6 +152,9 @@ type SyncResponse struct {
 	// Streams: how many files to send at once, 1..MaxStreams (0 from old
 	// receivers: one).
 	Streams int `json:"streams,omitempty"`
+	// ReadBlock: the size of one read from the ASIAIR, bytes; 0 = the
+	// agent's default (1 MB).
+	ReadBlock int64 `json:"read_block,omitempty"`
 	// Order: which files to send first: "" oldest (default), "newest",
 	// "lights" (Light frames before calibration frames).
 	Order string `json:"order,omitempty"`
