@@ -1,9 +1,13 @@
 package receiver
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 )
 
 // Startup lets the web page manage how the receiver starts with Windows.
@@ -93,4 +97,58 @@ func (s *Server) AgentSummary() string {
 		return "идёт приём снимков"
 	}
 	return "агент на связи"
+}
+
+// TrayInfo is the status shown when the pointer is over the tray icon: a
+// few short lines (Windows shows at most 127 characters).
+func (s *Server) TrayInfo() string {
+	snap := s.state.Snapshot()
+	st := snap.Status
+	online := time.Since(snap.LastSeen) < 2*time.Minute
+	line := s.AgentSummary()
+	if online && len(st.Uploads) > 0 && st.Speed > 0 {
+		line += " · " + config.FormatBytes(int64(st.Speed)) + "/s"
+	}
+	lines := []string{line}
+	if online && st.QueueFiles > 0 {
+		lines = append(lines, fmt.Sprintf("в очереди: %d файл(ов), %s", st.QueueFiles, config.FormatBytes(st.QueueBytes)))
+	}
+	if d := s.disk(); d.Error == "" && d.Total > 0 {
+		t := "свободно на диске: " + config.FormatBytes(int64(d.Free))
+		if d.Full != "" {
+			t += " — мало!"
+		}
+		lines = append(lines, t)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TransferPaused reports whether the transfer is paused (or not started)
+// from the receiver.
+func (s *Server) TransferPaused() bool {
+	snap := s.state.Snapshot()
+	return snap.Paused || snap.WaitStart
+}
+
+// SetTransferPaused pauses or resumes (starts) the transfer, as the button
+// on the page does.
+func (s *Server) SetTransferPaused(p bool) error {
+	waiting := s.state.Snapshot().WaitStart
+	if err := s.state.SetPaused(p); err != nil {
+		return err
+	}
+	switch {
+	case p:
+		log.Printf("Приёмник: передача поставлена на паузу (значок в трее)")
+	case waiting:
+		log.Printf("Приёмник: передача запущена (значок в трее)")
+	default:
+		log.Printf("Приёмник: пауза снята (значок в трее)")
+	}
+	return nil
+}
+
+// OpenDestDir shows the folder with the received photos in Explorer.
+func (s *Server) OpenDestDir() error {
+	return openInFolder(s.getStore().root, true)
 }

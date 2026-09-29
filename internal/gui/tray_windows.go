@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/lxn/walk"
@@ -21,7 +22,24 @@ type TrayOptions struct {
 	State   func() string
 	// OnReady receives a function that exits the program.
 	OnReady func(quit func())
+	// Items are the commands of the menu between "Открыть страницу" and
+	// "Выход".
+	Items []TrayItem
 }
+
+// TrayItem is a command of the tray menu; one with no text and no Label is
+// a separator.
+type TrayItem struct {
+	Text string
+	// Label, if set, gives the current text; it is polled with the tooltip
+	// and after every command.
+	Label func() string
+	// Do runs on the window thread, so it may show message boxes.
+	Do func()
+}
+
+// Open opens a file, folder or address with its default program.
+func Open(target string) { openURL(target) }
 
 // RunTray shows the tray icon and runs opt.Run until "Выход" is chosen or
 // Run returns.
@@ -48,6 +66,10 @@ func RunTray(opt TrayOptions) error {
 		if st != current && icons[st] != nil {
 			ni.SetIcon(icons[st])
 			current = st
+		}
+		// Windows keeps 127 characters: drop whole last lines first
+		for len([]rune(tip)) > 120 && strings.Contains(tip, "\n") {
+			tip = tip[:strings.LastIndex(tip, "\n")]
 		}
 		if r := []rune(tip); len(r) > 120 {
 			tip = string(r[:120]) + "…"
@@ -86,6 +108,36 @@ func RunTray(opt TrayOptions) error {
 		ni.ContextMenu().Actions().Add(a)
 	}
 	add("Открыть страницу", openPage)
+	type labelled struct {
+		a     *walk.Action
+		label func() string
+	}
+	var labels []labelled
+	relabel := func() {
+		for _, l := range labels {
+			l.a.SetText(l.label())
+		}
+	}
+	for _, it := range opt.Items {
+		if it.Text == "" && it.Label == nil {
+			ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
+			continue
+		}
+		a := walk.NewAction()
+		a.SetText(it.Text)
+		do := it.Do
+		a.Triggered().Attach(func() {
+			if do != nil {
+				do()
+			}
+			relabel()
+		})
+		if it.Label != nil {
+			a.SetText(it.Label())
+			labels = append(labels, labelled{a, it.Label})
+		}
+		ni.ContextMenu().Actions().Add(a)
+	}
 	ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	add("Выход", func() {
 		if walk.MsgBox(nil, opt.Title, "Остановить приём снимков и закрыть программу?",
@@ -122,7 +174,7 @@ func RunTray(opt TrayOptions) error {
 				if opt.State != nil {
 					st = opt.State()
 				}
-				mw.Synchronize(func() { setState(st, tip) })
+				mw.Synchronize(func() { setState(st, tip); relabel() })
 			}
 		}
 	}()

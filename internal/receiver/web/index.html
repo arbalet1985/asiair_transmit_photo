@@ -46,7 +46,9 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   button:disabled { opacity: .5; cursor: default; }
-  input[type=text], input[type=search], select { border: 1px solid var(--border); background: var(--bg); padding: 5px 8px; border-radius: 6px; }
+  input[type=text], input[type=search], input[type=password], select { border: 1px solid var(--border); background: var(--bg); padding: 5px 8px; border-radius: 6px; }
+  /* a saved secret is never sent to the page: its field shows dots instead */
+  input.isset::placeholder { color: var(--text); opacity: .8; letter-spacing: .12em; }
   select { max-width: 100%; text-overflow: ellipsis; }
   .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
   .toolbar .spacer { flex: 1; }
@@ -1334,6 +1336,7 @@ function renderUpdate(u, a) {
   $("upCheck").disabled = u.checking;
   $("upInstall").disabled = u.checking;
   if (document.activeElement !== $("upAuto")) $("upAuto").checked = u.auto;
+  markSecret("upToken", u.token_set, "github_pat_…");
   $("upTokenHint").innerHTML = (u.token_set ? "Токен задан. Чтобы заменить — введите новый; чтобы удалить — сохраните пустое поле. " : "Токен не задан. ") +
     'Создайте на GitHub: <b>Settings → Developer settings → Fine-grained tokens → Generate new token</b>, доступ только к этому репозиторию, право <b>Contents: Read-only</b>. Токен хранится в receiver.yaml. Если репозиторий станет публичным, токен не нужен.';
   const upd = u.latest && (newer(u.latest, u.version) || (av && newer(u.latest, av)));
@@ -1352,9 +1355,19 @@ $("upInstall").onclick = () => {
 };
 $("upAuto").onchange = () => updateAction({ action: "settings", auto: $("upAuto").checked }, "Сохранено");
 $("upTokenSave").onclick = async () => {
+  if (!$("upToken").value && state.update && state.update.token_set && !confirm("Поле пустое: сохранённый токен будет удалён. Удалить токен?")) return;
   await updateAction({ action: "settings", token: $("upToken").value }, "Токен сохранён");
   $("upToken").value = "";
 };
+
+// A secret saved earlier is not sent back to the page; its empty field shows
+// dots so it is plain that a value is there. Typing replaces it.
+function markSecret(id, isSet, empty) {
+  const i = $(id);
+  i.classList.toggle("isset", !!isSet);
+  i.placeholder = isSet ? "●●●●●●●●" : empty;
+  i.title = isSet ? "Сохранено. Введите новое значение, чтобы заменить" : "";
+}
 
 async function refresh() {
   try {
@@ -2408,7 +2421,7 @@ function renderTailscale(t) {
   $("tsLogin").disabled = !t.auth_url;
   $("tsAddrBlock").hidden = t.state !== "running";
   $("tsAddr").textContent = t.name ? `${t.name}, порт ${t.port}` + (t.ip ? ` (или ${t.ip})` : "") : "—";
-  $("tsKey").placeholder = t.authkey ? "ключ задан; введите новый, чтобы заменить" : "tskey-auth-…";
+  markSecret("tsKey", t.authkey, "tskey-auth-…");
 }
 async function tsAction(body, okText) {
   try { const r = await post("/ui/api/tailscale", body); renderTailscale(r); if (okText) toast(okText); }
@@ -2436,6 +2449,7 @@ function renderRemote(r) {
   if (!r || r.remote) return;
   rm = r;
   $("rmPort").textContent = r.port;
+  markSecret("rmPass", r.password_set, "не меньше 8 символов");
   $("rmPassHint").textContent = r.password_set ? "Пароль задан. Новый пароль заменит его, и все телефоны войдут заново."
     : "Пароль не задан: с телефона пока войти нельзя.";
   $("rmPassHint").className = "hint" + (r.password_set ? "" : " err");
