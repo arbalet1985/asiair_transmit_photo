@@ -63,6 +63,8 @@ jobs:
             GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/windows/$cmd.exe" "./cmd/$cmd"
             GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/linux/$cmd"     "./cmd/$cmd"
           done
+          # раскладка кадров для Siril: только окно Windows
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags -H windowsgui" -o dist/windows/asiair-sorter.exe ./cmd/asiair-sorter
           cp configs/*.example.yaml LICENSE dist/windows/
           cp configs/*.example.yaml LICENSE dist/linux/
           mkdir -p upload

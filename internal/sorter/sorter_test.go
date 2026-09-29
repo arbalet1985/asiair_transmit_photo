@@ -1,0 +1,227 @@
+package sorter
+
+import (
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// writeFITS writes a tiny 16-bit FITS file with the given keywords.
+func writeFITS(t *testing.T, p string, keys map[string]string) {
+	t.Helper()
+	var h strings.Builder
+	card := func(k, v string) { h.WriteString(fmt.Sprintf("%-8s= %-70s", k, v)) }
+	card("SIMPLE", "T")
+	card("BITPIX", "16")
+	card("NAXIS", "2")
+	card("NAXIS1", "4")
+	card("NAXIS2", "4")
+	for k, v := range keys {
+		card(k, v)
+	}
+	h.WriteString(fmt.Sprintf("%-80s", "END"))
+	for h.Len()%2880 != 0 {
+		h.WriteByte(' ')
+	}
+	data := make([]byte, 2880)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, append([]byte(h.String()), data...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDescribeHeader(t *testing.T) {
+	keys := map[string]string{"IMAGETYP": "Light Frame", "EXPTIME": "300.", "GAIN": "100", "CCD-TEMP": "-9.8",
+		"FILTER": "Ha", "INSTRUME": "ZWO ASI2600MM Pro", "XBINNING": "1", "OBJECT": "NGC 7000"}
+	f := describe(func(k string) string { return keys[k] },
+		"Plan/Light/M 31/Light_M 31_300.0s_Bin1_Ha_gain100_20260926-231000_-10.0C_0001.fit", time.Now())
+	if f.Kind != Light || f.Object != "M 31" || f.Filter != "Ha" || f.Exposure != 300 || f.Gain != 100 || f.Temp != -10 || f.Camera != "ZWO ASI2600MM Pro" {
+		t.Fatalf("%+v", f)
+	}
+	if f.Night != "2026-09-26" {
+		t.Fatalf("night %s", f.Night)
+	}
+}
+
+func TestDescribeFromName(t *testing.T) {
+	none := func(string) string { return "" }
+	// morning flats of the same night, taken with Autorun
+	f := describe(none, "Autorun/Flat/Flat_1.5s_Bin1_gain100_20260927-061500_-10.0C_0001.fit", time.Now())
+	if f.Kind != Flat || f.Exposure != 1.5 || f.Gain != 100 || f.Night != "2026-09-26" {
+		t.Fatalf("%+v", f)
+	}
+	f = describe(none, "Autorun/Light/M 31/Light_M 31_120.0s_Bin2_gain0_20260926-221000_0001.fit", time.Now())
+	if f.Kind != Light || f.Object != "M 31" || f.Bin != 2 || f.Gain != 0 || !math.IsNaN(f.Temp) {
+		t.Fatalf("%+v", f)
+	}
+	f = describe(none, "x/Bias_20.0ms_Bin1_gain100_20260926-221000_-10.0C_0001.fit", time.Now())
+	if f.Kind != Bias || f.Exposure != 0.02 {
+		t.Fatalf("%+v", f)
+	}
+	f = describe(func(k string) string {
+		if k == "IMAGETYP" {
+			return "Dark"
+		}
+		return ""
+	}, "DarkFlat_1.5s_gain100_0001.fit", time.Now())
+	if f.Kind != DarkFlat {
+		t.Fatalf("%+v", f)
+	}
+}
+
+func TestFormat(t *testing.T) {
+	for in, want := range map[float64]string{300: "300s", 1.5: "1.5s", 0.02: "20ms", 0.001: "1ms", 0: "?s"} {
+		if got := FormatExposure(in); got != want {
+			t.Errorf("%v: %s, want %s", in, got, want)
+		}
+	}
+	if SafeName(`a:b?`) != "a_b_" || SafeName("CON") != "_CON" || SafeName(" M31. ") != "M31" {
+		t.Error(SafeName(`a:b?`), SafeName("CON"), SafeName(" M31. "))
+	}
+}
+
+func frame(kind, object, filter, night string, exp float64, gain int, temp float64) Frame {
+	return Frame{Kind: kind, Object: object, Filter: filter, Night: night, Exposure: exp, Gain: gain, Temp: temp,
+		Bin: 1, Camera: "ASI2600MM", Size: 10, Rel: fmt.Sprintf("%s_%s_%v_%s.fit", kind, filter, exp, night)}
+}
+
+func TestPlanAndMatch(t *testing.T) {
+	nan := math.NaN()
+	frames := []Frame{
+		frame(Light, "M 31", "Ha", "2026-09-26", 300, 100, -10),
+		frame(Dark, "", "", "2026-01-01", 300, 100, -10),
+		frame(Dark, "", "", "2026-01-01", 300, 100, 0),
+		frame(Dark, "", "", "2026-01-01", 120, 100, -10),
+		frame(Flat, "", "Ha", "2026-09-20", 1.5, 100, nan),
+		frame(Flat, "", "Ha", "2026-09-27", 2, 100, nan), // the next day: as near as the 25th, but after
+		frame(Flat, "", "Ha", "2026-09-25", 2, 100, nan),
+		frame(Flat, "", "OIII", "2026-09-26", 2, 100, nan),
+		frame(Bias, "", "", "2026-01-01", 0.001, 100, -10),
+		frame(DarkFlat, "", "", "2026-01-01", 2, 100, nan),
+		{Rel: "unknown.fit"},
+	}
+	l := Plan(frames)
+	if len(l.Sessions) != 1 || len(l.Unknown) != 1 {
+		t.Fatalf("sessions %d unknown %d", len(l.Sessions), len(l.Unknown))
+	}
+	s := l.Sessions[0]
+	if s.Dir != "Objects/M 31/2026-09-26_Ha_300s_gain100" {
+		t.Fatal(s.Dir)
+	}
+	if s.Items[0].Dest != s.Dir+"/lights/"+frames[0].Rel {
+		t.Fatal(s.Items[0].Dest)
+	}
+	if s.Darks == nil || s.Darks.Dir != "Library/Darks/ASI2600MM/gain100_300s_-10C" {
+		t.Fatalf("darks %+v", s.Darks)
+	}
+	if s.Flats == nil || s.Flats.Dir != "Library/Flats/2026-09-27_Ha_gain100_2s" {
+		t.Fatalf("flats %+v", s.Flats)
+	}
+	if s.Biases == nil || s.Biases.Kind != DarkFlat {
+		t.Fatalf("biases %+v", s.Biases)
+	}
+	if len(s.Notes) != 1 || !strings.Contains(s.Notes[0], "другой ночи") {
+		t.Fatalf("notes %v", s.Notes)
+	}
+	if !strings.Contains(l.Summary(), "M 31") || !strings.Contains(s.CalibrationText(), `Library\Darks`) {
+		t.Fatal(l.Summary())
+	}
+}
+
+func TestDuplicates(t *testing.T) {
+	a := frame(Light, "M 31", "", "2026-09-26", 60, 100, -10)
+	b := a
+	c := a
+	c.Size = 20
+	l := Plan([]Frame{a, b, c})
+	if !l.Items[1].Dup || l.Items[2].Dup || !strings.HasSuffix(l.Items[2].Dest, "_2.fit") {
+		t.Fatalf("%+v %+v", l.Items[1], l.Items[2])
+	}
+}
+
+func TestScanAndApply(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	light := map[string]string{"IMAGETYP": "'Light'", "EXPTIME": "300", "GAIN": "100", "SET-TEMP": "-10", "FILTER": "'L'"}
+	for i := 1; i <= 2; i++ {
+		writeFITS(t, filepath.Join(in, "Plan", "Light", "M 31", fmt.Sprintf("Light_M 31_300.0s_Bin1_L_gain100_20260926-2210%02d_-10.0C_%04d.fit", i, i)), light)
+	}
+	writeFITS(t, filepath.Join(in, "Autorun", "Dark", "Dark_300.0s_Bin1_gain100_20260801-120000_-10.0C_0001.fit"),
+		map[string]string{"IMAGETYP": "'Dark'", "EXPTIME": "300", "GAIN": "100", "SET-TEMP": "-10"})
+	writeFITS(t, filepath.Join(in, "Autorun", "Flat", "Flat_2.0s_Bin1_L_gain100_20260927-063000_-10.0C_0001.fit"),
+		map[string]string{"IMAGETYP": "'Flat'", "EXPTIME": "2", "GAIN": "100", "FILTER": "'L'"})
+	writeFITS(t, filepath.Join(in, "Autorun", "Bias", "Bias_1.0ms_Bin1_gain100_20260801-120000_-10.0C_0001.fit"),
+		map[string]string{"IMAGETYP": "'Bias'", "EXPTIME": "0.001", "GAIN": "100"})
+	os.WriteFile(filepath.Join(in, "Light_M 31_0001_thn.jpg"), []byte("x"), 0o644)
+
+	frames, errs := Scan(in, nil, nil)
+	if len(errs) > 0 || len(frames) != 5 {
+		t.Fatalf("%d frames, %v", len(frames), errs)
+	}
+	l := Plan(frames)
+	r := l.Apply(out, Options{Mode: Copy, FillCalibration: true}, nil, nil)
+	if len(r.Errors) > 0 || r.Placed != 5 || r.Calibration != 3 {
+		t.Fatalf("%+v", r)
+	}
+	sess := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100")
+	for _, p := range []string{
+		filepath.Join(sess, "lights", "Light_M 31_300.0s_Bin1_L_gain100_20260926-221001_-10.0C_0001.fit"),
+		filepath.Join(sess, "darks", "Dark_300.0s_Bin1_gain100_20260801-120000_-10.0C_0001.fit"),
+		filepath.Join(sess, "flats", "Flat_2.0s_Bin1_L_gain100_20260927-063000_-10.0C_0001.fit"),
+		filepath.Join(sess, "biases", "Bias_1.0ms_Bin1_gain100_20260801-120000_-10.0C_0001.fit"),
+		filepath.Join(sess, CalibrationFile),
+		filepath.Join(sess, "process"),
+		filepath.Join(out, "Library", "Flats", "2026-09-26_L_gain100_2s"),
+		filepath.Join(out, "Library", "Darks", "gain100_300s_-10C"),
+		filepath.Join(out, "Library", "Biases", "gain100"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Error(err)
+		}
+	}
+
+	// again, with the library of the output scanned too: nothing new
+	lib, _ := Scan(filepath.Join(out, LibraryDir), nil, nil)
+	for i := range lib {
+		lib[i].Rel = LibraryDir + "/" + lib[i].Rel
+	}
+	frames, _ = Scan(in, nil, nil)
+	r = Plan(append(frames, lib...)).Apply(out, Options{Mode: Move}, nil, nil)
+	if len(r.Errors) > 0 || r.Placed != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(in, "Autorun", "Dark", "Dark_300.0s_Bin1_gain100_20260801-120000_-10.0C_0001.fit")); err != nil {
+		t.Fatal("the original was removed although it was not moved")
+	}
+}
+
+func TestInside(t *testing.T) {
+	if !Inside(filepath.FromSlash("/a/b/c"), filepath.FromSlash("/a/b")) || Inside(filepath.FromSlash("/a/bc"), filepath.FromSlash("/a/b")) {
+		t.Fatal()
+	}
+}
+
+func TestScanForOutputInside(t *testing.T) {
+	in := t.TempDir()
+	out := filepath.Join(in, "sorted")
+	writeFITS(t, filepath.Join(out, "Library", "Darks", "gain100_300s", "Dark_300.0s_gain100_0001.fit"),
+		map[string]string{"IMAGETYP": "'Dark'", "EXPTIME": "300", "GAIN": "100"})
+	writeFITS(t, filepath.Join(in, "Light", "M 31", "Light_M 31_300.0s_gain100_0001.fit"),
+		map[string]string{"IMAGETYP": "'Light'", "EXPTIME": "300", "GAIN": "100"})
+	frames, errs := ScanFor(in, out, nil)
+	if len(errs) > 0 || len(frames) != 2 {
+		t.Fatalf("%d %v", len(frames), errs)
+	}
+	l := Plan(frames)
+	if l.Sessions[0].Darks == nil {
+		t.Fatal("the library in the output is not used")
+	}
+	if r := l.Apply(out, Options{}, nil, nil); r.Placed != 1 || len(r.Errors) > 0 {
+		t.Fatalf("%+v", r)
+	}
+}
