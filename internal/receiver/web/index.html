@@ -61,7 +61,7 @@
   th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
   td.name { white-space: normal; overflow-wrap: anywhere; }
   th.sort { cursor: pointer; user-select: none; }
-  th.sort:hover, th.sort.on { color: var(--text); }
+  th.sort:hover, th.sort.sorted { color: var(--text); }
   th.sort::after { content: attr(data-arrow); }
   tr.folder td { background: var(--row); font-weight: 600; cursor: pointer; }
   tr.file:hover td { background: var(--row); }
@@ -472,12 +472,14 @@
       </div>
       <label style="display:block;margin-top:8px"><input type="checkbox" id="upAuto"> Устанавливать обновления автоматически</label>
       <div class="hint">Приёмник раз в 6 часов проверяет релизы на GitHub. Новую версию он ставит себе сам и перезапускается (служба — через 30 секунд), а агенту передаёт её при следующей связи: агент обновляется и перезапускается тоже сам. Передача снимков после перезапуска продолжается с того же места.</div>
-      <div class="label" style="margin-top:10px">Токен GitHub (нужен, пока репозиторий приватный)</div>
-      <div class="field">
-        <input type="password" id="upToken" placeholder="github_pat_…" style="flex:1 1 200px;min-width:0" autocomplete="off">
-        <button id="upTokenSave">Сохранить</button>
-      </div>
-      <div class="hint" id="upTokenHint"></div>
+      <details id="upTokenBox" style="margin-top:8px">
+        <summary class="muted">Токен GitHub — только для обновлений из приватной копии репозитория</summary>
+        <div class="field" style="margin-top:6px">
+          <input type="password" id="upToken" placeholder="github_pat_…" style="flex:1 1 200px;min-width:0" autocomplete="off">
+          <button id="upTokenSave">Сохранить</button>
+        </div>
+        <div class="hint" id="upTokenHint"></div>
+      </details>
     </section>
     <section class="panel">
       <h2>Подключение агента</h2>
@@ -1025,7 +1027,7 @@ function sortFiles(files) {
 function renderSortHeads() {
   for (const th of document.querySelectorAll("#filesTable th.sort")) {
     const on = th.dataset.key === fileSort.key;
-    th.classList.toggle("on", on);
+    th.classList.toggle("sorted", on);
     th.dataset.arrow = on ? (fileSort.dir > 0 ? " ▲" : " ▼") : "";
   }
 }
@@ -1338,7 +1340,8 @@ function renderUpdate(u, a) {
   if (document.activeElement !== $("upAuto")) $("upAuto").checked = u.auto;
   markSecret("upToken", u.token_set, "github_pat_…");
   $("upTokenHint").innerHTML = (u.token_set ? "Токен задан. Чтобы заменить — введите новый; чтобы удалить — сохраните пустое поле. " : "Токен не задан. ") +
-    'Создайте на GitHub: <b>Settings → Developer settings → Fine-grained tokens → Generate new token</b>, доступ только к этому репозиторию, право <b>Contents: Read-only</b>. Токен хранится в receiver.yaml. Если репозиторий станет публичным, токен не нужен.';
+    'Нужен, только если релизы берутся из приватного репозитория (параметр update_repo). Создайте на GitHub: <b>Settings → Developer settings → Fine-grained tokens → Generate new token</b>, доступ только к этому репозиторию, право <b>Contents: Read-only</b>. Токен хранится в receiver.yaml. Для публичного репозитория (как основной) токен не нужен.';
+  if (u.token_set) $("upTokenBox").open = true;
   const upd = u.latest && (newer(u.latest, u.version) || (av && newer(u.latest, av)));
   $("hdrUpdate").hidden = !upd;
   $("hdrUpdate").textContent = upd ? "доступна версия v" + u.latest : "";
@@ -1779,7 +1782,7 @@ $("viewGrid").classList.toggle("on", view === "grid");
 $("galleryMoreBtn").onclick = () => { galleryLimit += 120; renderFiles(); };
 function renderGallery(files) {
   const g = $("gallery");
-  const list = files.filter(f => f.local && viewable(f.name));
+  const list = files.filter(f => f.local && viewable(f.name) && !isThumb(f.name));
   const keep = new Map([...g.children].filter(t => t.dataset.key).map(t => [t.dataset.key, t]));
   const tiles = [];
   for (const f of list.slice(0, galleryLimit)) {
@@ -1968,8 +1971,11 @@ const nightFmt = d => { // night of d: from noon to noon, named by its evening
 };
 // the observatory's offset from UTC in ms: reported by the agent, else this browser's
 const obsOffset = t => state && state.obs_tz && state.obs_tz.known ? state.obs_tz.offset * 1000 : -new Date(t).getTimezoneOffset() * 60e3;
+// ASIAIR saves a small JPG next to every frame (Light_…_0001_thn.jpg): it is
+// the same frame, not another one
+const isThumb = name => /_thn\.(jpe?g|png)$/i.test(name);
 function frameInfo(f) {
-  const kind = frameKind(f.name);
+  const kind = isThumb(f.name) ? "other" : frameKind(f.name);
   // ASIAIR names hold the local time of the observatory; the file time is absolute
   let when = null;
   const m = f.name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
@@ -2796,7 +2802,7 @@ $("vCross").onchange = () => {
   if (f) { setViewList(f.path); showFile(); }
 };
 function openViewer(path, files) {
-  V.all = files.filter(f => f.local && viewable(f.name));
+  V.all = files.filter(f => f.local && viewable(f.name) && (!isThumb(f.name) || f.path === path));
   setViewList(path);
   V.zoom = false; $("vImgBox").classList.remove("zoom");
   $("vOpen").hidden = isRemote();

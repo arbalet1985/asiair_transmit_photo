@@ -100,7 +100,7 @@ func Newer(a, b string) bool {
 // Client talks to the GitHub API.
 type Client struct {
 	Repo  string // "owner/name"; DefaultRepo when empty
-	Token string // GitHub token: needed while the repository is private
+	Token string // GitHub token: needed only for a private repository
 	HTTP  *http.Client
 	// API is the API root, for tests. Default https://api.github.com.
 	API string
