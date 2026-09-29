@@ -56,6 +56,9 @@ type Frame struct {
 	Src   *Receiver
 	MTime time.Time
 	Cards []Card
+	// InLibrary: the frame is in the library of the output (ScanLibrary);
+	// when the layout changed it is moved to its new place
+	InLibrary bool
 }
 
 // IsFITS tells FITS files by their extension.
@@ -358,6 +361,7 @@ func ScanLibrary(out string, progress func(n int)) ([]Frame, []error) {
 	frames, errs := Scan(lib, nil, progress)
 	for i := range frames {
 		frames[i].Rel = LibraryDir + "/" + frames[i].Rel
+		frames[i].InLibrary = true
 	}
 	return frames, errs
 }

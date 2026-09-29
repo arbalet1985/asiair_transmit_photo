@@ -42,6 +42,10 @@ type Item struct {
 	// Dup: the same file (name and size) is already placed by another item,
 	// e.g. a frame found both on the ASIAIR's memory and its USB drive
 	Dup bool
+	// Existing: the same frame is already in the output's library, in a
+	// folder of an earlier layout; it is moved to Dest instead of being
+	// copied or downloaded again
+	Existing string
 }
 
 // Layout is the planned output.
@@ -67,7 +71,7 @@ func (g *Group) Seconds() float64 {
 // InPlace tells a duplicate that is the copy already in the output's
 // library: nothing to show or do for it.
 func (it *Item) InPlace() bool {
-	return it.Dup && it.Frame.Src == nil && strings.HasPrefix(it.Frame.Rel, LibraryDir+"/")
+	return it.Dup && it.Frame.InLibrary
 }
 
 // Frames counts the frames found, the copies already in the library of
@@ -120,7 +124,7 @@ func join(parts ...string) string {
 // GroupDir is the folder a frame belongs to, relative to the output:
 //
 //	Objects/M 31/2026-09-26_Ha_300s_gain100      (lights, object/night/filter/exposure/gain)
-//	Library/Flats/2026-09-26_Ha_gain100_1.5s      (night/filter/gain/exposure)
+//	Library/Flats/ZWO ASI2600MM Pro/2026-09-26_Ha_gain100_1.5s  (night/filter/gain/exposure)
 //	Library/Darks/ZWO ASI2600MM Pro/gain100_300s_-10C
 //	Library/DarkFlats/ZWO ASI2600MM Pro/gain100_1.5s
 //	Library/Biases/ZWO ASI2600MM Pro/gain100
@@ -140,7 +144,7 @@ func GroupDir(f *Frame) string {
 		}
 		return ObjectsDir + "/" + SafeName(obj) + "/" + join(f.Night, f.Filter, exp, gainPart(f.Gain), binPart(f.Bin))
 	case Flat:
-		return LibraryDir + "/Flats/" + join(f.Night, f.Filter, gainPart(f.Gain), exp, binPart(f.Bin))
+		return LibraryDir + "/Flats/" + cam + join(f.Night, f.Filter, gainPart(f.Gain), exp, binPart(f.Bin))
 	case Dark:
 		return LibraryDir + "/Darks/" + cam + join(gainPart(f.Gain), exp, FormatTemp(f.Temp), binPart(f.Bin))
 	case DarkFlat:
@@ -181,6 +185,9 @@ func Plan(frames []Frame) *Layout {
 		if first := placed[strings.ToLower(it.Dest)]; first != nil {
 			if first.Frame.Size == f.Size {
 				it.Dup = true
+				if f.InLibrary && !first.Frame.InLibrary && first.Existing == "" {
+					first.Existing = f.Path
+				}
 			} else {
 				it.Dest = uniqueName(sub, name, placed)
 			}

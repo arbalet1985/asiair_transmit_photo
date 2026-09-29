@@ -121,7 +121,7 @@ func TestPlanAndMatch(t *testing.T) {
 	if s.Darks == nil || s.Darks.Dir != "Library/Darks/ASI2600MM/gain100_300s_-10C" {
 		t.Fatalf("darks %+v", s.Darks)
 	}
-	if s.Flats == nil || s.Flats.Dir != "Library/Flats/2026-09-27_Ha_gain100_2s" {
+	if s.Flats == nil || s.Flats.Dir != "Library/Flats/ASI2600MM/2026-09-27_Ha_gain100_2s" {
 		t.Fatalf("flats %+v", s.Flats)
 	}
 	if s.Biases == nil || s.Biases.Kind != DarkFlat {
@@ -231,6 +231,7 @@ func TestInPlace(t *testing.T) {
 	d := frame(Dark, "", "", "2026-01-01", 300, 100, -10)
 	lib := d
 	lib.Rel = GroupDir(&d) + "/" + d.Rel
+	lib.InLibrary = true
 	l := Plan([]Frame{d, lib})
 	if l.Frames() != 1 || !l.Items[1].InPlace() || l.Items[0].InPlace() {
 		t.Fatalf("%d %+v", l.Frames(), l.Items[1])
@@ -259,5 +260,46 @@ func TestNights(t *testing.T) {
 	}
 	if NightLabel("2026-09-30") != "30.09 – 01.10" {
 		t.Fatal(NightLabel("2026-09-30"))
+	}
+}
+
+// Flats laid out before the camera was part of their folder move to the
+// new folder: the ones also in the input are not copied again, the ones
+// only in the library are moved too, and the old folders go away.
+func TestLibraryMovesToNewLayout(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	flat := map[string]string{"IMAGETYP": "'Flat'", "EXPTIME": "2", "GAIN": "100", "FILTER": "'L'", "INSTRUME": "'ASI2600MM'"}
+	name1 := "Flat_2.0s_Bin1_L_gain100_20260927-063000_-10.0C_0001.fit"
+	name2 := "Flat_2.0s_Bin1_L_gain100_20260927-063001_-10.0C_0002.fit"
+	old := filepath.Join(out, "Library", "Flats", "2026-09-26_L_gain100_2s")
+	writeFITS(t, filepath.Join(old, name1), flat)
+	writeFITS(t, filepath.Join(old, name2), flat)
+	writeFITS(t, filepath.Join(in, "Autorun", "Flat", name1), flat) // still in the input
+
+	frames, errs := ScanFor(in, out, nil)
+	if len(errs) > 0 || len(frames) != 3 {
+		t.Fatalf("%d %v", len(frames), errs)
+	}
+	l := Plan(frames)
+	r := l.Apply(context.Background(), out, Options{Mode: Copy}, nil)
+	if len(r.Errors) > 0 || r.Moved != 2 || r.Placed != 2 {
+		t.Fatalf("%+v", r)
+	}
+	nu := filepath.Join(out, "Library", "Flats", "ASI2600MM", "2026-09-26_L_gain100_2s")
+	for _, n := range []string{name1, name2} {
+		if _, err := os.Stat(filepath.Join(nu, n)); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("the old folder is left: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(in, "Autorun", "Flat", name1)); err != nil {
+		t.Fatal("the input frame was touched")
+	}
+	// again: nothing to do
+	frames, _ = ScanFor(in, out, nil)
+	if r := Plan(frames).Apply(context.Background(), out, Options{Mode: Copy}, nil); len(r.Errors) > 0 || r.Moved != 0 || r.Placed != 0 {
+		t.Fatalf("again: %+v", r)
 	}
 }

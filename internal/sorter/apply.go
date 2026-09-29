@@ -34,6 +34,7 @@ type Options struct {
 // Result counts what Apply did.
 type Result struct {
 	Placed, Skipped, Calibration int
+	Moved                        int // library frames moved to a new layout
 	Downloaded                   int64 // bytes fetched from a receiver
 	Errors                       []error
 }
@@ -53,7 +54,7 @@ const CalibrationFile = "калибровка.txt"
 // many bytes they take (a download begun before counts as fetched).
 func (l *Layout) Missing(out string) (files int, bytes int64) {
 	for _, it := range l.Items {
-		if it.Dup || it.Frame.Src == nil {
+		if it.Dup || it.Frame.Src == nil || it.Existing != "" {
 			continue
 		}
 		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
@@ -115,6 +116,8 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 
 	// where each placed frame is now, for filling the sessions
 	now := map[*Frame]string{}
+	emptied := map[string]bool{} // library folders frames were moved out of
+	defer removeEmpty(emptied, filepath.Join(out, LibraryDir))
 	for _, it := range l.Items {
 		if ctx.Err() != nil {
 			return r
@@ -126,7 +129,14 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
 		var placed bool
 		var err error
-		if f := it.Frame; f.Src != nil {
+		if moveFrom := libraryMove(it, dst); moveFrom != "" {
+			// the library of an earlier layout: move the frame to its new folder
+			placed, err = place(moveFrom, dst, Move)
+			if placed {
+				r.Moved++
+				emptied[filepath.Dir(moveFrom)] = true
+			}
+		} else if f := it.Frame; f.Src != nil {
 			p.Name = f.Rel
 			base := p.Bytes
 			var got int64
@@ -197,6 +207,34 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 		}
 	}
 	return r
+}
+
+// libraryMove tells the frame in the output's library to move to dst,
+// "" when there is none or it is there already.
+func libraryMove(it *Item, dst string) string {
+	from := it.Existing
+	if it.Frame.InLibrary {
+		from = it.Frame.Path
+	}
+	if from == "" || samePath(from, dst) {
+		return ""
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return "" // placed already; the old copy stays for the user to see
+	}
+	return from
+}
+
+// removeEmpty deletes the folders left empty by moving frames out, and
+// their parents up to (not including) top.
+func removeEmpty(dirs map[string]bool, top string) {
+	for d := range dirs {
+		for ; Inside(d, top) && !samePath(d, top); d = filepath.Dir(d) {
+			if os.Remove(d) != nil {
+				break
+			}
+		}
+	}
 }
 
 // fetch downloads a frame of a receiver to dst unless it is there already.
