@@ -4,16 +4,43 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 )
 
 // Reading a file over SMB one small request at a time is limited by the
 // network round trip: with 32 KB per request and the 30–60 ms of a Wi-Fi
 // link that is well under 1 MB/s. readAhead keeps several large reads in
 // flight and hands their data out in order.
+//
+// The block size of a read can be changed from the receiver page to find
+// the fastest one for the link; it applies to the files opened after that.
 const (
-	readAheadChunk = 1 << 20 // bytes per SMB read
+	readAheadChunk = 1 << 20 // bytes per SMB read by default
 	readAheadDepth = 6       // reads in flight
+
+	MinReadBlock     = 32 << 10
+	MaxReadBlock     = 4 << 20
+	DefaultReadBlock = readAheadChunk
 )
+
+var readBlock atomic.Int64
+
+// SetReadBlock sets the size of one read from the ASIAIR, bytes; 0 = the
+// default. It is kept within MinReadBlock..MaxReadBlock.
+func SetReadBlock(n int64) {
+	if n <= 0 {
+		n = DefaultReadBlock
+	}
+	readBlock.Store(min(max(n, MinReadBlock), MaxReadBlock))
+}
+
+// ReadBlock returns the size of one read from the ASIAIR, bytes.
+func ReadBlock() int64 {
+	if n := readBlock.Load(); n > 0 {
+		return n
+	}
+	return DefaultReadBlock
+}
 
 type chunkResult struct {
 	b   []byte
@@ -23,6 +50,7 @@ type chunkResult struct {
 type readAhead struct {
 	f     io.ReaderAt
 	c     io.Closer
+	chunk int64 // bytes per read
 	size  int64
 	pos   int64              // offset of the next byte handed out
 	next  int64              // offset of the next read to start
@@ -32,12 +60,12 @@ type readAhead struct {
 }
 
 func newReadAhead(f io.ReaderAt, c io.Closer, size int64) *readAhead {
-	return &readAhead{f: f, c: c, size: size}
+	return &readAhead{f: f, c: c, chunk: ReadBlock(), size: size}
 }
 
 func (r *readAhead) fill() {
 	for len(r.queue) < readAheadDepth && r.next < r.size {
-		off, n := r.next, min(int64(readAheadChunk), r.size-r.next)
+		off, n := r.next, min(r.chunk, r.size-r.next)
 		ch := make(chan chunkResult, 1)
 		go func() {
 			b := make([]byte, n)
@@ -66,7 +94,7 @@ func (r *readAhead) Read(p []byte) (int, error) {
 		r.fill()
 		res := <-r.queue[0]
 		r.queue = r.queue[1:]
-		want := min(int64(readAheadChunk), r.size-r.pos)
+		want := min(r.chunk, r.size-r.pos)
 		switch {
 		case res.err != nil:
 			r.err = res.err

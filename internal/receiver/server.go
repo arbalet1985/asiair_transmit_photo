@@ -25,6 +25,7 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 )
 
@@ -452,6 +453,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
+	mux.HandleFunc("/ui/api/readblock", s.handleUIReadBlock)
 	mux.HandleFunc("/ui/api/speed", s.handleUISpeed)
 	mux.HandleFunc("/ui/api/cleanup", s.handleUICleanup)
 	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)
@@ -513,6 +515,7 @@ type uiState struct {
 	Commands      []*Command           `json:"commands"`
 	MaxRate       *int64               `json:"max_rate"`
 	Streams       int                  `json:"streams"`
+	ReadBlock     readBlockInfo        `json:"read_block"`
 	Order         string               `json:"order"`
 	Cleanup       CleanupSettings      `json:"cleanup"`
 	Schedule      ScheduleSettings     `json:"schedule"`
@@ -563,6 +566,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Commands:      snap.Commands,
 		MaxRate:       snap.MaxRate,
 		Streams:       s.state.Streams(),
+		ReadBlock:     readBlockInfo{Set: snap.ReadBlock, Default: source.DefaultReadBlock, Min: source.MinReadBlock, Max: source.MaxReadBlock},
 		Order:         snap.Order,
 		Cleanup:       snap.Cleanup,
 		Schedule:      snap.Schedule,
@@ -681,6 +685,34 @@ func (s *Server) handleUIStreams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("Приёмник: одновременно передаётся файлов: %d", req.Streams)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// readBlockInfo is the read block size set on the page (0 = the agent's
+// default) and its bounds, bytes.
+type readBlockInfo struct {
+	Set     int64 `json:"set"`
+	Default int64 `json:"default"`
+	Min     int64 `json:"min"`
+	Max     int64 `json:"max"`
+}
+
+func (s *Server) handleUIReadBlock(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Bytes int64 `json:"bytes"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if err := s.state.SetReadBlock(req.Bytes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Bytes == 0 {
+		log.Printf("Приёмник: блок чтения с ASIAIR — по умолчанию")
+	} else {
+		log.Printf("Приёмник: блок чтения с ASIAIR: %s", config.FormatBytes(req.Bytes))
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

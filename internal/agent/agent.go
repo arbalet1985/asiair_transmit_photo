@@ -547,6 +547,16 @@ func (a *Agent) setStreams(n int) {
 	}
 }
 
+// setReadBlock applies the size of one read from the ASIAIR set on the
+// receiver page; the files opened from now on read with it.
+func (a *Agent) setReadBlock(n int64) {
+	old := source.ReadBlock()
+	source.SetReadBlock(n)
+	if cur := source.ReadBlock(); cur != old {
+		log.Printf("Агент: блок чтения с ASIAIR: %s", config.FormatBytes(cur))
+	}
+}
+
 func (a *Agent) wanted(p string) bool {
 	ext := strings.ToLower(path.Ext(p))
 	if slices.Contains(a.cfg.ExcludeExtensions, ext) {
@@ -1055,6 +1065,7 @@ func (a *Agent) Status() protocol.AgentStatus {
 		a.status.Uploading, a.status.UploadDone, a.status.UploadSize = first.Path, first.Done, first.Size
 	}
 	a.status.Streams = int(a.streams.Load())
+	a.status.ReadBlock = source.ReadBlock()
 	a.status.Next = a.status.Next[:0:0]
 	for _, f := range a.upcomingLocked(a.paused.Load(), 3) {
 		a.status.Next = append(a.status.Next, protocol.Upload{Path: f.Path, Size: f.Size, Done: min(a.partial[f.Path], f.Size)})
@@ -1136,6 +1147,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.mu.Unlock()
 	a.applyRate()
 	a.setStreams(resp.Streams)
+	a.setReadBlock(resp.ReadBlock)
 	a.setFetch(resp.Fetch)
 	a.setDiskFull(resp.DiskFull)
 	a.maybeUpdate(ctx, resp.Update)

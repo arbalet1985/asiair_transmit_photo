@@ -422,10 +422,22 @@ func (s *SMB) Space(ctx context.Context) []ShareSpace {
 		if err != nil {
 			continue
 		}
-		bs := st.BlockSize()
-		if total := st.TotalBlockCount() * bs; total > 0 {
-			out = append(out, ShareSpace{Share: name, Free: st.AvailableBlockCount() * bs, Total: total})
+		if sp := shareSpace(name, st); sp.Total > 0 {
+			out = append(out, sp)
 		}
 	}
 	return out
+}
+
+// shareSpace converts the FileFsFullSizeInformation of a share to bytes.
+// go-smb2 counts in allocation units but its BlockSize is only the sector
+// size: a unit is SectorsPerAllocationUnit (FragmentSize) sectors, and Samba
+// on the ASIAIR reports two 512-byte sectors per unit — without it every size
+// came out half of the real one.
+func shareSpace(name string, st smb2.FileFsInfo) ShareSpace {
+	unit := st.BlockSize()
+	if n := st.FragmentSize(); n > 0 {
+		unit *= n
+	}
+	return ShareSpace{Share: name, Free: st.AvailableBlockCount() * unit, Total: st.TotalBlockCount() * unit}
 }
