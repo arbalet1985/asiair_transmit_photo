@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -74,14 +73,45 @@ func guiMain(cfgPath string) error {
 			return p.run(ctx)
 		},
 		Tooltip: func() string {
-			st := p.srv.AgentSummary()
-			return fmt.Sprintf("ASIAIR Receiver — %s", st)
+			return "ASIAIR Receiver\n" + p.srv.TrayInfo()
 		},
 		State: func() string {
 			if p.srv.AgentOnline() {
 				return gui.StateIdle
 			}
 			return gui.StateError
+		},
+		Items: []gui.TrayItem{
+			{
+				Label: func() string {
+					if p.srv.TransferPaused() {
+						return "Продолжить передачу"
+					}
+					return "Пауза передачи"
+				},
+				Do: func() {
+					if err := p.srv.SetTransferPaused(!p.srv.TransferPaused()); err != nil {
+						walk.MsgBox(nil, "ASIAIR Receiver", "Ошибка: "+err.Error(), walk.MsgBoxIconError)
+					}
+				},
+			},
+			{Text: "Открыть папку со снимками", Do: func() {
+				if err := p.srv.OpenDestDir(); err != nil {
+					walk.MsgBox(nil, "ASIAIR Receiver", "Не удалось открыть папку: "+err.Error(), walk.MsgBoxIconError)
+				}
+			}},
+			{Text: "Открыть журнал", Do: func() { gui.Open(logFile) }},
+			{},
+			{Text: "Перезапустить приёмник", Do: func() {
+				if walk.MsgBox(nil, "ASIAIR Receiver", "Перезапустить приёмник? Передача прервётся на несколько секунд и продолжится с того же места.",
+					walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+					return
+				}
+				log.Printf("Приёмник: перезапуск из значка в трее")
+				if err := svc.Restart(); err != nil {
+					walk.MsgBox(nil, "ASIAIR Receiver", "Не удалось перезапустить: "+err.Error(), walk.MsgBoxIconError)
+				}
+			}},
 		},
 		OnReady: func(quit func()) {
 			p.control.quit = quit
