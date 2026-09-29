@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -269,4 +270,42 @@ func gzipFile(file string, mtime time.Time) error {
 	}
 	os.Chtimes(file+".gz", mtime, mtime)
 	return os.Remove(file)
+}
+
+// LogFiles lists the log file and its rotated days (also compressed) changed
+// after since, oldest first.
+func LogFiles(file string, since time.Time) []string {
+	dir, ext := filepath.Dir(file), filepath.Ext(file)
+	base := strings.TrimSuffix(filepath.Base(file), ext)
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(base) + `(-\d{4}-\d{2}-\d{2}(-\d+)?)?` + regexp.QuoteMeta(ext) + `(\.gz|\.old)?$`)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	type lf struct {
+		path string
+		t    time.Time
+	}
+	var files []lf
+	for _, e := range entries {
+		if e.IsDir() || !re.MatchString(e.Name()) {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().After(since) {
+			files = append(files, lf{filepath.Join(dir, e.Name()), info.ModTime()})
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].t.Before(files[j].t) })
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = f.path
+	}
+	return out
+}
+
+// LogsSince is the start of the log days to take for the last days days
+// (today counts as one), with a day to spare for the time zones.
+func LogsSince(days int) time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -days)
 }

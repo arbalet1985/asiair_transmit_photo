@@ -162,6 +162,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		syncSession: newSession(),
 	}
 	a.status.Version = protocol.Version
+	a.status.CanLogs = true
 	a.status.OS = runtime.GOOS + "/" + runtime.GOARCH
 	a.status.ASIAIR = cfg.ASIAIR
 	a.status.Connection = cfg.Connection
@@ -1166,6 +1167,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.maybeUpdate(ctx, resp.Update)
 	a.setRemotePaused(resp.Paused, resp.WaitStart)
 	a.startSpeedTest(ctx, resp.SpeedTest)
+	a.startLogs(ctx, resp.Logs)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {
 			return held, nil

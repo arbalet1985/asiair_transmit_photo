@@ -79,6 +79,10 @@ type AgentStatus struct {
 	Next []Upload `json:"next,omitempty"`
 	// SpeedTest: the last speed test asked from the receiver page.
 	SpeedTest *SpeedResult `json:"speed_test,omitempty"`
+	// Logs: the last logs request from the receiver page.
+	Logs *LogsResult `json:"logs,omitempty"`
+	// CanLogs: the agent sends its logs when the receiver asks.
+	CanLogs bool `json:"can_logs,omitempty"`
 	// Streams: how many files the agent sends at once (set on the receiver).
 	Streams int `json:"streams,omitempty"`
 	// ReadBlock: the size of one read from the ASIAIR in effect, bytes
@@ -170,6 +174,8 @@ type SyncResponse struct {
 	Paused bool `json:"paused,omitempty"`
 	// SpeedTest: run this speed test (once per ID).
 	SpeedTest *SpeedTest `json:"speed_test,omitempty"`
+	// Logs: send the logs to the receiver (once per ID).
+	Logs *LogsRequest `json:"logs,omitempty"`
 	// WaitStart: the transfer has not been started on the receiver page yet
 	// (Paused is also set).
 	WaitStart bool `json:"wait_start,omitempty"`
@@ -236,6 +242,24 @@ const (
 	SpeedTestNetwork = "network" // agent → receiver: raw upload speed
 	SpeedTestASIAIR  = "asiair"  // ASIAIR → agent: reading a file of every storage
 )
+
+// LogsRequest asks the agent to send its logs of the last Days days (with
+// today) to the receiver; ID is new for every request.
+type LogsRequest struct {
+	ID   int64 `json:"id"`
+	Days int   `json:"days"`
+}
+
+// LogsResult is how the agent answered the last LogsRequest: Name is the
+// archive the receiver stored.
+type LogsResult struct {
+	ID      int64     `json:"id"`
+	Running bool      `json:"running,omitempty"`
+	Error   string    `json:"error,omitempty"`
+	Done    time.Time `json:"done,omitempty"`
+	Name    string    `json:"name,omitempty"`
+	Files   int       `json:"files,omitempty"`
+}
 
 // SpeedTest asks the agent for a measurement; ID is new for every request.
 type SpeedTest struct {
