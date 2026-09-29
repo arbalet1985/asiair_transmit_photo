@@ -1071,9 +1071,10 @@ function renderFiles() {
       const tb2 = xfer.reduce((a, x) => a + x.remote_size, 0);
       const db = xfer.reduce((a, x) => a + (x.status === "received" ? x.remote_size : (x.progress || 0) * x.remote_size), 0);
       const dn = xfer.filter(x => x.status === "received").length;
-      const info = xfer.length
+      const integ = integration(inFolder);
+      const info = (xfer.length
         ? `получено ${dn} из ${xfer.length} · ${fmtBytes(db)} из ${fmtBytes(tb2)}`
-        : `${inFolder.length} файл(ов), ${fmtBytes(inFolder.reduce((a, x) => a + x.size, 0))}`;
+        : `${inFolder.length} файл(ов), ${fmtBytes(inFolder.reduce((a, x) => a + x.size, 0))}`) + (integ ? " · " + integ : "");
       const head = el("td", { className: "name", colSpan: 5 },
         (collapsed.has(folder) ? "▸ " : "▾ ") + folder + "  ", el("span", { className: "muted" }, info));
       if (xfer.length) head.append(el("span", { className: "fbar" }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
@@ -1137,7 +1138,9 @@ function renderFiles() {
   const folders = new Set(files.map(f => f.folder));
   $("collapseAll").disabled = [...folders].every(x => collapsed.has(x));
   $("expandAll").disabled = ![...folders].some(x => collapsed.has(x));
-  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length} (${fmtBytes(files.reduce((a, f) => a + f.size, 0))}). На ASIAIR: ${nr}, получено: ${nl}` +
+  const integ = integration(files, true);
+  $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length} (${fmtBytes(files.reduce((a, f) => a + f.size, 0))})` +
+    (integ ? `. Накопление показанных кадров: ${integ}` : "") + `. На ASIAIR: ${nr}, получено: ${nl}` +
     (nf ? `, непередаваемых: ${nf}` : "") + `. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
 }
 
@@ -2002,6 +2005,27 @@ function fmtExp(sec) {
   return `${+(sec * 1000).toFixed(1)} мс`;
 }
 const kindLabel = Object.fromEntries(kindGroups);
+// Integration time of the frames among files, by frame type:
+// "16 Light · 1 ч 20 мин, 8 Flat · 12 с"; with received, how much of the
+// Light time is already here. Thumbnails and files not sent do not count.
+function integration(files, received) {
+  const by = new Map();
+  for (const f of files) {
+    if (f.status === "filtered") continue;
+    const fi = frameInfo(f);
+    if (fi.kind === "other" || !fi.exp) continue;
+    const g = by.get(fi.kind) || { n: 0, total: 0, here: 0 };
+    g.n++; g.total += fi.exp;
+    if (f.local) g.here += fi.exp;
+    by.set(fi.kind, g);
+  }
+  return kindGroups.filter(([k]) => by.has(k)).map(([k, label]) => {
+    const g = by.get(k);
+    let t = `${g.n} ${label} · ${fmtExp(g.total)}`;
+    if (received && k === "light" && g.here < g.total) t += g.here ? ` (получено ${fmtExp(g.here)})` : " (ещё не получены)";
+    return t;
+  }).join(", ");
+}
 let summaryKey = "";
 function renderSummary() {
   if ($("summaryPanel").classList.contains("folded")) return;
