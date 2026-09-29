@@ -63,8 +63,8 @@ jobs:
             GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/windows/$cmd.exe" "./cmd/$cmd"
             GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/linux/$cmd"     "./cmd/$cmd"
           done
-          cp configs/*.example.yaml dist/windows/
-          cp configs/*.example.yaml dist/linux/
+          cp configs/*.example.yaml LICENSE dist/windows/
+          cp configs/*.example.yaml LICENSE dist/linux/
           mkdir -p upload
           (cd dist/windows && zip -9 "../../upload/asiair-transmit-photo-$name-windows.zip" *)
           tar -czf "upload/asiair-transmit-photo-$name-linux-amd64.tar.gz" -C dist/linux .
