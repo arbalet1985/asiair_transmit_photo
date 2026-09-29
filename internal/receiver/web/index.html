@@ -633,7 +633,7 @@
       <span class="muted" id="selInfo"></span>
       <button class="primary" id="fetchBtn" hidden>Скачать выбранные</button>
       <button class="danger" id="delReceived" title="Удалить на ASIAIR все показанные файлы, которые уже получены и сверены (с учётом фильтров). Копии на этом компьютере остаются.">Удалить полученные на ASIAIR</button>
-      <label><input type="checkbox" id="alsoLocal"> удалить и у себя</label>
+      <label><input type="checkbox" id="alsoLocal" autocomplete="off" title="Действует на одно нажатие «Удалить»: потом снимается сама"> удалить и у себя</label>
       <button class="danger" id="delBtn" disabled>Удалить на ASIAIR</button>
     </div>
     </div>
@@ -1427,6 +1427,8 @@ async function queueDelete(paths, also) {
 $("delBtn").onclick = async () => {
   const files = state.files.filter(f => selected.has(f.path));
   const also = $("alsoLocal").checked;
+  // one press only: the next deletion must not remove local copies by accident
+  $("alsoLocal").checked = false;
   const { total, lines } = deleteSummary(files);
   const notYet = files.filter(f => f.status !== "received");
   let msg = `Будет удалено на ASIAIR: ${files.length} файл(ов), ${fmtBytes(total)}` + (also ? " — и на этом компьютере" : "") + `\n${lines.join("\n")}`;
@@ -1520,6 +1522,7 @@ $("ddLocal").onchange = renderDelDir;
 $("ddCancel").onclick = () => $("delDirDlg").close();
 $("ddOk").onclick = async () => {
   const dir = ddLevel, also = $("ddLocal").checked;
+  $("alsoLocal").checked = $("ddLocal").checked = false;
   $("delDirDlg").close();
   try {
     await post("/ui/api/delete", { dirs: [dir], also_local: also });
