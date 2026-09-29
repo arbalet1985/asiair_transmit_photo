@@ -112,7 +112,7 @@ func TestPlanAndMatch(t *testing.T) {
 		t.Fatalf("sessions %d unknown %d", len(l.Sessions), len(l.Unknown))
 	}
 	s := l.Sessions[0]
-	if s.Dir != "Objects/M 31/2026-09-26_Ha_300s_gain100" {
+	if s.Dir != "Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM" {
 		t.Fatal(s.Dir)
 	}
 	if s.Items[0].Dest != s.Dir+"/lights/"+frames[0].Rel {
@@ -301,5 +301,75 @@ func TestLibraryMovesToNewLayout(t *testing.T) {
 	frames, _ = ScanFor(in, out, nil)
 	if r := Plan(frames).Apply(context.Background(), out, Options{Mode: Copy}, nil); len(r.Errors) > 0 || r.Moved != 0 || r.Placed != 0 {
 		t.Fatalf("again: %+v", r)
+	}
+}
+
+func TestShortCamera(t *testing.T) {
+	for in, want := range map[string]string{"ZWO ASI2600MM Pro": "ASI2600MM Pro", "zwo ASI533MC": "ASI533MC", "QHY268M": "QHY268M", "": ""} {
+		if got := ShortCamera(in); got != want {
+			t.Errorf("%q: %q", in, got)
+		}
+	}
+}
+
+// A session laid out before the camera was in its name moves whole to the
+// new name: lights, calibration and Siril's results.
+func TestSessionMovesToNewName(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	light := map[string]string{"IMAGETYP": "'Light'", "EXPTIME": "300", "GAIN": "100", "FILTER": "'L'", "INSTRUME": "'ZWO ASI2600MM Pro'"}
+	n1 := "Light_M 31_300.0s_Bin1_L_gain100_20260926-221000_-10.0C_0001.fit"
+	n2 := "Light_M 31_300.0s_Bin1_L_gain100_20260926-221100_-10.0C_0002.fit"
+	old := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100")
+	writeFITS(t, filepath.Join(old, "lights", n1), light)
+	writeFITS(t, filepath.Join(old, "lights", n2), light)
+	writeFITS(t, filepath.Join(old, "darks", "Dark_0001.fit"), map[string]string{"IMAGETYP": "'Dark'", "EXPTIME": "300", "GAIN": "100"})
+	os.MkdirAll(filepath.Join(old, "process"), 0o755)
+	os.WriteFile(filepath.Join(old, "process", "result.fit"), []byte("siril"), 0o644)
+	writeFITS(t, filepath.Join(in, "Plan", "Light", "M 31", n1), light) // still in the input
+
+	frames, errs := ScanFor(in, out, nil)
+	if len(errs) > 0 || len(frames) != 3 { // the dark inside the session is not read
+		t.Fatalf("%d %v", len(frames), errs)
+	}
+	l := Plan(frames)
+	r := l.Apply(context.Background(), out, Options{Mode: Copy}, nil)
+	if len(r.Errors) > 0 || r.Sessions != 1 || r.Placed != 0 {
+		t.Fatalf("%+v", r)
+	}
+	nu := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_ASI2600MM Pro")
+	for _, p := range []string{"lights/" + n1, "lights/" + n2, "darks/Dark_0001.fit", "process/result.fit", CalibrationFile} {
+		if _, err := os.Stat(filepath.Join(nu, filepath.FromSlash(p))); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("the old session is left: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(in, "Plan", "Light", "M 31", n1)); err != nil {
+		t.Fatal("the input frame was touched")
+	}
+	frames, _ = ScanFor(in, out, nil)
+	if r := Plan(frames).Apply(context.Background(), out, Options{Mode: Copy}, nil); len(r.Errors) > 0 || r.Sessions != 0 || r.Placed != 0 || r.Moved != 0 {
+		t.Fatalf("again: %+v", r)
+	}
+}
+
+// Lights of two cameras once mixed in one session go to a session each.
+func TestMixedSessionSplits(t *testing.T) {
+	out := t.TempDir()
+	old := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100")
+	for i, cam := range []string{"ZWO ASI2600MM Pro", "ZWO ASI294MM Pro"} {
+		writeFITS(t, filepath.Join(old, "lights", fmt.Sprintf("Light_M 31_300.0s_gain100_20260926-2210%02d_%04d.fit", i, i)),
+			map[string]string{"IMAGETYP": "'Light'", "EXPTIME": "300", "GAIN": "100", "FILTER": "'L'", "INSTRUME": "'" + cam + "'"})
+	}
+	frames, _ := ScanLibrary(out, nil)
+	r := Plan(frames).Apply(context.Background(), out, Options{}, nil)
+	if len(r.Errors) > 0 || r.Moved != 2 || r.Sessions != 0 {
+		t.Fatalf("%+v", r)
+	}
+	for i, cam := range []string{"ASI2600MM Pro", "ASI294MM Pro"} {
+		if _, err := os.Stat(filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_"+cam, "lights", fmt.Sprintf("Light_M 31_300.0s_gain100_20260926-2210%02d_%04d.fit", i, i))); err != nil {
+			t.Error(err)
+		}
 	}
 }

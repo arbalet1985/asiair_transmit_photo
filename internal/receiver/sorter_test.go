@@ -134,7 +134,7 @@ func TestSorterFromReceiver(t *testing.T) {
 	r2, _ := sorter.NewReceiver(ts.URL, pinned, r.Session())
 	frames, errs = sorter.ScanReceiver(ctx, r2, sorter.LoadHeaderCache(cacheFile), nil)
 	lib, _ := sorter.ScanLibrary(out, nil)
-	if len(errs) > 0 || len(frames) != 3 || len(lib) != 2 {
+	if len(errs) > 0 || len(frames) != 3 || len(lib) != 4 { // the dark and flat of the library, the lights of the session
 		t.Fatalf("again: %d frames, %d in the library, %v", len(frames), len(lib), errs)
 	}
 	l = sorter.Plan(append(frames, lib...))

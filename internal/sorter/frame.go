@@ -210,6 +210,9 @@ func kindOf(imagetyp, rel string) string {
 // Plan/Light/<object>/ and Autorun/Light/<object>/), else OBJECT, else the name.
 func objectOf(header, rel string) string {
 	parts := strings.Split(rel, "/")
+	if len(parts) >= 5 && parts[0] == ObjectsDir && parts[3] == "lights" {
+		return parts[1] // laid out here before: Objects/<object>/<session>/lights
+	}
 	for i := 0; i < len(parts)-2; i++ {
 		if strings.EqualFold(parts[i], "light") {
 			return strings.TrimSpace(parts[i+1])
@@ -351,17 +354,46 @@ func ScanFor(in, out string, progress func(n int)) ([]Frame, []error) {
 	return append(frames, more...), append(errs, e...)
 }
 
-// ScanLibrary reads the library built under out before: its darks, flats
-// and biases fit the new lights too, and stay where they are.
+// ScanLibrary reads what was laid out under out before: the library (its
+// darks, flats and biases fit the new lights too) and the lights of the
+// sessions. They stay where they are, or move when the layout changed.
 func ScanLibrary(out string, progress func(n int)) ([]Frame, []error) {
-	lib := filepath.Join(out, LibraryDir)
-	if st, err := os.Stat(lib); out == "" || err != nil || !st.IsDir() {
+	if out == "" {
 		return nil, nil
 	}
-	frames, errs := Scan(lib, nil, progress)
-	for i := range frames {
-		frames[i].Rel = LibraryDir + "/" + frames[i].Rel
-		frames[i].InLibrary = true
+	var frames []Frame
+	var errs []error
+	for _, top := range []string{LibraryDir, ObjectsDir} {
+		dir := filepath.Join(out, top)
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			continue
+		}
+		skip := func(string) bool { return false }
+		if top == ObjectsDir {
+			// only <object>/<session>/lights: not the calibration copies
+			// nor Siril's results in process
+			skip = func(d string) bool {
+				rel, err := filepath.Rel(dir, d)
+				return err == nil && strings.Count(filepath.ToSlash(rel), "/") == 2 && filepath.Base(d) != "lights"
+			}
+		}
+		base := len(frames)
+		more, e := Scan(dir, skip, func(n int) {
+			if progress != nil {
+				progress(base + n)
+			}
+		})
+		errs = append(errs, e...)
+		for _, f := range more {
+			f.Rel = top + "/" + f.Rel
+			f.InLibrary = true
+			// of the sessions only their lights: the calibration in them is a
+			// copy of the library
+			if top == ObjectsDir && (f.Kind != Light || path.Base(path.Dir(f.Rel)) != "lights") {
+				continue
+			}
+			frames = append(frames, f)
+		}
 	}
 	return frames, errs
 }
