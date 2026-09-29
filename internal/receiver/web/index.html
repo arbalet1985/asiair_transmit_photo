@@ -87,6 +87,10 @@
   .vbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); }
   .vbar .title { font-weight: 600; overflow-wrap: anywhere; flex: 1 1 200px; }
   .vbody { flex: 1; display: flex; min-height: 0; }
+  .vmain { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .vnav { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); }
+  .vnav .spacer { flex: 1; }
+  .vnav #vPrev, .vnav #vNext { min-width: 3.5em; }
   .vimg { flex: 1; overflow: auto; background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
   .vimg canvas, .vimg img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
   .vimg.zoom { display: block; }
@@ -98,7 +102,11 @@
   .vside input[type=range] { width: 100%; }
   .vside .kv { grid-template-columns: max-content 1fr; font-size: 12px; }
   .vsel.on { background: var(--danger); border-color: var(--danger); color: #fff; }
-  @media (max-width: 800px) { .vbody { flex-direction: column; } .vside { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 40%; } }
+  @media (max-width: 800px) {
+    .vbody { flex-direction: column; } .vside { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 40%; }
+    /* the buttons go to the bottom of the screen, below the settings */
+    .vmain { display: contents; } .vimg { order: 1; } .vside { order: 2; } .vnav { order: 3; }
+  }
   tr.file.ghost td { color: var(--muted); }
   tr.file.ghost td.name, tr.file.ghost td.num { opacity: .7; }
   .info { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
@@ -260,6 +268,9 @@
     .vbar { padding: 6px 8px; gap: 6px; }
     .vbar .title { flex-basis: 100%; order: -1; font-size: 13px; }
     .vside { max-height: 35%; }
+    .vnav { padding: 8px 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); gap: 10px; }
+    .vnav button { padding: 12px 14px; font-size: 16px; }
+    .vnav #vPrev, .vnav #vNext { min-width: 4.2em; }
     #toast { left: 12px; right: 12px; bottom: 12px; text-align: center; }
   }
 </style>
@@ -702,14 +713,20 @@
     <span class="title" id="vTitle"></span>
     <span class="muted" id="vPos"></span>
     <button id="vOpen" title="Открыть папку с этим файлом на этом компьютере">📂 В папке</button>
-    <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
     <label class="muted" title="Листать дальше в следующую папку, а не только в этой"><input type="checkbox" id="vCross"> все папки</label>
-    <button id="vPrev" title="Предыдущий (←)">←</button>
-    <button id="vNext" title="Следующий (→)">→</button>
     <button id="vClose" title="Закрыть (Esc)">✕</button>
   </div>
   <div class="vbody">
-    <div class="vimg" id="vImgBox"><span class="msg" id="vMsg"></span></div>
+    <div class="vmain">
+      <div class="vimg" id="vImgBox"><span class="msg" id="vMsg"></span></div>
+      <!-- under the picture, where a thumb reaches on a phone -->
+      <div class="vnav">
+        <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
+        <span class="spacer"></span>
+        <button id="vPrev" title="Предыдущий (←)">←</button>
+        <button id="vNext" title="Следующий (→)">→</button>
+      </div>
+    </div>
     <div class="vside">
       <div id="vStretch">
         <h3>Растяжка</h3>
