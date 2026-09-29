@@ -344,8 +344,12 @@
         <input type="range" id="blockRange" class="steps" min="0" max="7" step="1" value="5" aria-label="Размер блока чтения с ASIAIR">
       </div>
       <div class="rate-scale" id="blockScale"></div>
+      <div class="toolbar" style="margin:10px 0 0">
+        <label for="blockDepth">Запросов на файл одновременно</label>
+        <select id="blockDepth" aria-label="Сколько запросов чтения одного файла агент держит одновременно"></select>
+      </div>
       <div class="hint err" id="blockAgent" hidden></div>
-      <div class="hint" id="blockNow">Сколько агент читает с ASIAIR одним запросом (до 6 запросов на файл одновременно). Меняйте по шагу и смотрите на скорость и диагностику: при чтении с ASIAIR через Wi-Fi быстрее может оказаться и меньший, и больший блок. Применяется к файлам, начатым после изменения.</div>
+      <div class="hint" id="blockNow">Блок — сколько агент читает с ASIAIR одним запросом; запросов на файл — сколько таких запросов к одному файлу идут одновременно, не дожидаясь друг друга (по умолчанию 6). Больше запросов скрывают задержку Wi-Fi, но сильнее нагружают ASIAIR; в памяти агента на каждый файл держится блок × число запросов. Меняйте по шагу и смотрите на скорость и диагностику. Применяется к файлам, начатым после изменения.</div>
       <h2 style="margin-top:14px">Одновременно файлов</h2>
       <div class="toolbar">
         <select id="streams" aria-label="Сколько файлов агент передаёт одновременно"></select>
@@ -2251,12 +2255,15 @@ function lockSlider(name) {
   clearTimeout(unlockTimers[name]);
   $(name + "Unlock").checked = false;
   $(name + "Range").disabled = true;
+  if (name === "block") $("blockDepth").disabled = true;
 }
 for (const name of ["rate", "block"]) {
   $(name + "Range").disabled = true;
+  if (name === "block") $("blockDepth").disabled = true;
   $(name + "Unlock").onchange = () => {
     clearTimeout(unlockTimers[name]);
     $(name + "Range").disabled = !$(name + "Unlock").checked;
+    if (name === "block") $("blockDepth").disabled = !$(name + "Unlock").checked;
     if ($(name + "Unlock").checked) unlockTimers[name] = setTimeout(() => lockSlider(name), 60e3);
   };
 }
@@ -2281,13 +2288,28 @@ function renderBlock() {
     $("blockRange").value = Math.max(0, blockPos(rb.set || rb.default || MB));
     paintBlock(+$("blockRange").value);
   }
-  const want = rb.set || rb.default;
+  const sel = $("blockDepth"), dmax = rb.depth_max || 16, ddef = rb.depth_default || 6;
+  if (sel.options.length !== dmax)
+    sel.replaceChildren(...Array.from({ length: dmax }, (_, i) => new Option(i + 1 === ddef ? `${i + 1} — по умолчанию` : String(i + 1), i + 1)));
+  if (document.activeElement !== sel) sel.value = rb.depth_set || ddef;
+  const want = rb.set || rb.default, wantDepth = rb.depth_set || ddef;
   let now = "";
-  if (a.version && !a.read_block) now = "Агент этой версии не умеет менять блок чтения (читает по 1 MB) — нужна новая версия агента.";
-  else if (a.read_block && a.read_block !== want) now = `У агента сейчас: ${fmtBlock(a.read_block)} — новый применится при следующей связи.`;
+  if (a.version && !a.read_block) now = "Агент этой версии не умеет менять чтение с ASIAIR (читает по 1 MB, 6 запросов) — нужна новая версия агента.";
+  else if (a.version && !a.read_depth) now = "Агент этой версии не умеет менять число запросов на файл (всегда 6) — нужна новая версия агента.";
+  else if (a.read_block && (a.read_block !== want || a.read_depth !== wantDepth))
+    now = `У агента сейчас: ${fmtBlock(a.read_block)}, запросов на файл: ${a.read_depth} — новое применится при следующей связи.`;
   $("blockAgent").textContent = now;
   $("blockAgent").hidden = !now;
 }
+$("blockDepth").onchange = async () => {
+  const n = +$("blockDepth").value, rb = state.read_block || {};
+  lockSlider("block");
+  try {
+    await post("/ui/api/readblock", { depth: n === (rb.depth_default || 6) ? 0 : n });
+    toast("Число запросов применится при следующей связи с агентом");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  refresh();
+};
 $("blockRange").addEventListener("input", () => { blockBusy = true; paintBlock(+$("blockRange").value); });
 $("blockRange").addEventListener("change", async () => {
   lockSlider("block");

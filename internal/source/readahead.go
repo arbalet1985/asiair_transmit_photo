@@ -12,18 +12,43 @@ import (
 // link that is well under 1 MB/s. readAhead keeps several large reads in
 // flight and hands their data out in order.
 //
-// The block size of a read can be changed from the receiver page to find
-// the fastest one for the link; it applies to the files opened after that.
+// The block size of a read and how many reads of a file are in flight can
+// be changed from the receiver page to find the fastest ones for the link;
+// they apply to the files opened after that.
 const (
 	readAheadChunk = 1 << 20 // bytes per SMB read by default
-	readAheadDepth = 6       // reads in flight
+	readAheadDepth = 6       // reads in flight by default
 
 	MinReadBlock     = 32 << 10
 	MaxReadBlock     = 4 << 20
 	DefaultReadBlock = readAheadChunk
+
+	MinReadDepth     = 1
+	MaxReadDepth     = 16
+	DefaultReadDepth = readAheadDepth
 )
 
-var readBlock atomic.Int64
+var (
+	readBlock atomic.Int64
+	readDepth atomic.Int32
+)
+
+// SetReadDepth sets how many reads of one file are in flight at once; 0 =
+// the default. It is kept within MinReadDepth..MaxReadDepth.
+func SetReadDepth(n int) {
+	if n <= 0 {
+		n = DefaultReadDepth
+	}
+	readDepth.Store(int32(min(max(n, MinReadDepth), MaxReadDepth)))
+}
+
+// ReadDepth returns how many reads of one file are in flight at once.
+func ReadDepth() int {
+	if n := readDepth.Load(); n > 0 {
+		return int(n)
+	}
+	return DefaultReadDepth
+}
 
 // SetReadBlock sets the size of one read from the ASIAIR, bytes; 0 = the
 // default. It is kept within MinReadBlock..MaxReadBlock.
@@ -51,6 +76,7 @@ type readAhead struct {
 	f     io.ReaderAt
 	c     io.Closer
 	chunk int64 // bytes per read
+	depth int   // reads in flight
 	size  int64
 	pos   int64              // offset of the next byte handed out
 	next  int64              // offset of the next read to start
@@ -60,11 +86,11 @@ type readAhead struct {
 }
 
 func newReadAhead(f io.ReaderAt, c io.Closer, size int64) *readAhead {
-	return &readAhead{f: f, c: c, chunk: ReadBlock(), size: size}
+	return &readAhead{f: f, c: c, chunk: ReadBlock(), depth: ReadDepth(), size: size}
 }
 
 func (r *readAhead) fill() {
-	for len(r.queue) < readAheadDepth && r.next < r.size {
+	for len(r.queue) < r.depth && r.next < r.size {
 		off, n := r.next, min(r.chunk, r.size-r.next)
 		ch := make(chan chunkResult, 1)
 		go func() {
