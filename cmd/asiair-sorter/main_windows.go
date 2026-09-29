@@ -233,7 +233,7 @@ func main() {
 					}},
 					PushButton{AssignTo: &w.btnOpen, Text: "Открыть выходной каталог", OnClicked: w.openOut},
 					HSpacer{},
-					Label{AssignTo: &w.onlyInfo},
+					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
@@ -243,7 +243,7 @@ func main() {
 				},
 			},
 			ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
-			Label{AssignTo: &w.status, Text: "Укажите, откуда брать кадры и куда их разложить, и нажмите «Просмотреть кадры»."},
+			Label{AssignTo: &w.status, EllipsisMode: EllipsisEnd, Text: "Укажите, откуда брать кадры и куда их разложить, и нажмите «Просмотреть кадры»."},
 			HSplitter{
 				StretchFactor: 1,
 				Children: []Widget{
@@ -258,9 +258,11 @@ func main() {
 							{Title: "Сводка по ночам", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.nightTable, Model: w.nights, Columns: ncols, AlternatingRowBG: true,
 									NotSortableByHeaderClick: true, OnItemActivated: w.showNight},
-								Label{AssignTo: &w.nightTotals, TextColor: walk.RGB(90, 90, 90)},
-								Label{Text: "Ночь — с полудня до полудня: утренние флеты входят в ту же ночь. Двойной щелчок по строке показывает её кадры на вкладке «Кадры».",
-									TextColor: walk.RGB(120, 120, 120)},
+								Label{AssignTo: &w.nightTotals, EllipsisMode: EllipsisEnd, TextColor: walk.RGB(90, 90, 90)},
+								Label{Text: "Ночь — с полудня до полудня: утренние флеты входят в ту же ночь.",
+									EllipsisMode: EllipsisEnd, TextColor: walk.RGB(120, 120, 120)},
+								Label{Text: "Двойной щелчок по строке показывает её кадры на вкладке «Кадры».",
+									EllipsisMode: EllipsisEnd, TextColor: walk.RGB(120, 120, 120)},
 							}},
 							{Title: "Структура и калибровка", Layout: VBox{}, Children: []Widget{
 								TextEdit{AssignTo: &w.summary, ReadOnly: true, VScroll: true, HScroll: true, Font: mono},
@@ -273,7 +275,7 @@ func main() {
 						Children: []Widget{
 							ImageView{AssignTo: &w.preview, Mode: ImageViewModeZoom, StretchFactor: 3,
 								Background: SolidColorBrush{Color: walk.RGB(16, 16, 16)}, MinSize: Size{Width: 200, Height: 150}},
-							Label{AssignTo: &w.previewInfo, Text: "Выберите кадр — здесь будет предпросмотр (автоматическое растяжение) и заголовок FITS."},
+							Label{AssignTo: &w.previewInfo, EllipsisMode: EllipsisEnd, Text: "Выберите кадр — здесь будет предпросмотр (автоматическое растяжение) и заголовок FITS."},
 							TextEdit{AssignTo: &w.header, ReadOnly: true, VScroll: true, Font: mono, StretchFactor: 2},
 						},
 					},
@@ -354,7 +356,7 @@ func (w *window) inputChanged() {
 func (w *window) forgetReceiver() {
 	addr := strings.TrimSpace(w.inEdit.Text())
 	w.setLogin(addr, func(l *receiverLogin) { *l = receiverLogin{} })
-	w.status.SetText("Вход и сертификат приёмника забыты: при следующем подключении введите пароль.")
+	w.setStatus("Вход и сертификат приёмника забыты: при следующем подключении введите пароль.")
 }
 
 // foldersChanged: a plan made for another input or output is made again.
@@ -384,6 +386,16 @@ func (w *window) setBusy(b bool) {
 		w.foldersChanged()
 	}
 }
+
+// setLong shows a text that may be longer than the window: a label cut
+// with "…" (so it does not widen the window past the screen), the whole
+// text in its tooltip.
+func setLong(l *walk.Label, t string) {
+	l.SetText(t)
+	l.SetToolTipText(t)
+}
+
+func (w *window) setStatus(t string) { setLong(w.status, t) }
 
 func (w *window) warn(msg string) {
 	walk.MsgBox(w.mw, "ASIAIR Sorter", msg, walk.MsgBoxIconWarning)
@@ -429,8 +441,8 @@ func (w *window) scan() {
 	w.cancel = cancel
 	w.setBusy(true)
 	w.progress.SetMarqueeMode(true)
-	w.status.SetText("Читаю заголовки FITS…")
-	say := func(t string) { w.mw.Synchronize(func() { w.status.SetText(t) }) }
+	w.setStatus("Читаю заголовки FITS…")
+	say := func(t string) { w.mw.Synchronize(func() { w.setStatus(t) }) }
 	go func() {
 		defer cancel()
 		var frames []sorter.Frame
@@ -449,7 +461,7 @@ func (w *window) scan() {
 			w.progress.SetValue(0)
 			w.setBusy(false)
 			if fatal != nil {
-				w.status.SetText(fatal.Error())
+				w.setStatus(fatal.Error())
 				if errors.Is(fatal, sorter.ErrLogin) {
 					w.passEdit.SetFocus()
 				}
@@ -479,7 +491,7 @@ func (w *window) scan() {
 			} else {
 				msg += " Проверьте список и вкладку «Структура», затем «Разложить»."
 			}
-			w.status.SetText(msg)
+			w.setStatus(msg)
 		})
 	}()
 }
@@ -537,6 +549,10 @@ func (w *window) apply() {
 		verb := map[sorter.Mode]string{sorter.Copy: "скопированы", sorter.Move: "ПЕРЕМЕЩЕНЫ", sorter.Link: "связаны жёсткими ссылками"}[opt.Mode]
 		q = fmt.Sprintf("Кадров: %d (%s), они будут %s в\n%s\n\nПродолжить?", len(l.Items), sorter.FormatBytes(l.TotalBytes), verb, s.Out)
 	}
+	if !opt.FillCalibration {
+		q += "\n\nГалочка «Сразу положить подходящие дарки, флеты и биасы» снята: папки darks/flats/biases в сессиях останутся пустыми, " +
+			"подходящие папки библиотеки будут перечислены в файле «" + sorter.CalibrationFile + "»."
+	}
 	if walk.MsgBox(w.mw, "ASIAIR Sorter", q, walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
 		return
 	}
@@ -571,9 +587,17 @@ func (w *window) apply() {
 			}
 			if opt.FillCalibration {
 				msg += fmt.Sprintf(", калибровочных в папках объектов %d", r.Calibration)
+				if r.Calibration == 0 && r.CalibrationThere == 0 {
+					msg += " (подходящей калибровки не нашлось — см. вкладку «Структура и калибровка»)"
+				}
 			}
 			if stopped {
 				msg = "Остановлено. " + msg + ". Начатое скачивание продолжится со следующего запуска"
+			}
+			if !opt.FillCalibration && !stopped {
+				msg += ".\n\nПапки darks/flats/biases в сессиях оставлены пустыми: что в них положить, написано в «" + sorter.CalibrationFile + "». " +
+					"Чтобы заполнить их, отметьте «Сразу положить подходящие дарки, флеты и биасы», " +
+					"снова нажмите «Просмотреть кадры» и «Разложить» — уже разложенные кадры повторно не копируются"
 			}
 			icon := walk.MsgBoxIconInformation
 			if len(r.Errors) > 0 {
@@ -590,7 +614,7 @@ func (w *window) apply() {
 					log.Print(e)
 				}
 			}
-			w.status.SetText(strings.SplitN(msg, "\n", 2)[0])
+			w.setStatus(strings.SplitN(msg, "\n", 2)[0])
 			// files may have moved: the plan is to be made again
 			w.layout = nil
 			w.setBusy(false)
@@ -608,11 +632,11 @@ func (w *window) showProgress(p sorter.Progress, start time.Time) {
 			speed := float64(p.Bytes) / sec
 			t += fmt.Sprintf(", %s/с, осталось %s", sorter.FormatBytes(int64(speed)), sorter.FormatDuration(float64(p.TotalBytes-p.Bytes)/speed))
 		}
-		w.status.SetText(fmt.Sprintf("%s — %d из %d: %s", t, p.Done, p.Total, p.Name))
+		w.setStatus(fmt.Sprintf("%s — %d из %d: %s", t, p.Done, p.Total, p.Name))
 		return
 	}
 	w.progress.SetValue(p.Done * 1000 / max(p.Total, 1))
-	w.status.SetText(fmt.Sprintf("%d из %d: %s", p.Done, p.Total, p.Name))
+	w.setStatus(fmt.Sprintf("%d из %d: %s", p.Done, p.Total, p.Name))
 }
 
 // showNights fills the summary by night.
@@ -622,7 +646,7 @@ func (w *window) showNights(rows []*sorter.NightRow) {
 	if t != "" {
 		t = "Всего по объектам — " + t
 	}
-	w.nightTotals.SetText(t)
+	setLong(w.nightTotals, t)
 }
 
 // showNight shows the frames of the summary line double-clicked.
@@ -678,7 +702,7 @@ func (w *window) showPreview() {
 	f := w.model.rows[i].f
 	gen := w.previewGen.Add(1)
 	name := filepath.Base(filepath.FromSlash(f.Path))
-	w.previewInfo.SetText("Читаю " + name + "…")
+	setLong(w.previewInfo, "Читаю "+name+"…")
 	go func() {
 		var pic image.Image
 		var info, head string
@@ -736,7 +760,7 @@ func (w *window) showPreview() {
 				w.bitmap.Dispose()
 			}
 			w.bitmap = bmp
-			w.previewInfo.SetText(info)
+			setLong(w.previewInfo, info)
 			w.header.SetText(head)
 		})
 	}()
