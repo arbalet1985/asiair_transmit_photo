@@ -186,6 +186,11 @@
   .chart .cross { stroke: var(--muted); stroke-width: 1; }
   .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
   .chart .empty { fill: var(--muted); font-size: 13px; }
+  .chart svg { touch-action: pan-y; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+  .chart .sel { fill: color-mix(in srgb, var(--accent) 18%, transparent); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; }
+  .chart .limitnote { fill: var(--muted); font-size: 11px; }
+  .chartbtns { display: inline-flex; gap: 2px; }
+  .chartbtns button { min-width: 2.2em; }
   .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / .12); white-space: nowrap; z-index: 2; }
   .tip b { font-weight: 600; }
   .tablewrap { overflow-x: auto; }
@@ -306,10 +311,19 @@
             <option value="72">за 3 дня</option>
             <option value="168">за 7 дней</option>
           </select>
+          <span class="chartbtns" role="group" aria-label="Управление графиком">
+            <button id="spZoomIn" title="Увеличить: половина показанного времени">+</button>
+            <button id="spZoomOut" title="Уменьшить: вдвое больше времени">−</button>
+            <button id="spLeft" title="Раньше">◀</button>
+            <button id="spRight" title="Позже">▶</button>
+            <button id="spReset" title="Весь период и автомасштаб (или двойной щелчок по графику)">Весь период</button>
+          </span>
+          <label title="Верх шкалы — не ниже ограничения скорости, как было раньше. Без галочки шкала подстраивается под скорость"><input type="checkbox" id="spLimitScale"> шкала до лимита</label>
           <span class="muted" id="speedSummary"></span>
         </div>
         <div class="chart" id="speedChart"></div>
-        <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Разрывы — минуты, когда файлы не передавались. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История за 7 дней сохраняется в папке данных приёмника (<b>speed-log.json</b>) и остаётся после перезапуска.</div>
+        <div class="muted" id="speedView"></div>
+        <div class="hint">Линия — средняя скорость за минуту, пунктир — действующее ограничение. Шкала подстраивается под скорость на показанном участке; если ограничение выше, оно подписано у верхнего края. Разрывы — минуты, когда файлы не передавались. <b>Выделите область</b> на графике мышью (или пальцем), чтобы её увеличить: по времени, а если тянуть и по высоте — то и по скорости. Двойной щелчок или «Весь период» — вернуть. Наведите на график, чтобы увидеть минуту подробно, в том числе во что упиралась передача. История за 7 дней сохраняется в папке данных приёмника (<b>speed-log.json</b>) и остаётся после перезапуска.</div>
       </div>
     </section>
     </div>
@@ -2168,84 +2182,136 @@ async function loadSpeed() {
   } catch (e) { return; }
   drawSpeed();
 }
-$("speedHours").onchange = () => { store.set("speedHours", $("speedHours").value); loadSpeed(); };
+$("speedHours").onchange = () => { store.set("speedHours", $("speedHours").value); speedView = null; loadSpeed(); };
 $("speedHead").addEventListener("click", () => setTimeout(loadSpeed));
 const bottleText = { network: "сеть до приёмника", read: "чтение с ASIAIR", limit: "ограничение скорости" };
+// The shown part of the chart: null = the whole period chosen, live, with
+// the scale fitted to the speed; else a time window (ms) and, after a
+// selection made also in height, a fixed speed range (B/s).
+let speedView = null;
+// a nice step (1, 2, 2.5, 5 × 10^n) for about n divisions of span
+function niceStep(span, n) {
+  const raw = span / n, p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(m => m * p).find(v => v >= raw);
+}
+// speed ticks in the unit that suits them: B/s, KB/s or MB/s
+function speedTicks(lo, hi) {
+  const unit = hi >= 1 << 20 ? 1 << 20 : hi >= 1024 ? 1024 : 1, name = { 1: "B/s", 1024: "KB/s", [1 << 20]: "MB/s" }[unit];
+  const step = niceStep((hi - lo) / unit, 4) * unit;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-6; v += step) ticks.push(v);
+  return { ticks, step, label: v => v ? `${+(v / unit).toFixed(2)} ${name}` : "0" };
+}
+function speedWindow() {
+  const hours = +$("speedHours").value, now = Date.now();
+  const all = [now - hours * 3600e3, now];
+  if (!speedView) return { t0: all[0], t1: all[1], all };
+  return { t0: Math.max(all[0], speedView.t0), t1: Math.min(all[1], speedView.t1), all };
+}
+// setSpeedView shows [t0, t1], kept inside the period and at least 5 minutes
+function setSpeedView(t0, t1, y) {
+  const { all } = speedWindow();
+  let span = Math.max(t1 - t0, 5 * 60e3);
+  span = Math.min(span, all[1] - all[0]);
+  t0 = Math.min(Math.max(t0, all[0]), all[1] - span);
+  speedView = span >= all[1] - all[0] - 1000 && !y ? null : { t0, t1: t0 + span, y: y || null };
+  drawSpeed();
+}
 function drawSpeed() {
   const box = $("speedChart"), W = box.clientWidth || 600, H = box.clientHeight || 180;
-  const L = 64, R = 8, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
-  const hours = +$("speedHours").value, t1 = Date.now(), t0 = t1 - hours * 3600e3;
-  const pts = speedData.map(p => ({ ...p, ts: new Date(p.t).getTime() })).filter(p => p.ts >= t0);
+  const L = 72, R = 8, T = 18, B = 22, pw = W - L - R, ph = H - T - B;
+  const hours = +$("speedHours").value, { t0, t1 } = speedWindow(), span = t1 - t0;
+  const all = speedData.map(p => ({ ...p, ts: new Date(p.t).getTime() }));
+  const pts = all.filter(p => p.ts >= t0 && p.ts <= t1);
   const act = pts.filter(p => p.active);
-  const peak = act.reduce((m, p) => Math.max(m, p.speed, p.rate > 0 ? p.rate : 0), 1);
-  // round the top of the scale to a nice number of MB/s (the unit of the sliders)
-  const unit = 1 << 20, pk = peak / unit * 1.05;
-  const step = [1, 2, 2.5, 5, 10].map(m => m * 10 ** Math.floor(Math.log10(pk / 3))).find(v => v * 3 >= pk) * unit;
-  const top = step * 3;
-  const tickLabel = v => `${+(v / unit).toFixed(2)} MB/s`;
-  const x = ts => L + (ts - t0) / (t1 - t0) * pw, y = v => T + ph - Math.min(v, top) / top * ph;
+  // with a neighbour on each side, so lines run to the edges
+  const first = all.findIndex(p => p.ts >= t0), last = all.findLastIndex(p => p.ts <= t1);
+  const drawn = first < 0 ? [] : all.slice(Math.max(0, first - 1), last + 2);
+  // the scale: fitted to the speed shown (and the limit when asked), or the selection
+  let lo = 0, hi;
+  if (speedView && speedView.y) [lo, hi] = speedView.y;
+  else {
+    const peak = act.reduce((m, p) => Math.max(m, p.speed, $("spLimitScale").checked && p.rate > 0 ? p.rate : 0), 0);
+    hi = Math.max(peak * 1.08, 1024);
+  }
+  let yt = speedTicks(lo, hi);
+  if (!(speedView && speedView.y)) { // the top on a round value
+    hi = Math.ceil(hi / yt.step - 1e-9) * yt.step;
+    yt = speedTicks(lo, hi);
+  }
+  const x = ts => L + (ts - t0) / span * pw, y = v => T + ph - (v - lo) / (hi - lo) * ph;
   const ns = "http://www.w3.org/2000/svg";
   const mk = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
   const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Скорость передачи по минутам" });
+  const clipId = "speedClip";
+  const defs = mk("defs", {}), clip = mk("clipPath", { id: clipId });
+  clip.append(mk("rect", { x: L, y: T, width: pw, height: ph }));
+  defs.append(clip);
   const grid = mk("g", { class: "grid" }), axis = mk("g", { class: "axis" });
-  for (let i = 0; i <= 3; i++) {
-    const v = step * i, yy = y(v);
+  for (const v of yt.ticks) {
+    if (v > hi + 1e-6) continue;
+    const yy = y(v);
     grid.append(mk("line", { x1: L, x2: W - R, y1: yy, y2: yy }));
-    axis.append(mk("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, i ? tickLabel(v) : "0"));
+    axis.append(mk("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, yt.label(v)));
   }
-  if (hours <= 24) {
-    const tick = hours <= 1 ? 15 * 60e3 : hours <= 6 ? 3600e3 : 3 * 3600e3;
-    // ticks on round local times
-    const off = new Date(t0).getTimezoneOffset() * 60e3;
-    for (let ts = Math.ceil((t0 - off) / tick) * tick + off; ts <= t1; ts += tick) {
-      axis.append(mk("text", { x: x(ts), y: H - 6, "text-anchor": "middle" }, new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
-    }
-  } else {
-    // a tick at every local midnight (every other one for a week on a narrow screen), dated
-    const every = hours > 72 && pw < 500 ? 2 : 1;
-    const d = new Date(t0); d.setHours(24, 0, 0, 0);
-    for (let i = 0; d.getTime() <= t1; i++, d.setDate(d.getDate() + 1)) {
-      if (i % every) continue;
-      grid.append(mk("line", { x1: x(d.getTime()), x2: x(d.getTime()), y1: T, y2: T + ph }));
-      axis.append(mk("text", { x: x(d.getTime()), y: H - 6, "text-anchor": "middle" }, d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })));
-    }
+  // time ticks on round local times, dated when a day passes
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440].map(m => m * 60e3);
+  const tick = steps.find(v => span / v <= Math.max(3, Math.floor(pw / 90))) || 1440 * 60e3;
+  const off = new Date(t0).getTimezoneOffset() * 60e3;
+  for (let ts = Math.ceil((t0 - off) / tick) * tick + off; ts <= t1; ts += tick) {
+    const d = new Date(ts), midnight = d.getHours() === 0 && d.getMinutes() === 0;
+    if (tick >= 1440 * 60e3 || (midnight && span > 12 * 3600e3)) grid.append(mk("line", { x1: x(ts), x2: x(ts), y1: T, y2: T + ph }));
+    const text = tick >= 1440 * 60e3 || (midnight && span > 3600e3) ? d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })
+      : d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    axis.append(mk("text", { x: x(ts), y: H - 6, "text-anchor": "middle" }, text));
   }
-  svg.append(grid, axis);
+  svg.append(defs, grid, axis);
   // speed: one path per run of active minutes; the limit as a dashed step line
   let line = "", area = "", lim = "", run = [];
+  const base = y(lo);
   const flush = () => {
     if (!run.length) return;
     const seg = run.map((p, i) => `${i ? "L" : "M"}${x(p.ts).toFixed(1)},${y(p.speed).toFixed(1)}`).join("");
     line += seg;
-    area += seg + `L${x(run[run.length - 1].ts).toFixed(1)},${y(0)}L${x(run[0].ts).toFixed(1)},${y(0)}Z`;
+    area += seg + `L${x(run[run.length - 1].ts).toFixed(1)},${base}L${x(run[0].ts).toFixed(1)},${base}Z`;
     run = [];
   };
-  let prevTs = null, limRun = false;
-  for (const p of pts) {
+  let prevTs = null, limRun = false, limAbove = 0;
+  for (const p of drawn) {
     if (!p.active || (prevTs !== null && p.ts - prevTs > 90e3)) flush();
     if (p.active) run.push(p);
-    if (p.rate > 0 && p.active) { lim += `${limRun ? "L" : "M"}${x(p.ts).toFixed(1)},${y(p.rate).toFixed(1)}`; limRun = true; } else limRun = false;
+    if (p.rate > 0 && p.active) {
+      lim += `${limRun ? "L" : "M"}${x(p.ts).toFixed(1)},${y(p.rate).toFixed(1)}`; limRun = true;
+      if (p.rate > hi && p.ts >= t0 && p.ts <= t1) limAbove = Math.max(limAbove, p.rate);
+    } else limRun = false;
     prevTs = p.ts;
   }
   flush();
-  if (area) svg.append(mk("path", { class: "area", d: area }));
-  if (lim) svg.append(mk("path", { class: "limit", d: lim }));
-  if (line) svg.append(mk("path", { class: "speed", d: line }));
+  const plot = mk("g", { "clip-path": `url(#${clipId})` });
+  if (area) plot.append(mk("path", { class: "area", d: area }));
+  if (lim) plot.append(mk("path", { class: "limit", d: lim }));
+  if (line) plot.append(mk("path", { class: "speed", d: line }));
+  svg.append(plot);
+  if (limAbove) svg.append(mk("text", { class: "limitnote", x: W - R, y: T - 6, "text-anchor": "end" }, `ограничение ${fmtRate(limAbove)} — выше графика ↑`));
   if (!act.length) svg.append(mk("text", { class: "empty", x: L + pw / 2, y: T + ph / 2, "text-anchor": "middle" }, "за это время файлы не передавались"));
   const cross = mk("line", { class: "cross", y1: T, y2: T + ph, visibility: "hidden" }), dot = mk("circle", { class: "dot", r: 4, visibility: "hidden" });
-  svg.append(cross, dot);
+  const sel = mk("rect", { class: "sel", visibility: "hidden" });
+  svg.append(cross, dot, sel);
   box.replaceChildren(svg);
   const tip = el("div", { className: "tip", hidden: true });
   box.append(tip);
+  const toSvg = ev => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left) * W / r.width, (ev.clientY - r.top) * H / r.height, r]; };
+  const clampX = v => Math.min(Math.max(v, L), L + pw), clampY = v => Math.min(Math.max(v, T), T + ph);
+  const hideHover = () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; };
   // hover: the nearest minute
-  svg.addEventListener("pointermove", ev => {
-    const r = svg.getBoundingClientRect(), mx = (ev.clientX - r.left) * W / r.width;
+  const hover = ev => {
+    const [mx, , r] = toSvg(ev);
     let best = null;
     for (const p of pts) if (!best || Math.abs(x(p.ts) - mx) < Math.abs(x(best.ts) - mx)) best = p;
-    if (!best || Math.abs(x(best.ts) - mx) > 20) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; return; }
+    if (!best || Math.abs(x(best.ts) - mx) > 20) { hideHover(); return; }
     const px = x(best.ts);
     cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
-    dot.setAttribute("cx", px); dot.setAttribute("cy", y(best.speed)); dot.setAttribute("visibility", best.active ? "visible" : "hidden");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", clampY(y(best.speed))); dot.setAttribute("visibility", best.active ? "visible" : "hidden");
     tip.replaceChildren();
     const time = new Date(best.ts).toLocaleString("ru-RU", hours > 24 ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
     tip.append(el("b", { textContent: time }));
@@ -2257,12 +2323,56 @@ function drawSpeed() {
     const tx = px * r.width / W;
     tip.style.left = Math.min(Math.max(0, tx + 12), r.width - tip.offsetWidth) + "px";
     tip.style.top = "0px";
+  };
+  // selecting an area zooms into it: in time, and in speed when dragged in height too
+  let start = null;
+  svg.addEventListener("pointerdown", ev => {
+    if (ev.button !== 0) return;
+    const [mx, my] = toSvg(ev);
+    if (mx < L || mx > L + pw) return;
+    start = [clampX(mx), clampY(my)];
+    svg.setPointerCapture(ev.pointerId);
   });
-  svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.hidden = true; });
+  svg.addEventListener("pointermove", ev => {
+    if (!start) { hover(ev); return; }
+    hideHover();
+    const [mx, my] = toSvg(ev), ex = clampX(mx), ey = clampY(my);
+    const tall = Math.abs(ey - start[1]) >= 15;
+    sel.setAttribute("x", Math.min(start[0], ex)); sel.setAttribute("width", Math.abs(ex - start[0]));
+    sel.setAttribute("y", tall ? Math.min(start[1], ey) : T); sel.setAttribute("height", tall ? Math.abs(ey - start[1]) : ph);
+    sel.setAttribute("visibility", "visible");
+  });
+  const finish = ev => {
+    if (!start) return;
+    const [mx, my] = toSvg(ev), ex = clampX(mx), ey = clampY(my), s0 = start;
+    start = null;
+    sel.setAttribute("visibility", "hidden");
+    if (Math.abs(ex - s0[0]) < 6) return; // a click, not a selection
+    const tAt = px => t0 + (px - L) / pw * span, vAt = py => lo + (T + ph - py) / ph * (hi - lo);
+    const yr = Math.abs(ey - s0[1]) >= 15 ? [Math.max(0, vAt(Math.max(s0[1], ey))), vAt(Math.min(s0[1], ey))] : null;
+    setSpeedView(tAt(Math.min(s0[0], ex)), tAt(Math.max(s0[0], ex)), yr);
+  };
+  svg.addEventListener("pointerup", finish);
+  svg.addEventListener("pointercancel", () => { start = null; sel.setAttribute("visibility", "hidden"); });
+  svg.addEventListener("pointerleave", () => { if (!start) hideHover(); });
+  svg.addEventListener("dblclick", () => { speedView = null; drawSpeed(); });
   const a = act.length ? act.reduce((s, p) => s + p.speed, 0) / act.length : 0;
   const dur = act.length >= 120 ? `${+(act.length / 60).toFixed(1)} ч` : `${act.length} мин`;
   $("speedSummary").textContent = act.length ? `в среднем ${fmtBytes(a)}/s за ${dur} передачи, пик ${fmtBytes(act.reduce((m, p) => Math.max(m, p.max), 0))}/s` : "";
+  const fmtT = t => new Date(t).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  $("speedView").textContent = speedView ? `Показано: ${fmtT(t0)} — ${fmtT(t1)}` + (speedView.y ? `, ${fmtBytes(lo)}/s — ${fmtBytes(hi)}/s` : "") : "";
+  const full = !speedView, atEnd = t1 >= speedWindow().all[1] - 1000, atStart = t0 <= speedWindow().all[0] + 1000;
+  $("spZoomOut").disabled = full; $("spReset").disabled = full;
+  $("spLeft").disabled = full || atStart; $("spRight").disabled = full || atEnd;
+  $("spZoomIn").disabled = span <= 5 * 60e3 + 1000;
 }
+$("spZoomIn").onclick = () => { const { t0, t1 } = speedWindow(), c = (t0 + t1) / 2, h = (t1 - t0) / 4; setSpeedView(c - h, c + h, speedView && speedView.y); };
+$("spZoomOut").onclick = () => { const { t0, t1 } = speedWindow(), c = (t0 + t1) / 2, h = t1 - t0; setSpeedView(c - h, c + h, null); };
+$("spLeft").onclick = () => { const { t0, t1 } = speedWindow(), d = (t1 - t0) / 2; setSpeedView(t0 - d, t1 - d, speedView && speedView.y); };
+$("spRight").onclick = () => { const { t0, t1 } = speedWindow(), d = (t1 - t0) / 2; setSpeedView(t0 + d, t1 + d, speedView && speedView.y); };
+$("spReset").onclick = () => { speedView = null; drawSpeed(); };
+$("spLimitScale").checked = store.get("speedLimitScale", false);
+$("spLimitScale").onchange = () => { store.set("speedLimitScale", $("spLimitScale").checked); drawSpeed(); };
 $("speedHours").value = store.get("speedHours", "6");
 addEventListener("resize", () => { if (speedData.length) drawSpeed(); });
 loadSpeed();
