@@ -34,6 +34,7 @@ type Options struct {
 // Result counts what Apply did.
 type Result struct {
 	Placed, Skipped, Calibration int
+	Sessions                     int   // session folders renamed to a new layout
 	Moved                        int   // library frames moved to a new layout
 	Downloaded                   int64 // bytes fetched from a receiver
 	Errors                       []error
@@ -54,8 +55,11 @@ const CalibrationFile = "калибровка.txt"
 // many bytes they take (a download begun before counts as fetched).
 func (l *Layout) Missing(out string) (files int, bytes int64) {
 	for _, it := range l.Items {
-		if it.Dup || it.Frame.Src == nil || it.Existing != "" {
+		if it.Dup || it.Frame.Src == nil {
 			continue
+		}
+		if st, err := os.Stat(it.Existing); it.Existing != "" && err == nil && st.Size() == it.Frame.Size {
+			continue // moved from the old place, not downloaded
 		}
 		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
 		if st, err := os.Stat(dst); err == nil && st.Size() == it.Frame.Size {
@@ -99,6 +103,12 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 	}
 	fail := func(err error) { r.Errors = append(r.Errors, err) }
 
+	// sessions laid out under an earlier name move whole, with their
+	// calibration and Siril's results; before the new folders are made
+	for _, err := range l.moveSessions(out, &r) {
+		fail(err)
+	}
+
 	for _, g := range l.Groups {
 		dirs := []string{g.Dir}
 		if g.Kind == Light {
@@ -116,8 +126,8 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 
 	// where each placed frame is now, for filling the sessions
 	now := map[*Frame]string{}
-	emptied := map[string]bool{} // library folders frames were moved out of
-	defer removeEmpty(emptied, filepath.Join(out, LibraryDir))
+	emptied := map[string]bool{} // folders frames were moved out of
+	defer removeEmpty(emptied, out)
 	for _, it := range l.Items {
 		if ctx.Err() != nil {
 			return r
@@ -207,6 +217,61 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 		}
 	}
 	return r
+}
+
+// moveSessions renames the session folders laid out under an earlier
+// name (before the camera was part of it) to their new names, with
+// everything in them. A folder whose lights now belong to several sessions
+// (two cameras) is not renamed: its lights move one by one.
+func (l *Layout) moveSessions(out string, r *Result) []error {
+	targets := map[string]map[string]bool{} // old session folder -> new ones
+	for _, it := range l.Items {
+		f := it.Frame
+		if !f.InLibrary || f.Kind != Light || filepath.Base(filepath.Dir(f.Path)) != "lights" {
+			continue
+		}
+		old := filepath.Dir(filepath.Dir(f.Path))
+		if targets[old] == nil {
+			targets[old] = map[string]bool{}
+		}
+		targets[old][filepath.Join(out, filepath.FromSlash(it.Group.Dir))] = true
+	}
+	var errs []error
+	for old, set := range targets {
+		if len(set) != 1 {
+			continue
+		}
+		var nu string
+		for d := range set {
+			nu = d
+		}
+		if samePath(old, nu) {
+			continue
+		}
+		if _, err := os.Stat(nu); err == nil {
+			continue // the new one exists: the lights move one by one
+		}
+		if err := os.MkdirAll(filepath.Dir(nu), 0o755); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := os.Rename(old, nu); err != nil {
+			errs = append(errs, fmt.Errorf("папка сессии %s: %w", old, err))
+			continue
+		}
+		r.Sessions++
+		os.Remove(filepath.Dir(old)) // the object's folder, when left empty
+		prefix := old + string(filepath.Separator)
+		for _, it := range l.Items {
+			if strings.HasPrefix(it.Frame.Path, prefix) {
+				it.Frame.Path = nu + it.Frame.Path[len(old):]
+			}
+			if strings.HasPrefix(it.Existing, prefix) {
+				it.Existing = nu + it.Existing[len(old):]
+			}
+		}
+	}
+	return errs
 }
 
 // libraryMove tells the frame in the output's library to move to dst,

@@ -123,7 +123,7 @@ func join(parts ...string) string {
 
 // GroupDir is the folder a frame belongs to, relative to the output:
 //
-//	Objects/M 31/2026-09-26_Ha_300s_gain100      (lights, object/night/filter/exposure/gain)
+//	Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM Pro  (lights: object/night/filter/exposure/gain/camera)
 //	Library/Flats/ZWO ASI2600MM Pro/2026-09-26_Ha_gain100_1.5s  (night/filter/gain/exposure)
 //	Library/Darks/ZWO ASI2600MM Pro/gain100_300s_-10C
 //	Library/DarkFlats/ZWO ASI2600MM Pro/gain100_1.5s
@@ -142,7 +142,7 @@ func GroupDir(f *Frame) string {
 		if obj == "" {
 			obj = "Unknown"
 		}
-		return ObjectsDir + "/" + SafeName(obj) + "/" + join(f.Night, f.Filter, exp, gainPart(f.Gain), binPart(f.Bin))
+		return ObjectsDir + "/" + SafeName(obj) + "/" + join(f.Night, f.Filter, exp, gainPart(f.Gain), binPart(f.Bin), ShortCamera(f.Camera))
 	case Flat:
 		return LibraryDir + "/Flats/" + cam + join(f.Night, f.Filter, gainPart(f.Gain), exp, binPart(f.Bin))
 	case Dark:
@@ -153,6 +153,16 @@ func GroupDir(f *Frame) string {
 		return LibraryDir + "/Biases/" + cam + join(gainPart(f.Gain), binPart(f.Bin))
 	}
 	return ""
+}
+
+// ShortCamera is the camera in the name of a session: without the maker
+// "ZWO " in front, which every ASIAIR camera has.
+func ShortCamera(c string) string {
+	c = strings.TrimSpace(c)
+	if len(c) > 4 && strings.EqualFold(c[:4], "ZWO ") {
+		c = strings.TrimSpace(c[4:])
+	}
+	return c
 }
 
 // Plan works out where every frame goes. Frames already in their place (a
@@ -185,7 +195,8 @@ func Plan(frames []Frame) *Layout {
 		if first := placed[strings.ToLower(it.Dest)]; first != nil {
 			if first.Frame.Size == f.Size {
 				it.Dup = true
-				if f.InLibrary && !first.Frame.InLibrary && first.Existing == "" {
+				// the same frame laid out before, in a folder of an earlier layout
+				if f.InLibrary && !first.Frame.InLibrary && first.Existing == "" && !strings.EqualFold(f.Rel, first.Dest) {
 					first.Existing = f.Path
 				}
 			} else {
