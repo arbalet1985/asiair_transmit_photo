@@ -115,6 +115,11 @@ type window struct {
 	status                     *walk.Label
 	table                      *walk.TableView
 	summary, header            *walk.TextEdit
+	tabs                       *walk.TabWidget
+	nightTable                 *walk.TableView
+	nights                     *nightModel
+	nightTotals, onlyInfo      *walk.Label
+	btnAll                     *walk.PushButton
 	preview                    *walk.ImageView
 	previewInfo                *walk.Label
 	model                      *frameModel
@@ -135,7 +140,7 @@ var kindFilters = []struct{ label, kind string }{
 }
 
 func main() {
-	w := &window{model: &frameModel{}}
+	w := &window{model: &frameModel{}, nights: &nightModel{}}
 	s := loadSettings()
 	w.saved = s
 	var kinds []string
@@ -151,6 +156,14 @@ func main() {
 		cols = append(cols, col)
 	}
 	mono := Font{Family: "Consolas", PointSize: 9}
+	var ncols []TableViewColumn
+	for _, c := range nightColumns {
+		col := TableViewColumn{Title: c.title, Width: c.width}
+		if c.right {
+			col.Alignment = AlignFar
+		}
+		ncols = append(ncols, col)
+	}
 
 	err := MainWindow{
 		AssignTo: &w.mw,
@@ -220,6 +233,8 @@ func main() {
 					}},
 					PushButton{AssignTo: &w.btnOpen, Text: "Открыть выходной каталог", OnClicked: w.openOut},
 					HSpacer{},
+					Label{AssignTo: &w.onlyInfo},
+					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
@@ -233,11 +248,19 @@ func main() {
 				StretchFactor: 1,
 				Children: []Widget{
 					TabWidget{
+						AssignTo:      &w.tabs,
 						StretchFactor: 3,
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true,
 									OnCurrentIndexChanged: w.showPreview},
+							}},
+							{Title: "Сводка по ночам", Layout: VBox{}, Children: []Widget{
+								TableView{AssignTo: &w.nightTable, Model: w.nights, Columns: ncols, AlternatingRowBG: true,
+									NotSortableByHeaderClick: true, OnItemActivated: w.showNight},
+								Label{AssignTo: &w.nightTotals, TextColor: walk.RGB(90, 90, 90)},
+								Label{Text: "Ночь — с полудня до полудня: утренние флеты входят в ту же ночь. Двойной щелчок по строке показывает её кадры на вкладке «Кадры».",
+									TextColor: walk.RGB(120, 120, 120)},
 							}},
 							{Title: "Структура и калибровка", Layout: VBox{}, Children: []Widget{
 								TextEdit{AssignTo: &w.summary, ReadOnly: true, VScroll: true, HScroll: true, Font: mono},
@@ -420,6 +443,7 @@ func (w *window) scan() {
 		}
 		l := sorter.Plan(frames)
 		missing, missingBytes := l.Missing(s.Out)
+		nights := l.Nights(s.Out)
 		w.mw.Synchronize(func() {
 			w.progress.SetMarqueeMode(false)
 			w.progress.SetValue(0)
@@ -436,6 +460,8 @@ func (w *window) scan() {
 			w.passEdit.SetText("")
 			w.layout, w.scannedIn, w.scannedOut = l, s.In, s.Out
 			w.model.set(l)
+			w.showAll()
+			w.showNights(nights)
 			w.summary.SetText(l.Summary())
 			w.foldersChanged()
 			msg := fmt.Sprintf("Кадров: %d, сессий: %d, объём %s.", l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
@@ -530,7 +556,9 @@ func (w *window) apply() {
 			w.mw.Synchronize(func() { w.showProgress(p, start) })
 		})
 		stopped := ctx.Err() != nil
+		nights := l.Nights(s.Out) // what is in the output now
 		w.mw.Synchronize(func() {
+			w.showNights(nights)
 			msg := fmt.Sprintf("Готово: разложено %d, уже были на месте %d", r.Placed, r.Skipped)
 			if r.Downloaded > 0 {
 				msg += fmt.Sprintf(", скачано %s", sorter.FormatBytes(r.Downloaded))
@@ -579,6 +607,49 @@ func (w *window) showProgress(p sorter.Progress, start time.Time) {
 	}
 	w.progress.SetValue(p.Done * 1000 / max(p.Total, 1))
 	w.status.SetText(fmt.Sprintf("%d из %d: %s", p.Done, p.Total, p.Name))
+}
+
+// showNights fills the summary by night.
+func (w *window) showNights(rows []*sorter.NightRow) {
+	w.nights.set(rows)
+	t := sorter.ObjectTotals(rows)
+	if t != "" {
+		t = "Всего по объектам — " + t
+	}
+	w.nightTotals.SetText(t)
+}
+
+// showNight shows the frames of the summary line double-clicked.
+func (w *window) showNight() {
+	i := w.nightTable.CurrentIndex()
+	if i < 0 || i >= len(w.nights.rows) {
+		return
+	}
+	r := w.nights.rows[i]
+	w.model.only = map[*sorter.Item]bool{}
+	for _, it := range r.Items {
+		w.model.only[it] = true
+	}
+	w.kindBox.SetCurrentIndex(0) // the line is of one kind already
+	w.model.kind = ""
+	w.model.filter()
+	what := sorter.KindLabel[r.Kind]
+	for _, p := range []string{r.Object, r.Filter} {
+		if p != "" {
+			what += ", " + p
+		}
+	}
+	w.onlyInfo.SetText(fmt.Sprintf("Ночь %s: %s", sorter.NightLabel(r.Night), what))
+	w.btnAll.SetVisible(true)
+	w.tabs.SetCurrentIndex(0)
+}
+
+// showAll ends showing one line of the summary.
+func (w *window) showAll() {
+	w.model.only = nil
+	w.model.filter()
+	w.onlyInfo.SetText("")
+	w.btnAll.SetVisible(false)
 }
 
 func (w *window) openOut() {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -31,7 +32,8 @@ type frameModel struct {
 	walk.TableModelBase
 	walk.SorterBase
 	all, rows []row
-	kind      string // shown kind, "" = all, "?" = unknown
+	kind      string                // shown kind, "" = all, "?" = unknown
+	only      map[*sorter.Item]bool // the frames of a line of the summary, nil = all
 }
 
 func (m *frameModel) RowCount() int { return len(m.rows) }
@@ -125,7 +127,7 @@ func (m *frameModel) Sort(col int, order walk.SortOrder) error {
 
 // set replaces the frames shown.
 func (m *frameModel) set(l *sorter.Layout) {
-	m.all = nil
+	m.all, m.only = nil, nil
 	if l != nil {
 		for _, it := range l.Items {
 			if !it.InPlace() {
@@ -142,9 +144,63 @@ func (m *frameModel) set(l *sorter.Layout) {
 func (m *frameModel) filter() {
 	m.rows = m.rows[:0]
 	for _, r := range m.all {
+		if m.only != nil && !m.only[r.it] {
+			continue
+		}
 		if m.kind == "" || m.kind == "?" && r.it == nil || r.f.Kind == m.kind && r.it != nil {
 			m.rows = append(m.rows, r)
 		}
 	}
 	m.Sort(m.SortedColumn(), m.SortOrder())
+}
+
+// nightModel is the summary by night.
+type nightModel struct {
+	walk.TableModelBase
+	rows []*sorter.NightRow
+}
+
+var nightColumns = []struct {
+	title string
+	width int
+	right bool
+}{
+	{"Ночь", 95, false}, {"Объект", 120, false}, {"Тип", 70, false}, {"Фильтр", 55, false},
+	{"Кадров", 55, true}, {"Выдержка", 90, true}, {"Накопление", 90, true}, {"В выходном", 80, true},
+}
+
+func (m *nightModel) RowCount() int { return len(m.rows) }
+
+func (m *nightModel) Value(i, col int) interface{} {
+	r := m.rows[i]
+	switch col {
+	case 0:
+		if i > 0 && m.rows[i-1].Night == r.Night {
+			return "" // the night is written once
+		}
+		return sorter.NightLabel(r.Night)
+	case 1:
+		return r.Object
+	case 2:
+		return sorter.KindLabel[r.Kind]
+	case 3:
+		return r.Filter
+	case 4:
+		return strconv.Itoa(r.Frames)
+	case 5:
+		return r.ExposureText()
+	case 6:
+		return sorter.FormatDuration(r.Seconds)
+	case 7:
+		if r.Here == r.Frames {
+			return "все"
+		}
+		return fmt.Sprintf("%d из %d", r.Here, r.Frames)
+	}
+	return ""
+}
+
+func (m *nightModel) set(rows []*sorter.NightRow) {
+	m.rows = rows
+	m.PublishRowsReset()
 }
