@@ -9,19 +9,14 @@
 
 ![Страница приёмника: агент, скорость, передача](docs/images/receiver-page.png)
 
-```
- Обсерватория (локальная сеть)                    Интернет                Дом
-┌─────────┐   SMB (гость)   ┌──────────────────┐   HTTPS, лимит скорости  ┌─────────────────────┐
-│ ASIAIR  │ ◄────────────── │ asiair-agent.exe │ ───────────────────────► │ asiair-receiver.exe │
-│         │   удаление      │ (трей / служба)  │ ◄─── команды удаления ── │ + веб-страница      │
-└─────────┘                 └──────────────────┘                          └─────────────────────┘
-```
+![Как всё связано: обсерватория, интернет или Tailscale, дом](docs/images/network.png)
 
 * **Агент** (`asiair-agent.exe`) работает на Windows-ПК в той же сети, что и ASIAIR. Он забирает новые снимки и отправляет их домой. Соединение всегда исходящее: в обсерватории не нужно открывать порты.
 * **Приёмник** (`asiair-receiver.exe`) работает на домашнем компьютере. Он складывает снимки в папку и показывает веб-страницу, которую можно открыть и с телефона.
 * **Связь** — на выбор: через интернет (на домашнем роутере открыт порт) или через **Tailscale**, встроенный в обе программы: ничего не нужно открывать, работает и при «сером» IP, бесплатно.
+* **Телефон** открывает ту же страницу приёмника (пароль и, по желанию, одноразовый код), а **сортировщик** (`asiair-sorter.exe`) на компьютере для обработки забирает кадры с приёмника по сети и раскладывает их для Siril.
 
-> **In English.** ASIAIR Transmit Photo moves the frames from a ZWO ASIAIR in a remote observatory to your home computer over the internet: an agent next to the ASIAIR reads its SMB shares and uploads new files (resumable, SHA-256 verified, rate-limited), a receiver at home stores them and serves a web page — FITS viewer with auto-stretch, frame quality (stars, HFR), per-night summary, remote deletion on the ASIAIR, phone access. Works through a port forward or the built-in Tailscale. Windows programs, interface in Russian.
+> **In English.** ASIAIR Transmit Photo moves the frames from a ZWO ASIAIR in a remote observatory to your home computer over the internet: an agent next to the ASIAIR reads its SMB shares and uploads new files (resumable, SHA-256 verified, rate-limited), a receiver at home stores them and serves a web page — FITS viewer with auto-stretch, frame quality (stars, HFR), per-night summary, remote deletion on the ASIAIR, phone access. A third program, the sorter, lays the frames out for Siril (sessions by object and night, a calibration library) — from a folder or from the receiver over the network. Works through a port forward or the built-in Tailscale. Windows programs, interface in Russian.
 
 ## Содержание
 
