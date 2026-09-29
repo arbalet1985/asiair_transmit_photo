@@ -324,6 +324,13 @@
         <div class="unext" id="uNext" hidden></div>
         <div class="line muted" id="uSpeed">—</div>
         <div class="line diag" id="uDiag" hidden></div>
+        <h3>Проверка скорости</h3>
+        <div class="toolbar" style="margin:4px 0 2px">
+          <button id="stNet" title="Агент несколько секунд шлёт приёмнику пустые данные без ограничения скорости">Агент → приёмник</button>
+          <button id="stRead" title="Агент несколько секунд читает самый большой файл каждого хранилища ASIAIR">ASIAIR → агент</button>
+        </div>
+        <div class="line" id="stResult"></div>
+        <div class="hint" id="stHint">«Агент → приёмник» — сколько пропускает интернет обсерватории и Tailscale (8 с, без ограничения скорости, столько соединений, сколько «Одновременно файлов»). «ASIAIR → агент» — чтение по сети с внутренней памяти, SD-карты и флешки ASIAIR по отдельности (до 6 с на каждое, с текущим блоком и числом запросов). Передача в это время идёт как обычно и делит канал — для точного результата поставьте её на паузу.</div>
         <h3>Всего</h3>
         <div class="progress total"><div id="tBar"></div></div>
         <div class="line" id="tLine">—</div>
@@ -1268,6 +1275,7 @@ function renderStatus() {
   $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
   renderRate();
   renderBlock();
+  renderSpeedTest();
   renderStreams();
   renderOrder();
   renderSchedule();
@@ -1614,6 +1622,10 @@ function renderUploads(a) {
     const b = document.createElement("b");
     b.textContent = "Диагностика: ";
     $("uDiag").append(b, d.text || "нет данных: файлы сейчас не передаются");
+    if (d.shares && d.shares.length) {
+      $("uDiag").append(el("div", { textContent: "Чтение по хранилищам: " +
+        d.shares.map(x => `${shareLabel(x.share)} — ${x.speed ? "~" + fmtBytes(x.speed) + "/s на поток" : "не задерживает"}`).join(" · ") }));
+    }
     if (d.path) {
       const p = document.createElement("div");
       p.textContent = "Tailscale: " + d.path;
@@ -1636,6 +1648,45 @@ function renderStreams() {
   $("streamsNow").textContent = !a.version ? "" :
     a.streams ? (a.streams === state.streams ? "" : `у агента сейчас: ${a.streams}`) : "агент старой версии передаёт по одному файлу";
 }
+
+// ---------- speed tests ----------
+function renderSpeedTest() {
+  const a = state.agent || {}, r = a.speed_test, pending = state.speed_pending;
+  const old = a.version && !a.read_depth; // agents before the speed tests
+  const busy = !!pending || !!(r && r.running);
+  for (const id of ["stNet", "stRead"]) $(id).disabled = busy || old || !state.agent_online;
+  const out = $("stResult");
+  out.className = "line";
+  if (old) { out.textContent = "Агент этой версии не умеет проверять скорость — нужна новая версия агента."; return; }
+  if (busy) {
+    const kind = (pending || r).kind;
+    out.replaceChildren();
+    out.textContent = kind === "network" ? "Идёт проверка «агент → приёмник» (около 10 с)…" : "Идёт проверка чтения с ASIAIR (до 6 с на хранилище)…";
+    if (pending && !state.agent_online) out.textContent = "Проверка начнётся, когда агент выйдет на связь.";
+    return;
+  }
+  const res = { ...(state.speed_results || {}) };
+  if (r && !r.running && (!res[r.kind] || res[r.kind].id !== r.id)) res[r.kind] = r; // not stored yet
+  const when = x => x.done && !x.done.startsWith("0001") ? ` (${fmtClock(x.done)})` : "";
+  const lines = [];
+  const n = res.network;
+  if (n) lines.push(n.error ? el("div", { className: "err", textContent: "Агент → приёмник" + when(n) + ": не удалось — " + n.error })
+    : el("div", { textContent: `Агент → приёмник${when(n)}: ${fmtBytes(n.speed)}/s — ${fmtBytes(n.bytes)} за ${n.seconds.toFixed(1)} с, соединений: ${n.streams}` }));
+  const rd = res.asiair;
+  if (rd) {
+    if (rd.error) lines.push(el("div", { className: "err", textContent: "ASIAIR → агент" + when(rd) + ": не удалось — " + rd.error }));
+    else lines.push(el("div", { textContent: "ASIAIR → агент" + when(rd) + ": " }, ...(rd.shares || []).map((x, i) => el("span", {
+      className: x.error ? "err" : "", title: x.file || "",
+      textContent: (i ? " · " : "") + `${shareLabel(x.share)} ` + (x.error ? "ошибка — " + x.error : `${fmtBytes(x.speed)}/s`) }))));
+  }
+  out.replaceChildren(...lines);
+}
+async function speedTest(kind) {
+  try { await post("/ui/api/speedtest", { kind }); refresh(); }
+  catch (e) { alert("Ошибка: " + e.message); }
+}
+$("stNet").onclick = () => speedTest("network");
+$("stRead").onclick = () => speedTest("asiair");
 
 // ---------- order, schedule, cleanup ----------
 $("order").onchange = async () => {

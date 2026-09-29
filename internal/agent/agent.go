@@ -926,7 +926,8 @@ func (a *Agent) uploadOnce(u *upload) error {
 	u.done.Store(offset)
 	u.started.Store(true)
 
-	read := &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag}
+	share, _, _ := strings.Cut(f.Path, "/")
+	read := &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, share: share}
 	body := &timedBody{d: &a.diag, r: a.lim.Reader(ctx, &progressReader{r: io.TeeReader(read, h), n: &u.done})}
 	q.Set("offset", strconv.FormatInt(offset, 10))
 	start := time.Now()
@@ -1164,6 +1165,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.setDiskFull(resp.DiskFull)
 	a.maybeUpdate(ctx, resp.Update)
 	a.setRemotePaused(resp.Paused, resp.WaitStart)
+	a.startSpeedTest(ctx, resp.SpeedTest)
 	for _, c := range resp.Commands {
 		if ctx.Err() != nil {
 			return held, nil

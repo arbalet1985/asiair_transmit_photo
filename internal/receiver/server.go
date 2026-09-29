@@ -226,6 +226,7 @@ func (s *Server) apiHandler() http.Handler {
 	mux.HandleFunc("/api/inventory", s.handleInventory)
 	mux.HandleFunc("/api/result", s.handleResult)
 	mux.HandleFunc("/api/update/agent", s.handleUpdateAgent)
+	mux.HandleFunc("/api/speedtest", s.handleSpeedTest)
 	return s.auth(mux)
 }
 
@@ -454,6 +455,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
 	mux.HandleFunc("/ui/api/readblock", s.handleUIReadBlock)
+	mux.HandleFunc("/ui/api/speedtest", s.handleUISpeedTest)
 	mux.HandleFunc("/ui/api/speed", s.handleUISpeed)
 	mux.HandleFunc("/ui/api/cleanup", s.handleUICleanup)
 	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)
@@ -511,33 +513,35 @@ func (s *Server) uiAuth(next http.Handler) http.Handler {
 }
 
 type uiState struct {
-	Files         []uiFile             `json:"files"`
-	Commands      []*Command           `json:"commands"`
-	MaxRate       *int64               `json:"max_rate"`
-	Streams       int                  `json:"streams"`
-	ReadBlock     readBlockInfo        `json:"read_block"`
-	Order         string               `json:"order"`
-	Cleanup       CleanupSettings      `json:"cleanup"`
-	Schedule      ScheduleSettings     `json:"schedule"`
-	ScheduleOn    bool                 `json:"schedule_on"` // the window is open now
-	Site          Site                 `json:"site"`
-	ObsTZ         obsTZ                `json:"obs_tz"`
-	Paused        bool                 `json:"paused"`
-	WaitStart     bool                 `json:"wait_start"`
-	Fetch         []string             `json:"fetch"`
-	SyncDirs      []string             `json:"sync_dirs"`
-	Agent         protocol.AgentStatus `json:"agent"`
-	AgentOnline   bool                 `json:"agent_online"`
-	LastSeen      time.Time            `json:"last_seen"`
-	InventoryTime time.Time            `json:"inventory_time"`
-	Fingerprint   string               `json:"fingerprint"`
-	DestDir       string               `json:"dest_dir"`
-	Disk          diskInfo             `json:"disk"`
-	Update        updateInfo           `json:"update"`
-	Totals        uiTotals             `json:"totals"`
-	Tailscale     tsInfo               `json:"tailscale"`
-	Network       netInfo              `json:"network"`
-	RemoteAccess  remoteInfo           `json:"remote_access"`
+	Files         []uiFile                        `json:"files"`
+	Commands      []*Command                      `json:"commands"`
+	MaxRate       *int64                          `json:"max_rate"`
+	Streams       int                             `json:"streams"`
+	ReadBlock     readBlockInfo                   `json:"read_block"`
+	SpeedPending  *protocol.SpeedTest             `json:"speed_pending,omitempty"`
+	SpeedResults  map[string]protocol.SpeedResult `json:"speed_results,omitempty"`
+	Order         string                          `json:"order"`
+	Cleanup       CleanupSettings                 `json:"cleanup"`
+	Schedule      ScheduleSettings                `json:"schedule"`
+	ScheduleOn    bool                            `json:"schedule_on"` // the window is open now
+	Site          Site                            `json:"site"`
+	ObsTZ         obsTZ                           `json:"obs_tz"`
+	Paused        bool                            `json:"paused"`
+	WaitStart     bool                            `json:"wait_start"`
+	Fetch         []string                        `json:"fetch"`
+	SyncDirs      []string                        `json:"sync_dirs"`
+	Agent         protocol.AgentStatus            `json:"agent"`
+	AgentOnline   bool                            `json:"agent_online"`
+	LastSeen      time.Time                       `json:"last_seen"`
+	InventoryTime time.Time                       `json:"inventory_time"`
+	Fingerprint   string                          `json:"fingerprint"`
+	DestDir       string                          `json:"dest_dir"`
+	Disk          diskInfo                        `json:"disk"`
+	Update        updateInfo                      `json:"update"`
+	Totals        uiTotals                        `json:"totals"`
+	Tailscale     tsInfo                          `json:"tailscale"`
+	Network       netInfo                         `json:"network"`
+	RemoteAccess  remoteInfo                      `json:"remote_access"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -561,11 +565,13 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out := uiState{
-		Files:    files,
-		Totals:   totals,
-		Commands: snap.Commands,
-		MaxRate:  snap.MaxRate,
-		Streams:  s.state.Streams(),
+		Files:        files,
+		Totals:       totals,
+		Commands:     snap.Commands,
+		MaxRate:      snap.MaxRate,
+		Streams:      s.state.Streams(),
+		SpeedPending: s.state.SpeedTestPending(),
+		SpeedResults: snap.SpeedResults,
 		ReadBlock: readBlockInfo{Set: snap.ReadBlock, Default: source.DefaultReadBlock, Min: source.MinReadBlock, Max: source.MaxReadBlock,
 			DepthSet: snap.ReadDepth, DepthDefault: source.DefaultReadDepth, DepthMax: source.MaxReadDepth},
 		Order:         snap.Order,
@@ -700,6 +706,40 @@ type readBlockInfo struct {
 	DepthSet     int   `json:"depth_set"`
 	DepthDefault int   `json:"depth_default"`
 	DepthMax     int   `json:"depth_max"`
+}
+
+// speedTestMax caps one connection of the network speed test.
+const speedTestMax = 4 << 30
+
+// handleSpeedTest receives the zeros of the agent's network speed test and
+// drops them: {"bytes": n}.
+func (s *Server) handleSpeedTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST", http.StatusMethodNotAllowed)
+		return
+	}
+	n, err := io.Copy(io.Discard, io.LimitReader(r.Body, speedTestMax))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]int64{"bytes": n})
+}
+
+// handleUISpeedTest: {"kind": "network"|"asiair"} asks the agent for a test.
+func (s *Server) handleUISpeedTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind string `json:"kind"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if _, err := s.state.StartSpeedTest(req.Kind); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("Приёмник: запрошена проверка скорости (%s)", req.Kind)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleUIReadBlock: {"bytes": 262144} and/or {"depth": 8}; 0 = default.

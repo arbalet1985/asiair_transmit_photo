@@ -77,6 +77,8 @@ type AgentStatus struct {
 	// Next: the files to be sent next (up to 3), in order; Done is what the
 	// receiver already has of an interrupted file.
 	Next []Upload `json:"next,omitempty"`
+	// SpeedTest: the last speed test asked from the receiver page.
+	SpeedTest *SpeedResult `json:"speed_test,omitempty"`
 	// Streams: how many files the agent sends at once (set on the receiver).
 	Streams int `json:"streams,omitempty"`
 	// ReadBlock: the size of one read from the ASIAIR in effect, bytes
@@ -166,6 +168,8 @@ type SyncResponse struct {
 	Order string `json:"order,omitempty"`
 	// Paused: the transfer is paused from the receiver page.
 	Paused bool `json:"paused,omitempty"`
+	// SpeedTest: run this speed test (once per ID).
+	SpeedTest *SpeedTest `json:"speed_test,omitempty"`
 	// WaitStart: the transfer has not been started on the receiver page yet
 	// (Paused is also set).
 	WaitStart bool `json:"wait_start,omitempty"`
@@ -214,6 +218,55 @@ type Diag struct {
 	// Text: the summary for people (without Path; "" when nothing was sent
 	// lately).
 	Text string `json:"text,omitempty"`
+	// Shares: reading per ASIAIR storage (eMMC, SD card, USB stick) over
+	// the same seconds, to tell a slow card from a slow network.
+	Shares []ShareRead `json:"shares,omitempty"`
+}
+
+// ShareRead is how fast files of one ASIAIR storage were read while
+// sending: bytes/s one stream got while it waited for the ASIAIR; 0 = the
+// reading never held the sending back.
+type ShareRead struct {
+	Share string  `json:"share"`
+	Speed float64 `json:"speed,omitempty"`
+}
+
+// Speed tests run by the agent when the receiver page asks.
+const (
+	SpeedTestNetwork = "network" // agent → receiver: raw upload speed
+	SpeedTestASIAIR  = "asiair"  // ASIAIR → agent: reading a file of every storage
+)
+
+// SpeedTest asks the agent for a measurement; ID is new for every request.
+type SpeedTest struct {
+	ID   int64  `json:"id"`
+	Kind string `json:"kind"`
+}
+
+// SpeedResult is the last measurement of the agent.
+type SpeedResult struct {
+	ID      int64     `json:"id"`
+	Kind    string    `json:"kind"`
+	Running bool      `json:"running,omitempty"`
+	Error   string    `json:"error,omitempty"`
+	Done    time.Time `json:"done,omitempty"`
+	// network: bytes sent over Streams connections in Seconds
+	Bytes   int64   `json:"bytes,omitempty"`
+	Seconds float64 `json:"seconds,omitempty"`
+	Speed   float64 `json:"speed,omitempty"` // bytes/s
+	Streams int     `json:"streams,omitempty"`
+	// asiair: one file of every storage read with the current settings
+	Shares []ShareSpeed `json:"shares,omitempty"`
+}
+
+// ShareSpeed is the reading test of one ASIAIR storage.
+type ShareSpeed struct {
+	Share   string  `json:"share"`
+	File    string  `json:"file,omitempty"`
+	Bytes   int64   `json:"bytes,omitempty"`
+	Seconds float64 `json:"seconds,omitempty"`
+	Speed   float64 `json:"speed,omitempty"`
+	Error   string  `json:"error,omitempty"`
 }
 
 // MaxStreams limits the files sent at once; DefaultStreams is used until
