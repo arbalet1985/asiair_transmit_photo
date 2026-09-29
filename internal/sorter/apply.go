@@ -34,7 +34,7 @@ type Options struct {
 // Result counts what Apply did.
 type Result struct {
 	Placed, Skipped, Calibration int
-	Moved                        int // library frames moved to a new layout
+	Moved                        int   // library frames moved to a new layout
 	Downloaded                   int64 // bytes fetched from a receiver
 	Errors                       []error
 }
