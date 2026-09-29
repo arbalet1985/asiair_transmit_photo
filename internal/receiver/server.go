@@ -561,12 +561,13 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out := uiState{
-		Files:         files,
-		Totals:        totals,
-		Commands:      snap.Commands,
-		MaxRate:       snap.MaxRate,
-		Streams:       s.state.Streams(),
-		ReadBlock:     readBlockInfo{Set: snap.ReadBlock, Default: source.DefaultReadBlock, Min: source.MinReadBlock, Max: source.MaxReadBlock},
+		Files:    files,
+		Totals:   totals,
+		Commands: snap.Commands,
+		MaxRate:  snap.MaxRate,
+		Streams:  s.state.Streams(),
+		ReadBlock: readBlockInfo{Set: snap.ReadBlock, Default: source.DefaultReadBlock, Min: source.MinReadBlock, Max: source.MaxReadBlock,
+			DepthSet: snap.ReadDepth, DepthDefault: source.DefaultReadDepth, DepthMax: source.MaxReadDepth},
 		Order:         snap.Order,
 		Cleanup:       snap.Cleanup,
 		Schedule:      snap.Schedule,
@@ -688,30 +689,49 @@ func (s *Server) handleUIStreams(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// readBlockInfo is the read block size set on the page (0 = the agent's
-// default) and its bounds, bytes.
+// readBlockInfo is how the agent reads from the ASIAIR, as set on the page:
+// the size of one read (bytes) and the reads of a file in flight (0 = the
+// agent's default), with their bounds.
 type readBlockInfo struct {
-	Set     int64 `json:"set"`
-	Default int64 `json:"default"`
-	Min     int64 `json:"min"`
-	Max     int64 `json:"max"`
+	Set          int64 `json:"set"`
+	Default      int64 `json:"default"`
+	Min          int64 `json:"min"`
+	Max          int64 `json:"max"`
+	DepthSet     int   `json:"depth_set"`
+	DepthDefault int   `json:"depth_default"`
+	DepthMax     int   `json:"depth_max"`
 }
 
+// handleUIReadBlock: {"bytes": 262144} and/or {"depth": 8}; 0 = default.
 func (s *Server) handleUIReadBlock(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bytes int64 `json:"bytes"`
+		Bytes *int64 `json:"bytes"`
+		Depth *int   `json:"depth"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if err := s.state.SetReadBlock(req.Bytes); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if req.Bytes != nil {
+		if err := s.state.SetReadBlock(*req.Bytes); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if *req.Bytes == 0 {
+			log.Printf("Приёмник: блок чтения с ASIAIR — по умолчанию")
+		} else {
+			log.Printf("Приёмник: блок чтения с ASIAIR: %s", config.FormatBytes(*req.Bytes))
+		}
 	}
-	if req.Bytes == 0 {
-		log.Printf("Приёмник: блок чтения с ASIAIR — по умолчанию")
-	} else {
-		log.Printf("Приёмник: блок чтения с ASIAIR: %s", config.FormatBytes(req.Bytes))
+	if req.Depth != nil {
+		if err := s.state.SetReadDepth(*req.Depth); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if *req.Depth == 0 {
+			log.Printf("Приёмник: запросов на файл одновременно — по умолчанию")
+		} else {
+			log.Printf("Приёмник: запросов на файл одновременно: %d", *req.Depth)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

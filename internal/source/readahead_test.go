@@ -101,3 +101,22 @@ func TestReadBlock(t *testing.T) {
 		t.Fatalf("small block: err %v, equal %v", err, bytes.Equal(got, data))
 	}
 }
+
+func TestReadDepth(t *testing.T) {
+	defer SetReadDepth(0)
+	for _, c := range []struct{ set, want int }{{0, DefaultReadDepth}, {3, 3}, {-1, DefaultReadDepth}, {100, MaxReadDepth}} {
+		SetReadDepth(c.set)
+		if got := ReadDepth(); got != c.want {
+			t.Errorf("SetReadDepth(%d): %d, want %d", c.set, got, c.want)
+		}
+	}
+	// one read at a time reads the file the same
+	SetReadDepth(1)
+	data := make([]byte, 3*readAheadChunk+5)
+	rand.Read(data)
+	r := newReadAhead(bytes.NewReader(data), nopCloser{}, int64(len(data)))
+	got, err := io.ReadAll(r)
+	if err != nil || !bytes.Equal(got, data) || r.depth != 1 {
+		t.Fatalf("depth 1: err %v, equal %v, depth %d", err, bytes.Equal(got, data), r.depth)
+	}
+}

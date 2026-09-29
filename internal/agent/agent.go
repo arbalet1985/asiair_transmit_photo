@@ -557,6 +557,16 @@ func (a *Agent) setReadBlock(n int64) {
 	}
 }
 
+// setReadDepth applies how many reads of one file are in flight, set on the
+// receiver page; the files opened from now on read with it.
+func (a *Agent) setReadDepth(n int) {
+	old := source.ReadDepth()
+	source.SetReadDepth(n)
+	if cur := source.ReadDepth(); cur != old {
+		log.Printf("Агент: запросов к ASIAIR на файл одновременно: %d", cur)
+	}
+}
+
 func (a *Agent) wanted(p string) bool {
 	ext := strings.ToLower(path.Ext(p))
 	if slices.Contains(a.cfg.ExcludeExtensions, ext) {
@@ -1066,6 +1076,7 @@ func (a *Agent) Status() protocol.AgentStatus {
 	}
 	a.status.Streams = int(a.streams.Load())
 	a.status.ReadBlock = source.ReadBlock()
+	a.status.ReadDepth = source.ReadDepth()
 	a.status.Next = a.status.Next[:0:0]
 	for _, f := range a.upcomingLocked(a.paused.Load(), 3) {
 		a.status.Next = append(a.status.Next, protocol.Upload{Path: f.Path, Size: f.Size, Done: min(a.partial[f.Path], f.Size)})
@@ -1148,6 +1159,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.applyRate()
 	a.setStreams(resp.Streams)
 	a.setReadBlock(resp.ReadBlock)
+	a.setReadDepth(resp.ReadDepth)
 	a.setFetch(resp.Fetch)
 	a.setDiskFull(resp.DiskFull)
 	a.maybeUpdate(ctx, resp.Update)

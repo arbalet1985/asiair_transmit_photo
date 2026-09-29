@@ -51,6 +51,8 @@ type persisted struct {
 	Streams int `json:"streams,omitempty"`
 	// ReadBlock: bytes per read from the ASIAIR; 0 = the agent's default.
 	ReadBlock int64 `json:"read_block,omitempty"`
+	// ReadDepth: reads of one file in flight; 0 = the agent's default.
+	ReadDepth int `json:"read_depth,omitempty"`
 	// Order: which files the agent sends first (OrderOldest, …).
 	Order    string           `json:"order,omitempty"`
 	Cleanup  CleanupSettings  `json:"cleanup"`
@@ -185,7 +187,7 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 		s.session, s.seq = req.Session, req.Seq
 	}
 	s.p.LastSeen = time.Now()
-	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), ReadBlock: s.p.ReadBlock, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
+	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), ReadBlock: s.p.ReadBlock, ReadDepth: s.p.ReadDepth, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
 		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}, Order: s.p.Order}
 	s.applySchedule(&resp, time.Now())
 	for _, c := range s.p.Commands {
@@ -367,6 +369,19 @@ func (s *State) SetReadBlock(n int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.p.ReadBlock = n
+	s.bump()
+	return s.save()
+}
+
+// SetReadDepth sets how many reads of one file the agent keeps in flight;
+// 0 = the agent's default.
+func (s *State) SetReadDepth(n int) error {
+	if n != 0 && (n < source.MinReadDepth || n > source.MaxReadDepth) {
+		return fmt.Errorf("число запросов на файл должно быть от %d до %d", source.MinReadDepth, source.MaxReadDepth)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.p.ReadDepth = n
 	s.bump()
 	return s.save()
 }
