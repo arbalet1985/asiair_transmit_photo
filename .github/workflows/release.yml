@@ -68,8 +68,8 @@ jobs:
           cp configs/*.example.yaml LICENSE dist/windows/
           cp configs/*.example.yaml LICENSE dist/linux/
           mkdir -p upload
-          (cd dist/windows && zip -9 "../../upload/asiair-transmit-photo-$name-windows.zip" *)
-          tar -czf "upload/asiair-transmit-photo-$name-linux-amd64.tar.gz" -C dist/linux .
+          (cd dist/windows && zip -9 "../../upload/asiair-remote-transfer-$name-windows.zip" *)
+          tar -czf "upload/asiair-remote-transfer-$name-linux-amd64.tar.gz" -C dist/linux .
           cp dist/windows/*.exe upload/
           ls -l upload
 
@@ -77,7 +77,7 @@ jobs:
         if: env.TAG == ''
         uses: actions/upload-artifact@v4
         with:
-          name: asiair-transmit-photo
+          name: asiair-remote-transfer
           path: upload/
           retention-days: 7
 

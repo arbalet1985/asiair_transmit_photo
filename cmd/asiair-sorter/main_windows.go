@@ -560,6 +560,9 @@ func (w *window) apply() {
 		w.mw.Synchronize(func() {
 			w.showNights(nights)
 			msg := fmt.Sprintf("Готово: разложено %d, уже были на месте %d", r.Placed, r.Skipped)
+			if r.Moved > 0 {
+				msg += fmt.Sprintf(", перенесено в новые папки библиотеки %d", r.Moved)
+			}
 			if r.Downloaded > 0 {
 				msg += fmt.Sprintf(", скачано %s", sorter.FormatBytes(r.Downloaded))
 			}

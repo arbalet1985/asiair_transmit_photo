@@ -1,6 +1,6 @@
-# ASIAIR Transmit Photo
+# ASIAIR Remote Transfer
 
-**Снимки с ASIAIR из удалённой обсерватории — сами у вас дома.** Две небольшие программы забирают новые кадры с ASIAIR и передают их через интернет на домашний компьютер, а в браузере показывают, что снято за ночь: FITS с авторастяжкой, оценку кадров, сводку по ночам. Лишнее можно удалить прямо на ASIAIR, не подключаясь к обсерватории.
+**Снимки с ASIAIR из удалённой обсерватории — сами у вас дома.** Две небольшие программы забирают новые кадры с ASIAIR и передают их через интернет на домашний компьютер, а в браузере показывают, что снято за ночь: FITS с авторастяжкой, оценку кадров, сводку по ночам. Лишнее можно удалить прямо на ASIAIR, не подключаясь к обсерватории. Третья программа, по желанию, раскладывает полученные кадры для обработки в Siril.
 
 [![Последний релиз](https://img.shields.io/github/v/release/arbalet1985/asiair_transmit_photo?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/arbalet1985/asiair_transmit_photo/releases/latest)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
@@ -16,7 +16,7 @@
 * **Связь** — на выбор: через интернет (на домашнем роутере открыт порт) или через **Tailscale**, встроенный в обе программы: ничего не нужно открывать, работает и при «сером» IP, бесплатно.
 * **Телефон** открывает ту же страницу приёмника (пароль и, по желанию, одноразовый код), а **сортировщик** (`asiair-sorter.exe`) на компьютере для обработки забирает кадры с приёмника по сети и раскладывает их для Siril.
 
-> **In English.** ASIAIR Transmit Photo moves the frames from a ZWO ASIAIR in a remote observatory to your home computer over the internet: an agent next to the ASIAIR reads its SMB shares and uploads new files (resumable, SHA-256 verified, rate-limited), a receiver at home stores them and serves a web page — FITS viewer with auto-stretch, frame quality (stars, HFR), per-night summary, remote deletion on the ASIAIR, phone access. A third program, the sorter, lays the frames out for Siril (sessions by object and night, a calibration library) — from a folder or from the receiver over the network. Works through a port forward or the built-in Tailscale. Windows programs, interface in Russian.
+> **In English.** ASIAIR Remote Transfer moves the frames from a ZWO ASIAIR in a remote observatory to your home computer over the internet: an agent next to the ASIAIR reads its SMB shares and uploads new files (resumable, SHA-256 verified, rate-limited), a receiver at home stores them and serves a web page — FITS viewer with auto-stretch, frame quality (stars, HFR), per-night summary, remote deletion on the ASIAIR, phone access. A third program, the sorter, lays the frames out for Siril (sessions by object and night, a calibration library) — from a folder or from the receiver over the network. Works through a port forward or the built-in Tailscale. Windows programs, interface in Russian.
 
 ## Содержание
 
@@ -92,8 +92,8 @@
 | `asiair-agent.exe` | ПК в обсерватории |
 | `asiair-receiver.exe` | домашний компьютер |
 | `asiair-sorter.exe` | раскладка полученных кадров по папкам для Siril (необязательно) |
-| `asiair-transmit-photo-…-windows.zip` | все три программы и примеры настроек одним архивом |
-| `asiair-transmit-photo-…-linux-amd64.tar.gz` | консольные версии для Linux |
+| `asiair-remote-transfer-…-windows.zip` | все три программы и примеры настроек одним архивом |
+| `asiair-remote-transfer-…-linux-amd64.tar.gz` | консольные версии для Linux |
 
 Установщика нет: каждая программа — один `.exe` без зависимостей. Положите его в отдельную папку, доступную для записи (например, `C:\ASIAIR-Agent\`; не в `C:\Program Files`), — там же программа хранит настройки и журнал.
 
@@ -419,14 +419,15 @@ ASIAIR ──SMB (Wi-Fi)──► агент ──HTTPS (интернет)─�
    ├─ Darks\ZWO ASI2600MM Pro\gain100_300s_-10C     камера, гейн, выдержка, температура
    ├─ DarkFlats\ZWO ASI2600MM Pro\gain100_1.5s      камера, гейн, выдержка
    ├─ Biases\ZWO ASI2600MM Pro\gain100              камера, гейн
-   └─ Flats\2026-09-26_Ha_gain100_1.5s              ночь, фильтр, гейн, выдержка
+   └─ Flats\ZWO ASI2600MM Pro\2026-09-26_Ha_gain100_1.5s   камера, ночь, фильтр, гейн, выдержка
 ```
 
 * **Сессия** — лайты одного объекта за одну ночь с одним фильтром, выдержкой и гейном. Если за ночь снимали несколько фильтров, у объекта будет несколько папок с этой датой.
 * **Ночь** считается с полудня до полудня по времени из имени файла ASIAIR. Поэтому флеты, снятые утром после съёмки, попадают в ту же ночь, что и лайты.
-* **Дарки и биасы** не делятся по датам: их снимают раз в несколько месяцев, и они копятся в одной папке. Температура — заданная температура охлаждения (или измеренная, округлённая до градуса). Имя камеры (`INSTRUME`) отделяет библиотеки разных камер; бининг дописывается, если он не 1 (`_bin2`).
+* **Дарки и биасы** не делятся по датам: их снимают раз в несколько месяцев, и они копятся в одной папке. Температура — заданная температура охлаждения (или измеренная, округлённая до градуса). Имя камеры (`INSTRUME`) отделяет библиотеки разных камер — дарков, биасов, дарк-флетов и флетов; бининг дописывается, если он не 1 (`_bin2`).
 * Файлы сохраняют имена ASIAIR. Уже разложенный файл (то же имя и размер) повторно не копируется. Одинаковые кадры из разных мест (например, с памяти ASIAIR и с флешки) кладутся один раз.
 * В `калибровка.txt` каждой сессии записано, из каких папок `Library` брать калибровку и чего не хватает.
+* Если библиотека собрана прежней версией (например, флеты лежат в `Library\Flats\2026-09-26_…` без имени камеры), при следующей раскладке её кадры **переносятся** в новые папки — не копируются и не скачиваются заново, а опустевшие старые папки удаляются.
 
 #### Как подбирается калибровка
 
