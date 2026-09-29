@@ -673,6 +673,7 @@
     <span class="muted" id="vPos"></span>
     <button id="vOpen" title="Открыть папку с этим файлом на этом компьютере">📂 В папке</button>
     <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
+    <label class="muted" title="Листать дальше в следующую папку, а не только в этой"><input type="checkbox" id="vCross"> все папки</label>
     <button id="vPrev" title="Предыдущий (←)">←</button>
     <button id="vNext" title="Следующий (→)">→</button>
     <button id="vClose" title="Закрыть (Esc)">✕</button>
@@ -2579,7 +2580,7 @@ $("dirChoose").onclick = async () => {
 // ---------- image viewer with auto stretch ----------
 const viewable = n => /\.(fits?|fts|jpe?g|png)$/i.test(n);
 const isFits = n => /\.(fits?|fts)$/i.test(n);
-const V = { list: [], idx: 0, img: null, req: 0, zoom: false };
+const V = { all: [], list: [], idx: 0, img: null, req: 0, zoom: false };
 
 // midtones transfer function (PixInsight STF)
 function mtf(m, x) {
@@ -2765,9 +2766,21 @@ async function toggleZoom(e) {
   box.scrollLeft = fx * target.offsetWidth - box.clientWidth / 2;
   box.scrollTop = fy * target.offsetHeight - box.clientHeight / 2;
 }
-function openViewer(path, files) {
-  V.list = files.filter(f => f.local && viewable(f.name));
+// The viewer steps through the frames of the folder of the opened one; with
+// "все папки" ticked it goes on into the next folder.
+function setViewList(path) {
+  V.list = $("vCross").checked ? V.all : V.all.filter(f => f.folder === (V.all.find(x => x.path === path) || {}).folder);
   V.idx = Math.max(0, V.list.findIndex(f => f.path === path));
+}
+$("vCross").checked = store.get("viewCross", false);
+$("vCross").onchange = () => {
+  store.set("viewCross", $("vCross").checked);
+  const f = V.list[V.idx];
+  if (f) { setViewList(f.path); showFile(); }
+};
+function openViewer(path, files) {
+  V.all = files.filter(f => f.local && viewable(f.name));
+  setViewList(path);
   V.zoom = false; $("vImgBox").classList.remove("zoom");
   $("vOpen").hidden = isRemote();
   $("viewer").showModal();
