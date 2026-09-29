@@ -49,6 +49,13 @@ type Frame struct {
 	Camera   string
 	Time     time.Time // local time at the observatory (the UTC fields hold it)
 	Night    string    // YYYY-MM-DD of the evening the night began
+
+	// Src is the receiver the frame is downloaded from (nil: a file on
+	// disk); Path is then its path there, MTime its file time and Cards
+	// its header.
+	Src   *Receiver
+	MTime time.Time
+	Cards []Card
 }
 
 // IsFITS tells FITS files by their extension.
@@ -325,22 +332,32 @@ func Scan(root string, skip func(dir string) bool, progress func(n int)) ([]Fram
 }
 
 // ScanFor reads the frames under in, and also the library already built
-// under out: its darks, flats and biases fit the new lights too, and stay
-// where they are. The output folder is left out of the input when inside it.
+// under out (ScanLibrary). The output folder is left out of the input when
+// inside it.
 func ScanFor(in, out string, progress func(n int)) ([]Frame, []error) {
 	frames, errs := Scan(in, func(dir string) bool { return out != "" && samePath(dir, out) }, progress)
-	lib := filepath.Join(out, LibraryDir)
-	if st, err := os.Stat(lib); out != "" && err == nil && st.IsDir() && !Inside(in, lib) {
-		base := len(frames)
-		more, e := Scan(lib, nil, func(n int) {
-			if progress != nil {
-				progress(base + n)
-			}
-		})
-		for i := range more {
-			more[i].Rel = LibraryDir + "/" + more[i].Rel
+	if out != "" && Inside(in, filepath.Join(out, LibraryDir)) {
+		return frames, errs // the library is the input
+	}
+	base := len(frames)
+	more, e := ScanLibrary(out, func(n int) {
+		if progress != nil {
+			progress(base + n)
 		}
-		frames, errs = append(frames, more...), append(errs, e...)
+	})
+	return append(frames, more...), append(errs, e...)
+}
+
+// ScanLibrary reads the library built under out before: its darks, flats
+// and biases fit the new lights too, and stay where they are.
+func ScanLibrary(out string, progress func(n int)) ([]Frame, []error) {
+	lib := filepath.Join(out, LibraryDir)
+	if st, err := os.Stat(lib); out == "" || err != nil || !st.IsDir() {
+		return nil, nil
+	}
+	frames, errs := Scan(lib, nil, progress)
+	for i := range frames {
+		frames[i].Rel = LibraryDir + "/" + frames[i].Rel
 	}
 	return frames, errs
 }

@@ -128,7 +128,9 @@ func (m *frameModel) set(l *sorter.Layout) {
 	m.all = nil
 	if l != nil {
 		for _, it := range l.Items {
-			m.all = append(m.all, row{f: it.Frame, it: it})
+			if !it.InPlace() {
+				m.all = append(m.all, row{f: it.Frame, it: it})
+			}
 		}
 		for _, f := range l.Unknown {
 			m.all = append(m.all, row{f: f})

@@ -1,6 +1,7 @@
 package sorter
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -164,7 +165,7 @@ func TestScanAndApply(t *testing.T) {
 		t.Fatalf("%d frames, %v", len(frames), errs)
 	}
 	l := Plan(frames)
-	r := l.Apply(out, Options{Mode: Copy, FillCalibration: true}, nil, nil)
+	r := l.Apply(context.Background(), out, Options{Mode: Copy, FillCalibration: true}, nil)
 	if len(r.Errors) > 0 || r.Placed != 5 || r.Calibration != 3 {
 		t.Fatalf("%+v", r)
 	}
@@ -191,7 +192,7 @@ func TestScanAndApply(t *testing.T) {
 		lib[i].Rel = LibraryDir + "/" + lib[i].Rel
 	}
 	frames, _ = Scan(in, nil, nil)
-	r = Plan(append(frames, lib...)).Apply(out, Options{Mode: Move}, nil, nil)
+	r = Plan(append(frames, lib...)).Apply(context.Background(), out, Options{Mode: Move}, nil)
 	if len(r.Errors) > 0 || r.Placed != 0 {
 		t.Fatalf("%+v", r)
 	}
@@ -221,7 +222,17 @@ func TestScanForOutputInside(t *testing.T) {
 	if l.Sessions[0].Darks == nil {
 		t.Fatal("the library in the output is not used")
 	}
-	if r := l.Apply(out, Options{}, nil, nil); r.Placed != 1 || len(r.Errors) > 0 {
+	if r := l.Apply(context.Background(), out, Options{}, nil); r.Placed != 1 || len(r.Errors) > 0 {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestInPlace(t *testing.T) {
+	d := frame(Dark, "", "", "2026-01-01", 300, 100, -10)
+	lib := d
+	lib.Rel = GroupDir(&d) + "/" + d.Rel
+	l := Plan([]Frame{d, lib})
+	if l.Frames() != 1 || !l.Items[1].InPlace() || l.Items[0].InPlace() {
+		t.Fatalf("%d %+v", l.Frames(), l.Items[1])
 	}
 }

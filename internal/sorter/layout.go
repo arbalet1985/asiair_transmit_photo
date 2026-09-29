@@ -64,6 +64,24 @@ func (g *Group) Seconds() float64 {
 	return s
 }
 
+// InPlace tells a duplicate that is the copy already in the output's
+// library: nothing to show or do for it.
+func (it *Item) InPlace() bool {
+	return it.Dup && it.Frame.Src == nil && strings.HasPrefix(it.Frame.Rel, LibraryDir+"/")
+}
+
+// Frames counts the frames found, the copies already in the library of
+// the output left out.
+func (l *Layout) Frames() int {
+	n := len(l.Unknown)
+	for _, it := range l.Items {
+		if !it.InPlace() {
+			n++
+		}
+	}
+	return n
+}
+
 // Count of the frames placed (duplicates left out).
 func (g *Group) Count() int {
 	n := 0

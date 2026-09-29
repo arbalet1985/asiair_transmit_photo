@@ -1,6 +1,7 @@
 package sorter
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,33 +34,67 @@ type Options struct {
 // Result counts what Apply did.
 type Result struct {
 	Placed, Skipped, Calibration int
+	Downloaded                   int64 // bytes fetched from a receiver
 	Errors                       []error
+}
+
+// Progress of Apply.
+type Progress struct {
+	Done, Total int    // files
+	Name        string // the file being placed
+	// bytes to download from a receiver: done and in all (0 without one)
+	Bytes, TotalBytes int64
 }
 
 // CalibrationFile is the note written into every session folder.
 const CalibrationFile = "калибровка.txt"
 
-// Apply lays the frames out under out. progress gets the number of files
-// done, their total and the current name; stop, when it returns true, ends
-// the work early.
-func (l *Layout) Apply(out string, opt Options, progress func(done, total int, name string), stop func() bool) Result {
+// Missing tells how many frames of a receiver are not in out yet and how
+// many bytes they take (a download begun before counts as fetched).
+func (l *Layout) Missing(out string) (files int, bytes int64) {
+	for _, it := range l.Items {
+		if it.Dup || it.Frame.Src == nil {
+			continue
+		}
+		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
+		if st, err := os.Stat(dst); err == nil && st.Size() == it.Frame.Size {
+			continue
+		}
+		files++
+		bytes += it.Frame.Size
+		if st, err := os.Stat(dst + PartSuffix); err == nil && st.Size() <= it.Frame.Size {
+			bytes -= st.Size()
+		}
+	}
+	return files, bytes
+}
+
+// Apply lays the frames out under out: files on disk are copied, moved or
+// linked, frames of a receiver downloaded (only the missing ones, resuming
+// a download that stopped). Cancelling ctx stops it early.
+func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress func(Progress)) Result {
 	var r Result
-	total := len(l.Items)
+	var p Progress
+	p.Total = len(l.Items)
 	if opt.FillCalibration {
 		for _, s := range l.Sessions {
 			for _, g := range []*Group{s.Darks, s.Flats, s.Biases} {
 				if g != nil {
-					total += g.Count()
+					p.Total += g.Count()
 				}
 			}
 		}
 	}
-	done := 0
-	step := func(name string) {
-		done++
+	_, p.TotalBytes = l.Missing(out)
+	report := func() {
 		if progress != nil {
-			progress(done, total, name)
+			progress(p)
 		}
+	}
+	step := func(name string) {
+		p.Done++
+		p.Name = name
+		report()
 	}
 	fail := func(err error) { r.Errors = append(r.Errors, err) }
 
@@ -81,16 +116,29 @@ func (l *Layout) Apply(out string, opt Options, progress func(done, total int, n
 	// where each placed frame is now, for filling the sessions
 	now := map[*Frame]string{}
 	for _, it := range l.Items {
-		if stop != nil && stop() {
+		if ctx.Err() != nil {
 			return r
 		}
-		src := it.Frame.Path
 		if it.Dup {
 			step(it.Frame.Rel)
 			continue
 		}
 		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
-		placed, err := place(src, dst, opt.Mode)
+		var placed bool
+		var err error
+		if f := it.Frame; f.Src != nil {
+			p.Name = f.Rel
+			base := p.Bytes
+			var got int64
+			placed, got, err = fetch(ctx, f, dst, func(n int64) {
+				p.Bytes = base + n
+				report()
+			})
+			p.Bytes = base + got
+			r.Downloaded += got
+		} else {
+			placed, err = place(it.Frame.Path, dst, opt.Mode)
+		}
 		switch {
 		case err != nil:
 			fail(fmt.Errorf("%s: %w", it.Frame.Rel, err))
@@ -127,11 +175,15 @@ func (l *Layout) Apply(out string, opt Options, progress func(done, total int, n
 				if it.Dup {
 					continue
 				}
-				if stop != nil && stop() {
+				if ctx.Err() != nil {
 					return r
 				}
 				src := now[it.Frame]
 				if src == "" {
+					if it.Frame.Src != nil {
+						step(it.Frame.Rel) // not downloaded: nothing to put in
+						continue
+					}
 					src = it.Frame.Path
 				}
 				placed, err := place(src, filepath.Join(dir, c.sub, filepath.Base(it.Dest)), mode)
@@ -145,6 +197,30 @@ func (l *Layout) Apply(out string, opt Options, progress func(done, total int, n
 		}
 	}
 	return r
+}
+
+// fetch downloads a frame of a receiver to dst unless it is there already.
+// It returns how many bytes came in this time.
+func fetch(ctx context.Context, f *Frame, dst string, progress func(int64)) (placed bool, got int64, err error) {
+	if st, err := os.Stat(dst); err == nil {
+		if st.Size() == f.Size {
+			return false, 0, nil
+		}
+		return false, 0, fmt.Errorf("в %s уже есть другой файл с таким именем", dst)
+	}
+	var start int64
+	if st, err := os.Stat(dst + PartSuffix); err == nil && st.Size() <= f.Size {
+		start = st.Size()
+	}
+	var last int64
+	err = f.Src.Download(ctx, f.Path, dst, f.Size, f.MTime, func(have int64) {
+		if have < start { // the receiver sent the whole file again
+			start = 0
+		}
+		last = have - start
+		progress(last)
+	})
+	return err == nil, last, err
 }
 
 // place puts src at dst. It does nothing (false) when src already is dst,
@@ -227,9 +303,9 @@ var ErrSame = errors.New("входной и выходной каталог со
 // CheckDirs tells when the folders cannot be used together.
 func CheckDirs(in, out string) error {
 	if in == "" || out == "" {
-		return errors.New("укажите входной и выходной каталоги")
+		return errors.New("укажите, откуда брать кадры и выходной каталог")
 	}
-	if samePath(in, out) {
+	if !IsURL(in) && samePath(in, out) {
 		return ErrSame
 	}
 	return nil
