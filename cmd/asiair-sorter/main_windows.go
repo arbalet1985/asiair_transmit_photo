@@ -119,7 +119,7 @@ type window struct {
 	nightTable                 *walk.TableView
 	nights                     *nightModel
 	nightTotals, onlyInfo      *walk.Label
-	btnAll, btnGone            *walk.PushButton
+	btnAll, btnGone, btnDelete *walk.PushButton
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
 	filterEdit                 *walk.LineEdit
@@ -237,7 +237,9 @@ func main() {
 					PushButton{AssignTo: &w.btnOpen, Text: "Открыть выходной каталог", OnClicked: w.openOut},
 					PushButton{AssignTo: &w.btnGone, Text: goneOn, Enabled: false, OnClicked: w.toggleGone,
 						ToolTipText: "Подсветить кадры выходного каталога, которых на приёмнике больше нет (их там удалили), и показать только их.\n" +
-							"Сортер их не трогает: удалить или оставить — решать вам. Список — по последнему «Просмотреть кадры»."},
+							"Удалить их можно кнопкой «Удалить с диска…». Список — по последнему «Просмотреть кадры»."},
+					PushButton{AssignTo: &w.btnDelete, Text: "Удалить с диска…", Visible: false, OnClicked: w.deleteGone,
+						ToolTipText: "Удалить из выходного каталога показанные кадры, удалённые на приёмнике (в Корзину, если она есть на этом диске)."},
 					HSpacer{},
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
@@ -417,6 +419,7 @@ func (w *window) setBusy(b bool) {
 	w.btnBrowseIn.SetEnabled(!b)
 	w.modeBox.SetEnabled(!b)
 	w.fillBox.SetEnabled(!b)
+	w.btnDelete.SetEnabled(!b)
 	if b {
 		w.btnApply.SetEnabled(false)
 		w.btnGone.SetEnabled(false)
@@ -511,6 +514,7 @@ func (w *window) scan() {
 			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
 			w.model.set(l, remote)
 			w.btnGone.SetText(goneOn)
+			w.btnDelete.SetVisible(false)
 			w.showAll()
 			w.showNights(nights)
 			w.summary.SetText(l.Summary())
@@ -739,6 +743,7 @@ func (w *window) toggleGone() {
 	if w.model.mark {
 		w.model.mark = false
 		w.btnGone.SetText(goneOn)
+		w.btnDelete.SetVisible(false)
 		w.showAll()
 		w.foldersChanged()
 		return
@@ -749,6 +754,7 @@ func (w *window) toggleGone() {
 	}
 	w.model.mark = true
 	w.btnGone.SetText(goneOff)
+	w.btnDelete.SetVisible(true)
 	w.model.only = w.model.gone
 	w.kindBox.SetCurrentIndex(0)
 	w.model.kind = ""
@@ -764,6 +770,78 @@ func (w *window) toggleGone() {
 	setLong(w.onlyInfo, t)
 	w.btnAll.SetVisible(true)
 	w.tabs.SetCurrentIndex(0)
+}
+
+// deleteGone deletes from the output the frames deleted on the receiver
+// that are shown now (the filter narrows them), then scans again.
+func (w *window) deleteGone() {
+	out := strings.TrimSpace(w.outEdit.Text())
+	if !w.model.mark || out != w.scannedOut {
+		return
+	}
+	var paths []string
+	var bytes int64
+	for _, r := range w.model.rows {
+		f := r.f
+		// only files of the output that no frame of the receiver matches
+		if !w.model.gone[r.it] || !f.InLibrary || f.Src != nil || !sorter.Inside(f.Path, out) {
+			continue
+		}
+		p, err := filepath.Abs(f.Path)
+		if err != nil {
+			continue
+		}
+		paths = append(paths, p)
+		bytes += f.Size
+	}
+	if len(paths) == 0 {
+		return
+	}
+	q := fmt.Sprintf("Удалить из выходного каталога кадры, которых больше нет на приёмнике: %d (%s)?\n\n"+
+		"Файлы уйдут в Корзину, если она есть на этом диске (на сетевой папке — навсегда). На приёмнике их уже нет, скачать их снова будет неоткуда.",
+		len(paths), sorter.FormatBytes(bytes))
+	if len(paths) < len(w.model.gone) {
+		q += fmt.Sprintf("\n\nУдаляются только показанные (%d из %d): фильтр или выбор строки сводки сужают список.", len(paths), len(w.model.gone))
+	}
+	if walk.MsgBox(w.mw, "ASIAIR Sorter", q, walk.MsgBoxYesNo|walk.MsgBoxIconWarning|walk.MsgBoxDefButton2) != walk.DlgCmdYes {
+		return
+	}
+	w.setBusy(true)
+	w.progress.SetMarqueeMode(true)
+	w.setStatus(fmt.Sprintf("Удаляю %d файлов…", len(paths)))
+	go func() {
+		err := recycle(paths)
+		var done int
+		var dirs []string
+		var left []string
+		for _, p := range paths {
+			if _, e := os.Stat(p); errors.Is(e, os.ErrNotExist) {
+				done++
+				dirs = append(dirs, filepath.Dir(p))
+			} else {
+				left = append(left, p)
+			}
+		}
+		sorter.RemoveEmptyDirs(dirs, out)
+		w.mw.Synchronize(func() {
+			w.progress.SetMarqueeMode(false)
+			w.setBusy(false)
+			msg := fmt.Sprintf("Удалено кадров: %d из %d.", done, len(paths))
+			icon := walk.MsgBoxIconInformation
+			if len(left) > 0 {
+				icon = walk.MsgBoxIconWarning
+				msg += fmt.Sprintf("\n\nНе удалось удалить: %d, например\n%s", len(left), left[0])
+				if err != nil {
+					msg += "\n" + err.Error()
+				}
+				log.Printf("удаление: %v; осталось %d", err, len(left))
+			}
+			w.setStatus(strings.SplitN(msg, "\n", 2)[0])
+			walk.MsgBox(w.mw, "ASIAIR Sorter", msg, icon)
+			w.layout = nil // the files are gone: the plan is made again
+			w.scan()
+		})
+	}()
 }
 
 // filterChanged shows the model filtered again and how much it shows.
