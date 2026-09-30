@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
 	"log"
 	"os"
 	"os/exec"
@@ -33,7 +32,6 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 
-	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
@@ -55,6 +53,7 @@ type settings struct {
 	Out             string                   `json:"out"`
 	Mode            int                      `json:"mode"`
 	FillCalibration bool                     `json:"fill_calibration"`
+	BlinkSpeed      int                      `json:"blink_speed,omitempty"` // half frames per second
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
 }
 
@@ -132,6 +131,14 @@ type window struct {
 	busy                       bool
 	cancel                     context.CancelFunc
 	previewGen                 atomic.Int64
+	previews                   previewCache
+	btnPlay                    *walk.PushButton
+	speedSlider                *walk.Slider
+	speedLabel                 *walk.Label
+	playing                    bool
+	playGen                    int
+	blinkShown                 time.Time // when the frame of the blink was asked for
+	previewPending             bool      // the selected frame is being read
 
 	mu    sync.Mutex // guards saved (changed from the network goroutines)
 	saved settings
@@ -305,6 +312,11 @@ func main() {
 									PushButton{Text: "Вписать", ToolTipText: "Весь кадр в окне", OnClicked: func() { w.zoom.fitAll() }},
 									PushButton{Text: "100%", ToolTipText: "Пиксель кадра в пиксель экрана", OnClicked: func() { w.zoom.actual() }},
 									HSpacer{},
+									PushButton{AssignTo: &w.btnPlay, Text: "▶ Блинк", OnClicked: w.togglePlay,
+										ToolTipText: "Показывать кадры таблицы (как они отфильтрованы) друг за другом по кругу. Масштаб и место на кадре сохраняются"},
+									Slider{AssignTo: &w.speedSlider, MinValue: 1, MaxValue: 20, Value: blinkSpeed(s), Tracking: true,
+										MinSize: Size{Width: 90}, MaxSize: Size{Width: 140}, ToolTipsHidden: true, OnValueChanged: w.speedChanged},
+									Label{AssignTo: &w.speedLabel, MinSize: Size{Width: 45}, ToolTipText: "Скорость блинка, кадров в секунду"},
 								},
 							},
 							Label{AssignTo: &w.previewInfo, EllipsisMode: EllipsisEnd, Text: "Выберите кадр — здесь будет предпросмотр (автоматическое растяжение) и заголовок FITS."},
@@ -324,6 +336,7 @@ func main() {
 	}
 	w.zoom.cw.MouseWheel().Attach(w.zoom.wheel)
 	w.zoom.changed = w.zoomChanged
+	w.speedChanged()
 	w.inputChanged()
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
@@ -463,8 +476,18 @@ func (w *window) connect(ctx context.Context, addr, password, code string) (*sor
 	return r, nil
 }
 
+// blinkSpeed: the speed of the blink kept, 2 frames per second at first.
+func blinkSpeed(s settings) int {
+	if s.BlinkSpeed < 1 || s.BlinkSpeed > 20 {
+		return 4
+	}
+	return s.BlinkSpeed
+}
+
 func (w *window) scan() {
 	s := w.settings()
+	w.setPlay(false)
+	w.previews.clear() // the frames may have changed
 	remote := sorter.IsURL(s.In)
 	if err := sorter.CheckDirs(s.In, s.Out); err != nil {
 		w.warn(err.Error())
@@ -878,9 +901,8 @@ func (w *window) openOut() {
 	exec.Command("explorer.exe", out).Start()
 }
 
-// showPreview reads the selected frame in the background: a binned,
-// auto-stretched picture and the header. A frame of a receiver is binned
-// there, so only the small preview comes over the network.
+// showPreview shows the selected frame, read in the background (or kept
+// from before).
 func (w *window) showPreview() {
 	i := w.table.CurrentIndex()
 	if i < 0 || i >= len(w.model.rows) {
@@ -888,72 +910,35 @@ func (w *window) showPreview() {
 	}
 	f := w.model.rows[i].f
 	gen := w.previewGen.Add(1)
-	name := filepath.Base(filepath.FromSlash(f.Path))
-	// fitted, a small preview is enough; closer, the full resolution
-	maxW := 1200
-	if w.zoom.scale > 1 {
-		maxW = 8000
+	maxW := w.previewWidth()
+	w.previewPending = true
+	if !w.playing {
+		setLong(w.previewInfo, "Читаю "+filepath.Base(filepath.FromSlash(f.Path))+"…")
 	}
-	setLong(w.previewInfo, "Читаю "+name+"…")
 	go func() {
-		var pic image.Image
-		var info, head string
-		var im *fits.Image
-		var err error
-		if f.Src != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			im, err = f.Src.Preview(ctx, f.Path, maxW)
-			cancel()
-			var b strings.Builder
-			for _, c := range f.Cards {
-				fmt.Fprintf(&b, "%-8s = %s\r\n", c.Key, c.Value)
-			}
-			head = b.String()
-		} else {
-			var file *os.File
-			if file, err = os.Open(f.Path); err == nil {
-				im, err = fits.Preview(file, maxW)
-				file.Close()
-			}
-			if err == nil {
-				var b strings.Builder
-				for _, k := range im.Header.Keys() {
-					fmt.Fprintf(&b, "%-8s = %s\r\n", k, im.Header.Get(k))
-				}
-				head = b.String()
-			}
-		}
-		if err == nil {
-			pic = im.Stretched()
-			info = fmt.Sprintf("%s — %d×%d", name, im.Width*im.Binning, im.Height*im.Binning)
-			if im.Bayer != "" {
-				info += ", " + im.Bayer
-			}
-			if f.Src != nil {
-				info += " (с приёмника)"
-			}
-		} else {
-			info = fmt.Sprintf("%s: %v", name, err)
-		}
+		p := w.previews.get(f, maxW)
 		w.mw.Synchronize(func() {
 			if w.previewGen.Load() != gen {
 				return // another frame was selected meanwhile
 			}
+			w.previewPending = false
 			var bmp *walk.Bitmap
-			if pic != nil {
-				bmp, _ = walk.NewBitmapFromImageForDPI(pic, 96)
+			if p.pic != nil {
+				bmp, _ = walk.NewBitmapFromImageForDPI(p.pic, 96)
 			}
 			if bmp != nil {
-				b := pic.Bounds()
-				w.zoom.setImage(bmp, b.Dx(), b.Dy(), im.Width*im.Binning)
-				w.previewFull = maxW >= 8000 || im.Binning <= 1 || im.Bayer != "" && im.Binning <= 2
+				b := p.pic.Bounds()
+				w.zoom.setImage(bmp, b.Dx(), b.Dy(), p.srcW)
+				w.previewFull = p.full
 			} else {
 				w.zoom.setImage(nil, 0, 0, 0)
 				w.previewFull = true
 			}
 			w.zoomLabel.SetText(w.zoom.label())
-			setLong(w.previewInfo, info)
-			w.header.SetText(head)
+			setLong(w.previewInfo, p.info)
+			w.header.SetText(p.head)
+			w.readAhead()
+			w.scheduleBlink()
 		})
 	}()
 }
