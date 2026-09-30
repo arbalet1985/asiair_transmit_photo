@@ -379,3 +379,22 @@ func TestMixedSessionSplits(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveEmptyDirs(t *testing.T) {
+	out := t.TempDir()
+	lights := filepath.Join(out, "Objects", "M 31", "s1", "lights")
+	os.MkdirAll(lights, 0o755)
+	os.MkdirAll(filepath.Join(out, "Objects", "M 31", "s1", "darks"), 0o755)
+	lib := filepath.Join(out, "Library", "Darks", "cam", "gain100_300s")
+	os.MkdirAll(lib, 0o755)
+	os.WriteFile(filepath.Join(out, "Library", "note.txt"), nil, 0o644)
+	RemoveEmptyDirs([]string{lights, lib}, out)
+	for p, want := range map[string]bool{
+		lights: false, filepath.Join(out, "Objects", "M 31", "s1"): true, // the session keeps its darks
+		lib: false, filepath.Join(out, "Library", "Darks"): false, filepath.Join(out, "Library"): true,
+	} {
+		if _, err := os.Stat(p); (err == nil) != want {
+			t.Errorf("%s: exists %v, want %v", p, err == nil, want)
+		}
+	}
+}

@@ -305,6 +305,16 @@ func removeEmpty(dirs map[string]bool, top string) {
 	}
 }
 
+// RemoveEmptyDirs deletes the folders left empty by deleting frames, and
+// their empty parents up to (not including) top.
+func RemoveEmptyDirs(dirs []string, top string) {
+	m := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		m[d] = true
+	}
+	removeEmpty(m, top)
+}
+
 // fetch downloads a frame of a receiver to dst unless it is there already.
 // It returns how many bytes came in this time.
 func fetch(ctx context.Context, f *Frame, dst string, progress func(int64)) (placed bool, got int64, err error) {
