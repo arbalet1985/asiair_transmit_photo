@@ -163,7 +163,7 @@ func (u *updater) setStatus(format string, args ...any) {
 // for the agent; with install, a newer receiver is installed and restarted.
 func (u *updater) check(ctx context.Context, install bool) {
 	u.mu.Lock()
-	u.checking = true
+	u.checking, u.status = true, "" // the page shows "checking" until a new status
 	u.mu.Unlock()
 	defer func() {
 		u.mu.Lock()
@@ -192,6 +192,7 @@ func (u *updater) check(ctx context.Context, install bool) {
 	u.mu.Unlock()
 	if a, ok := rel.Assets[update.AgentAsset]; ok && (have == nil || update.Newer(rel.Version, have.Version)) {
 		u.setStatus("скачивается агент %s", rel.Version)
+		c.Progress = u.progress("агент " + rel.Version)
 		dst := filepath.Join(u.dir, agentName(rel.Version))
 		sum, err := c.Download(ctx, a, dst)
 		if err != nil {
@@ -231,6 +232,7 @@ func (u *updater) check(ctx context.Context, install bool) {
 		return
 	}
 	u.setStatus("скачивается приёмник %s", rel.Version)
+	c.Progress = u.progress("приёмник " + rel.Version)
 	if _, err := c.Download(ctx, a, exe+".new"); err != nil {
 		u.fail("приёмник %s не скачан: %v", rel.Version, err)
 		return
@@ -243,6 +245,20 @@ func (u *updater) check(ctx context.Context, install bool) {
 	u.setStatus("установлен приёмник %s, перезапуск…", rel.Version)
 	if err := u.s.Restart(); err != nil {
 		u.fail("новая версия установлена, но перезапуск не удался: %v — перезапустите приёмник вручную", err)
+	}
+}
+
+// progress shows how much of a download has arrived on the page (not in
+// the log).
+func (u *updater) progress(what string) func(done, total int64) {
+	return func(done, total int64) {
+		msg := fmt.Sprintf("скачивается %s: %.1f МБ", what, float64(done)/(1<<20))
+		if total > 0 {
+			msg = fmt.Sprintf("скачивается %s: %d%% (%.1f из %.1f МБ)", what, done*100/total, float64(done)/(1<<20), float64(total)/(1<<20))
+		}
+		u.mu.Lock()
+		u.status = msg
+		u.mu.Unlock()
 	}
 }
 

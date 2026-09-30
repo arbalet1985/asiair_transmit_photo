@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -20,6 +21,11 @@ func DetachConsole() {
 	n, _, _ := procGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&ids[0])), 2)
 	if n == 1 {
 		procFreeConsole.Call()
+		// the standard handles now point at the freed console: a program
+		// started from here (restart after an update) must not inherit them
+		if f, err := os.OpenFile(os.DevNull, os.O_RDWR, 0); err == nil {
+			os.Stdin, os.Stdout, os.Stderr = f, f, f
+		}
 	}
 }
 

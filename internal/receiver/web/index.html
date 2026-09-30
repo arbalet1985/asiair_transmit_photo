@@ -1404,7 +1404,7 @@ function renderUpdate(u, a) {
   } else {
     $("upLatest").textContent = u.checking ? "проверка…" : u.checked && !u.checked.startsWith("0001") ? "не удалось узнать" : "ещё не проверялось";
   }
-  $("upStatus").textContent = u.checking ? "Проверка обновлений…" : u.status || "";
+  $("upStatus").textContent = u.status || (u.checking ? "Проверка обновлений…" : "");
   $("upErr").textContent = u.error || "";
   $("upCheck").disabled = u.checking;
   $("upInstall").disabled = u.checking;

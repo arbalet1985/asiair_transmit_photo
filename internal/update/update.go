@@ -104,6 +104,9 @@ type Client struct {
 	HTTP  *http.Client
 	// API is the API root, for tests. Default https://api.github.com.
 	API string
+	// Progress, when set, is told how much Download has received
+	// (total is 0 when unknown).
+	Progress func(done, total int64)
 }
 
 func (c *Client) api() string {
@@ -203,7 +206,28 @@ func (c *Client) Download(ctx context.Context, a Asset, dst string) (string, err
 		return "", err
 	}
 	defer resp.Body.Close()
-	return Save(resp.Body, dst, a.Size, a.SHA256)
+	var body io.Reader = resp.Body
+	if c.Progress != nil {
+		total := a.Size
+		if total <= 0 && resp.ContentLength > 0 {
+			total = resp.ContentLength
+		}
+		body = &progressReader{r: body, total: total, f: c.Progress}
+	}
+	return Save(body, dst, a.Size, a.SHA256)
+}
+
+type progressReader struct {
+	r           io.Reader
+	done, total int64
+	f           func(done, total int64)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.done += int64(n)
+	p.f(p.done, p.total)
+	return n, err
 }
 
 // Save writes r to dst through a temporary file, checking the size (when
