@@ -236,6 +236,12 @@ func TestInPlace(t *testing.T) {
 	if l.Frames() != 1 || !l.Items[1].InPlace() || l.Items[0].InPlace() {
 		t.Fatalf("%d %+v", l.Frames(), l.Items[1])
 	}
+	if len(l.Gone()) != 0 {
+		t.Fatal("a frame of the input is gone")
+	}
+	if g := Plan([]Frame{lib}).Gone(); len(g) != 1 || g[0].Frame.Rel != lib.Rel {
+		t.Fatalf("gone %+v", g)
+	}
 }
 
 func TestNights(t *testing.T) {

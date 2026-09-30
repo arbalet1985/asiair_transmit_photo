@@ -141,6 +141,9 @@ func TestSorterFromReceiver(t *testing.T) {
 	if l.Sessions[0].Darks == nil {
 		t.Fatal("the dark in the library is not used")
 	}
+	if gone := l.Gone(); len(gone) != 1 || gone[0].Frame.Kind != sorter.Dark || gone[0].Frame.Src != nil {
+		t.Fatalf("gone on the receiver: %d", len(gone))
+	}
 	if res = l.Apply(ctx, out, sorter.Options{}, nil); len(res.Errors) > 0 || res.Placed != 0 || res.Downloaded != 0 {
 		t.Fatalf("again: %+v", res)
 	}

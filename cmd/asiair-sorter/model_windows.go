@@ -51,6 +51,18 @@ type frameModel struct {
 	words     []string              // the filter: every word is somewhere in the row
 	folders   map[string]folderTotal
 	shown     folderTotal // of the rows shown
+	// gone: the frames of the output the receiver of the input has no more
+	// (nil when the input is a folder); mark highlights them
+	gone map[*sorter.Item]bool
+	mark bool
+}
+
+// goneText is the column «Куда» of a frame deleted on the receiver.
+const goneText = "— удалён на приёмнике, остался только в выходном каталоге"
+
+// marked: the row is highlighted as deleted on the receiver.
+func (m *frameModel) marked(i int) bool {
+	return m.mark && i >= 0 && i < len(m.rows) && m.gone[m.rows[i].it]
 }
 
 // folderOf: the folder of the frame in the input.
@@ -98,6 +110,8 @@ func (m *frameModel) cell(r row, col int) string {
 			return "— тип не распознан, останется на месте"
 		case r.it.Dup:
 			return "— такой же файл уже есть в списке"
+		case m.mark && m.gone[r.it]:
+			return goneText
 		}
 		return strings.ReplaceAll(r.it.Dest, "/", `\`)
 	}
@@ -150,9 +164,9 @@ func (m *frameModel) Sort(col int, order walk.SortOrder) error {
 	return m.SorterBase.Sort(col, order)
 }
 
-// set replaces the frames shown.
-func (m *frameModel) set(l *sorter.Layout) {
-	m.all, m.only = nil, nil
+// set replaces the frames shown; remote: they were read from a receiver.
+func (m *frameModel) set(l *sorter.Layout, remote bool) {
+	m.all, m.only, m.gone, m.mark = nil, nil, nil, false
 	m.folders = map[string]folderTotal{}
 	if l != nil {
 		for _, it := range l.Items {
@@ -162,6 +176,12 @@ func (m *frameModel) set(l *sorter.Layout) {
 		}
 		for _, f := range l.Unknown {
 			m.all = append(m.all, row{f: f})
+		}
+		if remote {
+			m.gone = map[*sorter.Item]bool{}
+			for _, it := range l.Gone() {
+				m.gone[it] = true
+			}
 		}
 	}
 	for _, r := range m.all {
