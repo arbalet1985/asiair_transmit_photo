@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
@@ -20,6 +21,8 @@ type preview struct {
 	info, head string
 	srcW       int  // width of the frame on the sensor
 	full       bool // the picture has the full resolution
+	moon       *moon.Info
+	obj        *skyObject
 	err        error
 }
 
@@ -136,6 +139,18 @@ func readPreview(f *sorter.Frame, maxW int) *preview {
 		p.info = fmt.Sprintf("%s: %v", name, err)
 		return p
 	}
+	get := im.Header.Get
+	if f.Src != nil {
+		get = func(k string) string {
+			for _, c := range f.Cards {
+				if c.Key == k {
+					return c.Value
+				}
+			}
+			return ""
+		}
+	}
+	p.moon, p.obj = frameSky(f, get)
 	p.pic = im.Stretched()
 	p.srcW = im.Width * im.Binning
 	p.full = maxW >= fullWidth || im.Binning <= 1 || im.Bayer != "" && im.Binning <= 2

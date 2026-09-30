@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 )
 
 // Site is where the observatory is: the web page uses it to tell how high
@@ -33,36 +33,7 @@ func (s *State) SetSite(site Site) error {
 	return s.save()
 }
 
-// parseAngle reads 55.75, "55.75", "55 45 00", "+55:45:00" or "55d45m00s".
-func parseAngle(v string) (float64, bool) {
-	v = strings.TrimSpace(strings.Trim(strings.TrimSpace(v), "'"))
-	if v == "" {
-		return 0, false
-	}
-	if f, err := strconv.ParseFloat(v, 64); err == nil {
-		return f, true
-	}
-	neg := strings.HasPrefix(v, "-")
-	v = strings.TrimLeft(v, "+-")
-	parts := strings.FieldsFunc(v, func(r rune) bool {
-		return r == ' ' || r == ':' || r == 'd' || r == 'm' || r == 's' || r == '°' || r == '\'' || r == '"'
-	})
-	if len(parts) == 0 || len(parts) > 3 {
-		return 0, false
-	}
-	deg := 0.0
-	for i, p := range parts {
-		f, err := strconv.ParseFloat(p, 64)
-		if err != nil {
-			return 0, false
-		}
-		deg += f / math.Pow(60, float64(i))
-	}
-	if neg {
-		deg = -deg
-	}
-	return deg, true
-}
+func parseAngle(v string) (float64, bool) { return moon.ParseAngle(v) }
 
 // siteFromHeader reads the coordinates ASIAIR writes into its FITS files.
 func siteFromHeader(h *fits.Header) (Site, bool) {

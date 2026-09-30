@@ -14,7 +14,15 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
+)
+
+// How long a new receiver has to start before the watchdog puts the old
+// one back (a service is started again by Windows only after 30 s).
+var (
+	healthDeadline        = 3 * time.Minute
+	healthDeadlineService = 6 * time.Minute
 )
 
 // How often GitHub is asked for a new release.
@@ -51,6 +59,7 @@ type updater struct {
 	err      string
 	status   string
 	agent    *agentFile
+	rolledBack *update.Rollback // the last update of the receiver that was undone
 	wake     chan bool // a check asked on the page; true = also install
 }
 
@@ -103,6 +112,19 @@ func (u *updater) canSelfUpdate() bool {
 
 func (u *updater) run(ctx context.Context) {
 	if exe, err := update.Executable(); err == nil {
+		if rb := update.ReadRollback(exe); rb != nil && rb.From == protocol.Version {
+			msg := fmt.Sprintf("обновление приёмника до %s не удалось (%s), %s возвращена версия %s; эта версия больше не ставится автоматически",
+				rb.Version, rb.Reason, rb.Time.Local().Format("02.01 15:04"), rb.From)
+			u.mu.Lock()
+			u.rolledBack, u.err = rb, msg
+			u.mu.Unlock()
+			log.Printf("Обновление: %s", msg)
+		}
+		// the server is up: tell the watchdog of an update that it worked
+		if update.Started(exe, protocol.Version) {
+			update.Healthy(exe, protocol.Version)
+			log.Printf("Обновление: версия %s запущена, старая копия больше не нужна", protocol.Version)
+		}
 		update.Cleanup(exe)
 		// the old copy may still be running for a moment after a restart
 		time.AfterFunc(time.Minute, func() { update.Cleanup(exe) })
@@ -122,7 +144,7 @@ func (u *updater) run(ctx context.Context) {
 		auto := u.auto
 		u.mu.Unlock()
 		if auto || asked {
-			u.check(ctx, auto || install)
+			u.check(ctx, auto || install, install)
 		}
 		if !t.Stop() {
 			select {
@@ -161,7 +183,7 @@ func (u *updater) setStatus(format string, args ...any) {
 
 // check asks GitHub for the latest release and downloads the agent program
 // for the agent; with install, a newer receiver is installed and restarted.
-func (u *updater) check(ctx context.Context, install bool) {
+func (u *updater) check(ctx context.Context, install, asked bool) {
 	u.mu.Lock()
 	u.checking, u.status = true, "" // the page shows "checking" until a new status
 	u.mu.Unlock()
@@ -221,6 +243,13 @@ func (u *updater) check(ctx context.Context, install bool) {
 		u.setStatus("вышла версия %s — установите приёмник вручную со страницы релиза", rel.Version)
 		return
 	}
+	u.mu.Lock()
+	rb := u.rolledBack
+	u.mu.Unlock()
+	if rb != nil && rb.Version == rel.Version && !asked {
+		u.setStatus("версия %s уже не заработала и была откачена — установите её кнопкой «Обновить сейчас», если нужно", rel.Version)
+		return
+	}
 	a, ok := rel.Assets[update.ReceiverAsset]
 	if !ok {
 		u.fail("в релизе %s нет файла %s", rel.Version, update.ReceiverAsset)
@@ -241,6 +270,16 @@ func (u *updater) check(ctx context.Context, install bool) {
 		os.Remove(exe + ".new")
 		u.fail("%v", err)
 		return
+	}
+	d := healthDeadline
+	if svc.IsService() {
+		d = healthDeadlineService
+	}
+	if err := update.StartWatch(exe, update.Pending{
+		From: protocol.Version, To: rel.Version, Deadline: time.Now().Add(d),
+		Service: svc.IsService(), Args: os.Args[1:],
+	}); err != nil {
+		log.Printf("Обновление: страховка (откат) не запущена: %v", err)
 	}
 	u.setStatus("установлен приёмник %s, перезапуск…", rel.Version)
 	if err := u.s.Restart(); err != nil {

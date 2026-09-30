@@ -32,6 +32,7 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
@@ -54,6 +55,7 @@ type settings struct {
 	Mode            int                      `json:"mode"`
 	FillCalibration bool                     `json:"fill_calibration"`
 	BlinkSpeed      int                      `json:"blink_speed,omitempty"` // half frames per second
+	ShowMoon        bool                     `json:"show_moon,omitempty"`
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
 }
 
@@ -139,6 +141,10 @@ type window struct {
 	playGen                    int
 	blinkShown                 time.Time // when the frame of the blink was asked for
 	previewPending             bool      // the selected frame is being read
+	moonBox                    *walk.CheckBox
+	moonView                   *walk.CustomWidget
+	moon                       *moon.Info // of the frame shown
+	skyObj                     *skyObject
 
 	mu    sync.Mutex // guards saved (changed from the network goroutines)
 	saved settings
@@ -317,8 +323,13 @@ func main() {
 									Slider{AssignTo: &w.speedSlider, MinValue: 1, MaxValue: 20, Value: blinkSpeed(s), Tracking: true,
 										MinSize: Size{Width: 90}, MaxSize: Size{Width: 140}, ToolTipsHidden: true, OnValueChanged: w.speedChanged},
 									Label{AssignTo: &w.speedLabel, MinSize: Size{Width: 45}, ToolTipText: "Скорость блинка, кадров в секунду"},
+									CheckBox{AssignTo: &w.moonBox, Text: "Луна", Checked: s.ShowMoon, OnCheckedChanged: w.moonToggled,
+										ToolTipText: "Где была Луна и какая у неё фаза в момент съёмки кадра"},
 								},
 							},
+							CustomWidget{AssignTo: &w.moonView, PaintPixels: w.paintMoon, Visible: s.ShowMoon,
+								DoubleBuffering: true, InvalidatesOnResize: true,
+								MinSize: Size{Height: 110}, MaxSize: Size{Height: 110}},
 							Label{AssignTo: &w.previewInfo, EllipsisMode: EllipsisEnd, Text: "Выберите кадр — здесь будет предпросмотр (автоматическое растяжение) и заголовок FITS."},
 							TextEdit{AssignTo: &w.header, ReadOnly: true, VScroll: true, Font: mono, StretchFactor: 2},
 						},
@@ -937,6 +948,8 @@ func (w *window) showPreview() {
 			w.zoomLabel.SetText(w.zoom.label())
 			setLong(w.previewInfo, p.info)
 			w.header.SetText(p.head)
+			w.moon, w.skyObj = p.moon, p.obj
+			w.moonView.Invalidate()
 			w.readAhead()
 			w.scheduleBlink()
 		})

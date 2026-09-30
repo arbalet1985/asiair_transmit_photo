@@ -13,6 +13,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/receiver"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/svc"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 var app = svc.App{
@@ -103,6 +104,12 @@ func main() {
 	}
 	app.GUI = guiMain
 	app.Commands = map[string]svc.Command{
+		update.WatchCommand: {Help: "(служебная) страховка обновления: откат, если новая версия не запустилась", Run: func(_ string, args []string) error {
+			if len(args) != 1 {
+				return fmt.Errorf("нужен путь к программе")
+			}
+			return update.Watch(args[0])
+		}},
 		"token": {Help: "сгенерировать случайный токен для настроек", Run: func(string, []string) error {
 			fmt.Println(receiver.NewToken())
 			return nil

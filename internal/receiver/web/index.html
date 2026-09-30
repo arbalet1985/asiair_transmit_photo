@@ -765,6 +765,8 @@
       </div>
       <h3>Кадр</h3>
       <dl class="kv" id="vInfo"></dl>
+      <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
+      <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
     </div>
@@ -2033,6 +2035,8 @@ const moonCalc = (() => {
       const hr = Math.max(h, 0);
       h += 0.0002967 / Math.tan(hr + 0.00312536 / (hr + 0.08901179)); // refraction
       out.alt = Math.round(h / rad);
+      // from the north through the east
+      out.az = (Math.round(Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(p) - Math.tan(m.dec) * Math.cos(p)) / rad) + 540) % 360;
     }
     return out;
   };
@@ -2072,6 +2076,80 @@ function moonSummary(ms) {
   }
   return t;
 }
+// the Moon of the frame in the viewer: phase, and where it was on a strip
+// of the horizon from the north round through the east
+const compass = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"];
+// where a point of the sky (ra, dec in degrees) was at t: altitude and
+// azimuth from the north, degrees (the formulas of moonCalc)
+function skyPos(t, lat, lon, ra, dec) {
+  const rad = Math.PI / 180, d = t / 864e5 - 0.5 + 2440588 - 2451545;
+  const H = rad * (280.16 + 360.9856235 * d) + rad * lon - ra * rad, p = rad * lat, de = dec * rad;
+  let h = Math.asin(Math.sin(p) * Math.sin(de) + Math.cos(p) * Math.cos(de) * Math.cos(H));
+  const hr = Math.max(h, 0);
+  h += 0.0002967 / Math.tan(hr + 0.00312536 / (hr + 0.08901179));
+  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(p) - Math.tan(de) * Math.cos(p)) / rad + 180;
+  return { alt: Math.round(h / rad), az: Math.round((az + 360) % 360) };
+}
+// the target of a frame from its header: RA/DEC in degrees (ASIAIR) or OBJCTRA (hours)/OBJCTDEC
+function targetOf(h) {
+  const sexa = v => {
+    const m = String(v || "").trim().match(/^([+-]?)(\d+)[\s:](\d+)[\s:]([\d.]+)$/);
+    return m ? (m[1] === "-" ? -1 : 1) * (+m[2] + m[3] / 60 + m[4] / 3600) : NaN;
+  };
+  let ra = parseFloat(h.RA), dec = parseFloat(h.DEC);
+  if (isNaN(ra) || isNaN(dec)) { ra = sexa(h.OBJCTRA) * 15; dec = sexa(h.OBJCTDEC); }
+  return isNaN(ra) || isNaN(dec) ? null : { ra, dec };
+}
+function separation(a, b) {
+  const r = Math.PI / 180;
+  const c = Math.sin(a.alt * r) * Math.sin(b.alt * r) + Math.cos(a.alt * r) * Math.cos(b.alt * r) * Math.cos((a.az - b.az) * r);
+  return Math.round(Math.acos(Math.max(-1, Math.min(1, c))) / r);
+}
+function moonDisc(cx, cy, r, m) {
+  const k = m.illum / 100, rx = r * Math.abs(1 - 2 * k), w = m.waxing ? 1 : 0; // lit on the right when waxing
+  const lit = `M${cx},${cy - r}A${r},${r} 0 0 ${w} ${cx},${cy + r}A${rx},${r} 0 0 ${(k > 0.5) === m.waxing ? 1 : 0} ${cx},${cy - r}Z`;
+  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#3a3f4a" stroke="#8d96a6" stroke-width="0.5"/><path d="${lit}" fill="#f3e6b0"/>`;
+}
+function renderMoon(f, meta) {
+  const box = $("vMoonBox");
+  box.hidden = !$("vMoon").checked;
+  if (box.hidden) return;
+  const m = moonOf(f);
+  if (!m) { box.textContent = "Время съёмки кадра неизвестно"; return; }
+  const tg = m.alt !== undefined && meta && meta.header ? targetOf(meta.header) : null;
+  const obj = tg ? Object.assign(skyPos(new Date(f.mtime).getTime(), state.site.lat, state.site.lon, tg.ra, tg.dec),
+    { name: meta.header.OBJECT || "объект" }) : null;
+  let svg = `<svg viewBox="0 0 270 ${m.alt === undefined ? 40 : 96}" width="100%" style="max-width:320px;display:block" role="img" aria-label="Луна">`;
+  if (m.alt === undefined) {
+    svg += moonDisc(20, 20, 16, m);
+  } else {
+    const X = az => 12 + az / 360 * 246, horizon = 62, Y = alt => horizon - Math.max(-25, alt) / 90 * 50;
+    svg += `<rect x="12" y="${horizon}" width="246" height="22" fill="currentColor" opacity="0.08"/>`;
+    svg += `<line x1="12" y1="${horizon}" x2="258" y2="${horizon}" stroke="currentColor" opacity="0.5"/>`;
+    for (let i = 0; i <= 8; i++) {
+      const x = X(i * 45);
+      svg += `<line x1="${x}" y1="${horizon}" x2="${x}" y2="${horizon + 4}" stroke="currentColor" opacity="0.5"/>`;
+      svg += `<text x="${x}" y="${horizon + 15}" font-size="10" text-anchor="middle" fill="currentColor" opacity="0.75">${compass[i % 8]}</text>`;
+    }
+    svg += `<g opacity="${m.alt < 0 ? 0.4 : 1}">${moonDisc(X(m.az), Y(m.alt), 8, m)}</g>`;
+    if (obj) { // the object: a diamond with its name
+      const x = X(obj.az), y = Y(obj.alt), right = x < 190;
+      svg += `<g opacity="${obj.alt < 0 ? 0.45 : 1}" fill="#5ab8f0"><path d="M${x},${y - 6}L${x + 6},${y}L${x},${y + 6}L${x - 6},${y}Z"/>` +
+        `<text class="objname" x="${right ? x + 9 : x - 9}" y="${y + 4}" font-size="10" text-anchor="${right ? "start" : "end"}"></text></g>`;
+    }
+  }
+  svg += "</svg>";
+  let t = `${phaseName(m)}, освещена на ${m.illum}%`;
+  if (m.alt !== undefined) t += `; ${m.alt < 0 ? "под горизонтом (" + m.alt + "°)" : "высота " + m.alt + "°"}, азимут ${m.az}° (${compass[Math.round(m.az / 45) % 8]})`;
+  else t += "; положение — после ввода координат обсерватории";
+  box.innerHTML = svg;
+  if (obj) box.querySelector(".objname").textContent = obj.name; // the name as text, not markup
+  box.append(el("div", { className: "hint", textContent: "Луна: " + t }));
+  if (obj) box.append(el("div", { className: "hint", style: "color:#5ab8f0",
+    textContent: `${obj.name}: ${obj.alt < 0 ? "под горизонтом (" + obj.alt + "°)" : "высота " + obj.alt + "°"}, азимут ${obj.az}° (${compass[Math.round(obj.az / 45) % 8]}), до Луны ${separation(obj, m)}°` }));
+}
+$("vMoon").checked = store.get("vMoon", false);
+$("vMoon").onchange = () => { store.set("vMoon", $("vMoon").checked); if ($("viewer").open) renderMoon(V.list[V.idx], V.meta); };
 $("siteApply").onclick = async () => {
   const lat = parseFloat($("siteLat").value), lon = parseFloat($("siteLon").value);
   if (isNaN(lat) || isNaN(lon)) return alert("Введите широту и долготу, например 55.7558 и 37.6173");
@@ -3036,6 +3114,8 @@ async function showFile() {
   // the frame shown stays until the next one is ready: no blank between them
   const slow = setTimeout(() => { if (req === V.req) $("vMsg").textContent = "загрузка…"; }, V.play ? 800 : 150);
   if (!V.play) showInfo(f, null);
+  V.meta = null;
+  renderMoon(f);
   $("vStretch").hidden = !isFits(f.name);
   try {
     let node, im = null;
@@ -3055,6 +3135,8 @@ async function showFile() {
     $("vMsg").textContent = "";
     place(node);
     showInfo(f, im);
+    V.meta = im;
+    renderMoon(f, im);
     if (V.play) prefetch();
   } catch (e) {
     clearTimeout(slow);
