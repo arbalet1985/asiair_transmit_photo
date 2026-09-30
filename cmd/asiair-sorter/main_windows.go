@@ -120,15 +120,17 @@ type window struct {
 	nights                     *nightModel
 	nightTotals, onlyInfo      *walk.Label
 	btnAll                     *walk.PushButton
-	preview                    *walk.ImageView
+	zoom                       *zoomView
+	zoomLabel, shownInfo       *walk.Label
+	filterEdit                 *walk.LineEdit
 	previewInfo                *walk.Label
+	previewFull                bool // the preview shown has the full resolution
 	model                      *frameModel
 	layout                     *sorter.Layout
 	scannedIn, scannedOut      string // the input and output the layout was made for
 	busy                       bool
 	cancel                     context.CancelFunc
 	previewGen                 atomic.Int64
-	bitmap                     *walk.Bitmap
 
 	mu    sync.Mutex // guards saved (changed from the network goroutines)
 	saved settings
@@ -140,7 +142,7 @@ var kindFilters = []struct{ label, kind string }{
 }
 
 func main() {
-	w := &window{model: &frameModel{}, nights: &nightModel{}}
+	w := &window{model: &frameModel{}, nights: &nightModel{}, zoom: newZoomView()}
 	s := loadSettings()
 	w.saved = s
 	var kinds []string
@@ -238,8 +240,13 @@ func main() {
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
-						w.model.filter()
+						w.filterChanged()
 					}},
+					Label{Text: "Фильтр:"},
+					LineEdit{AssignTo: &w.filterEdit, MinSize: Size{Width: 160}, MaxSize: Size{Width: 240}, CueBanner: "объект, ночь, фильтр, папка…",
+						OnTextChanged: func() { w.model.setFilter(w.filterEdit.Text()); w.filterChanged() },
+						ToolTipText:   "Показать только кадры, где есть все эти слова (в любых столбцах): например «m31 ha 300s» или «2026-09-30 flat»."},
+					PushButton{Text: "✕", MaxSize: Size{Width: 28}, ToolTipText: "Очистить фильтр", OnClicked: func() { w.filterEdit.SetText("") }},
 				},
 			},
 			ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
@@ -254,6 +261,7 @@ func main() {
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true,
 									OnCurrentIndexChanged: w.showPreview},
+								Label{AssignTo: &w.shownInfo, EllipsisMode: EllipsisEnd, TextColor: walk.RGB(90, 90, 90)},
 							}},
 							{Title: "Сводка по ночам", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.nightTable, Model: w.nights, Columns: ncols, AlternatingRowBG: true,
@@ -273,8 +281,22 @@ func main() {
 						StretchFactor: 2,
 						Layout:        VBox{MarginsZero: true},
 						Children: []Widget{
-							ImageView{AssignTo: &w.preview, Mode: ImageViewModeZoom, StretchFactor: 3,
-								Background: SolidColorBrush{Color: walk.RGB(16, 16, 16)}, MinSize: Size{Width: 200, Height: 150}},
+							CustomWidget{AssignTo: &w.zoom.cw, PaintPixels: w.zoom.paint, StretchFactor: 3,
+								DoubleBuffering: true, InvalidatesOnResize: true, MinSize: Size{Width: 200, Height: 150},
+								OnMouseDown: w.zoom.mouseDown, OnMouseMove: w.zoom.mouseMove, OnMouseUp: w.zoom.mouseUp,
+								ToolTipText: "Колесо мыши — масштаб, перетаскивание — сдвиг увеличенного кадра"},
+							Composite{
+								Layout: HBox{MarginsZero: true},
+								Children: []Widget{
+									PushButton{Text: "−", MaxSize: Size{Width: 32}, ToolTipText: "Уменьшить", OnClicked: func() { w.zoom.zoomOut() }},
+									Label{AssignTo: &w.zoomLabel, Text: "вписано", MinSize: Size{Width: 55}, TextAlignment: AlignCenter,
+										ToolTipText: "Масштаб: 100% — пиксель кадра в пиксель экрана"},
+									PushButton{Text: "+", MaxSize: Size{Width: 32}, ToolTipText: "Увеличить", OnClicked: func() { w.zoom.zoomIn() }},
+									PushButton{Text: "Вписать", ToolTipText: "Весь кадр в окне", OnClicked: func() { w.zoom.fitAll() }},
+									PushButton{Text: "100%", ToolTipText: "Пиксель кадра в пиксель экрана", OnClicked: func() { w.zoom.actual() }},
+									HSpacer{},
+								},
+							},
 							Label{AssignTo: &w.previewInfo, EllipsisMode: EllipsisEnd, Text: "Выберите кадр — здесь будет предпросмотр (автоматическое растяжение) и заголовок FITS."},
 							TextEdit{AssignTo: &w.header, ReadOnly: true, VScroll: true, Font: mono, StretchFactor: 2},
 						},
@@ -290,6 +312,8 @@ func main() {
 	if ic, err := walk.NewIconFromResource("APP"); err == nil {
 		w.mw.SetIcon(ic)
 	}
+	w.zoom.cw.MouseWheel().Attach(w.zoom.wheel)
+	w.zoom.changed = w.zoomChanged
 	w.inputChanged()
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
@@ -662,7 +686,7 @@ func (w *window) showNight() {
 	}
 	w.kindBox.SetCurrentIndex(0) // the line is of one kind already
 	w.model.kind = ""
-	w.model.filter()
+	w.filterChanged()
 	what := sorter.KindLabel[r.Kind]
 	for _, p := range []string{r.Object, r.Filter} {
 		if p != "" {
@@ -677,9 +701,31 @@ func (w *window) showNight() {
 // showAll ends showing one line of the summary.
 func (w *window) showAll() {
 	w.model.only = nil
-	w.model.filter()
+	w.filterChanged()
 	w.onlyInfo.SetText("")
 	w.btnAll.SetVisible(false)
+}
+
+// filterChanged shows the model filtered again and how much it shows.
+func (w *window) filterChanged() {
+	w.model.filter()
+	t := ""
+	if len(w.model.all) > 0 {
+		t = fmt.Sprintf("Показано кадров: %d из %d", len(w.model.rows), len(w.model.all))
+		if w.model.shown.seconds > 0 {
+			t += ", суммарная выдержка " + sorter.FormatDuration(w.model.shown.seconds)
+		}
+		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
+	}
+	setLong(w.shownInfo, t)
+}
+
+// zoomChanged: a closer look needs the frame in its full resolution.
+func (w *window) zoomChanged() {
+	w.zoomLabel.SetText(w.zoom.label())
+	if w.zoom.scale > 1 && !w.previewFull && w.zoom.bmp != nil {
+		w.showPreview()
+	}
 }
 
 func (w *window) openOut() {
@@ -702,6 +748,11 @@ func (w *window) showPreview() {
 	f := w.model.rows[i].f
 	gen := w.previewGen.Add(1)
 	name := filepath.Base(filepath.FromSlash(f.Path))
+	// fitted, a small preview is enough; closer, the full resolution
+	maxW := 1200
+	if w.zoom.scale > 1 {
+		maxW = 8000
+	}
 	setLong(w.previewInfo, "Читаю "+name+"…")
 	go func() {
 		var pic image.Image
@@ -710,7 +761,7 @@ func (w *window) showPreview() {
 		var err error
 		if f.Src != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			im, err = f.Src.Preview(ctx, f.Path, 1200)
+			im, err = f.Src.Preview(ctx, f.Path, maxW)
 			cancel()
 			var b strings.Builder
 			for _, c := range f.Cards {
@@ -720,7 +771,7 @@ func (w *window) showPreview() {
 		} else {
 			var file *os.File
 			if file, err = os.Open(f.Path); err == nil {
-				im, err = fits.Preview(file, 1200)
+				im, err = fits.Preview(file, maxW)
 				file.Close()
 			}
 			if err == nil {
@@ -752,14 +803,14 @@ func (w *window) showPreview() {
 				bmp, _ = walk.NewBitmapFromImageForDPI(pic, 96)
 			}
 			if bmp != nil {
-				w.preview.SetImage(bmp)
+				b := pic.Bounds()
+				w.zoom.setImage(bmp, b.Dx(), b.Dy(), im.Width*im.Binning)
+				w.previewFull = maxW >= 8000 || im.Binning <= 1 || im.Bayer != "" && im.Binning <= 2
 			} else {
-				w.preview.SetImage(nil)
+				w.zoom.setImage(nil, 0, 0, 0)
+				w.previewFull = true
 			}
-			if w.bitmap != nil {
-				w.bitmap.Dispose()
-			}
-			w.bitmap = bmp
+			w.zoomLabel.SetText(w.zoom.label())
 			setLong(w.previewInfo, info)
 			w.header.SetText(head)
 		})
