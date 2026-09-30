@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,7 +26,20 @@ var columns = []struct {
 }{
 	{"Тип", 70, false}, {"Объект", 110, false}, {"Ночь", 80, false}, {"Фильтр", 55, false},
 	{"Выдержка", 70, true}, {"Гейн", 45, true}, {"Темп.", 45, true}, {"Камера", 120, false},
-	{"Файл", 320, false}, {"Куда", 420, false},
+	{"Файл", 320, false}, {"В папке", 110, true}, {"Куда", 420, false},
+}
+
+// folderTotal: the frames of a folder of the input and their exposure.
+type folderTotal struct {
+	frames  int
+	seconds float64
+}
+
+func (t folderTotal) String() string {
+	if t.seconds <= 0 {
+		return fmt.Sprintf("%d кадр.", t.frames)
+	}
+	return fmt.Sprintf("%d · %s", t.frames, sorter.FormatDuration(t.seconds))
 }
 
 type frameModel struct {
@@ -34,12 +48,19 @@ type frameModel struct {
 	all, rows []row
 	kind      string                // shown kind, "" = all, "?" = unknown
 	only      map[*sorter.Item]bool // the frames of a line of the summary, nil = all
+	words     []string              // the filter: every word is somewhere in the row
+	folders   map[string]folderTotal
+	shown     folderTotal // of the rows shown
 }
+
+// folderOf: the folder of the frame in the input.
+func folderOf(f *sorter.Frame) string { return path.Dir(f.Rel) }
 
 func (m *frameModel) RowCount() int { return len(m.rows) }
 
-func (m *frameModel) Value(i, col int) interface{} {
-	r := m.rows[i]
+func (m *frameModel) Value(i, col int) interface{} { return m.cell(m.rows[i], col) }
+
+func (m *frameModel) cell(r row, col int) string {
 	f := r.f
 	switch col {
 	case 0:
@@ -70,6 +91,8 @@ func (m *frameModel) Value(i, col int) interface{} {
 	case 8:
 		return strings.ReplaceAll(f.Rel, "/", `\`)
 	case 9:
+		return m.folders[folderOf(f)].String()
+	case 10:
 		switch {
 		case r.it == nil:
 			return "— тип не распознан, останется на месте"
@@ -93,6 +116,8 @@ func (m *frameModel) num(r row, col int) (float64, bool) {
 			return -1e9, true
 		}
 		return r.f.Temp, true
+	case 9:
+		return m.folders[folderOf(r.f)].seconds, true
 	}
 	return 0, false
 }
@@ -128,6 +153,7 @@ func (m *frameModel) Sort(col int, order walk.SortOrder) error {
 // set replaces the frames shown.
 func (m *frameModel) set(l *sorter.Layout) {
 	m.all, m.only = nil, nil
+	m.folders = map[string]folderTotal{}
 	if l != nil {
 		for _, it := range l.Items {
 			if !it.InPlace() {
@@ -138,17 +164,57 @@ func (m *frameModel) set(l *sorter.Layout) {
 			m.all = append(m.all, row{f: f})
 		}
 	}
+	for _, r := range m.all {
+		if r.it == nil || r.it.Dup {
+			continue // a copy of a frame counted already, or not a frame of a known kind
+		}
+		t := m.folders[folderOf(r.f)]
+		t.frames++
+		t.seconds += r.f.Exposure
+		m.folders[folderOf(r.f)] = t
+	}
 	m.filter()
+}
+
+// setFilter takes the text of the filter field: words separated by spaces.
+func (m *frameModel) setFilter(text string) {
+	m.words = strings.Fields(strings.ToLower(text))
+	m.filter()
+}
+
+// matches: every word of the filter is in some column of the row.
+func (m *frameModel) matches(r row) bool {
+	var b strings.Builder
+	for col := range columns {
+		b.WriteString(strings.ToLower(m.cell(r, col)))
+		b.WriteByte('\n')
+	}
+	text := b.String()
+	for _, w := range m.words {
+		if !strings.Contains(text, w) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *frameModel) filter() {
 	m.rows = m.rows[:0]
+	m.shown = folderTotal{}
 	for _, r := range m.all {
 		if m.only != nil && !m.only[r.it] {
 			continue
 		}
-		if m.kind == "" || m.kind == "?" && r.it == nil || r.f.Kind == m.kind && r.it != nil {
-			m.rows = append(m.rows, r)
+		if !(m.kind == "" || m.kind == "?" && r.it == nil || r.f.Kind == m.kind && r.it != nil) {
+			continue
+		}
+		if len(m.words) > 0 && !m.matches(r) {
+			continue
+		}
+		m.rows = append(m.rows, r)
+		if r.it != nil && !r.it.Dup {
+			m.shown.frames++
+			m.shown.seconds += r.f.Exposure
 		}
 	}
 	m.Sort(m.SortedColumn(), m.SortOrder())
