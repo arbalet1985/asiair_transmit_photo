@@ -48,19 +48,19 @@ type updater struct {
 	s   *Server
 	dir string // where the agent program is kept
 
-	mu       sync.Mutex
-	auto     bool
-	token    string
-	repo     string
-	manual   bool // "Обновить сейчас": hand out the agent even with auto off
-	checking bool
-	checked  time.Time
-	latest   *update.Release
-	err      string
-	status   string
-	agent    *agentFile
+	mu         sync.Mutex
+	auto       bool
+	token      string
+	repo       string
+	manual     bool // "Обновить сейчас": hand out the agent even with auto off
+	checking   bool
+	checked    time.Time
+	latest     *update.Release
+	err        string
+	status     string
+	agent      *agentFile
 	rolledBack *update.Rollback // the last update of the receiver that was undone
-	wake     chan bool // a check asked on the page; true = also install
+	wake       chan bool        // a check asked on the page; true = also install
 }
 
 func newUpdater(s *Server) *updater {
