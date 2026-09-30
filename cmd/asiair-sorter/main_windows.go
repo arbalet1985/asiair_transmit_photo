@@ -119,7 +119,7 @@ type window struct {
 	nightTable                 *walk.TableView
 	nights                     *nightModel
 	nightTotals, onlyInfo      *walk.Label
-	btnAll                     *walk.PushButton
+	btnAll, btnGone            *walk.PushButton
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
 	filterEdit                 *walk.LineEdit
@@ -128,6 +128,7 @@ type window struct {
 	model                      *frameModel
 	layout                     *sorter.Layout
 	scannedIn, scannedOut      string // the input and output the layout was made for
+	readErrs                   int    // frames of the last scan whose header was not read
 	busy                       bool
 	cancel                     context.CancelFunc
 	previewGen                 atomic.Int64
@@ -234,6 +235,9 @@ func main() {
 						}
 					}},
 					PushButton{AssignTo: &w.btnOpen, Text: "Открыть выходной каталог", OnClicked: w.openOut},
+					PushButton{AssignTo: &w.btnGone, Text: goneOn, Enabled: false, OnClicked: w.toggleGone,
+						ToolTipText: "Подсветить кадры выходного каталога, которых на приёмнике больше нет (их там удалили), и показать только их.\n" +
+							"Сортер их не трогает: удалить или оставить — решать вам. Список — по последнему «Просмотреть кадры»."},
 					HSpacer{},
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
@@ -260,7 +264,11 @@ func main() {
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true,
-									OnCurrentIndexChanged: w.showPreview},
+									OnCurrentIndexChanged: w.showPreview, StyleCell: func(c *walk.CellStyle) {
+										if w.model.marked(c.Row()) {
+											c.BackgroundColor = walk.RGB(255, 205, 205)
+										}
+									}},
 								Label{AssignTo: &w.shownInfo, EllipsisMode: EllipsisEnd, TextColor: walk.RGB(90, 90, 90)},
 							}},
 							{Title: "Сводка по ночам", Layout: VBox{}, Children: []Widget{
@@ -370,10 +378,12 @@ func (w *window) browse(e *walk.LineEdit, title string) {
 
 // inputChanged shows the login fields for a receiver address.
 func (w *window) inputChanged() {
-	if w.loginRow == nil {
+	if w.loginRow == nil || w.btnGone == nil {
 		return
 	}
-	w.loginRow.SetVisible(sorter.IsURL(w.inEdit.Text()))
+	remote := sorter.IsURL(w.inEdit.Text())
+	w.loginRow.SetVisible(remote)
+	w.btnGone.SetVisible(remote)
 	w.foldersChanged()
 }
 
@@ -385,11 +395,14 @@ func (w *window) forgetReceiver() {
 
 // foldersChanged: a plan made for another input or output is made again.
 func (w *window) foldersChanged() {
-	if w.btnApply == nil || w.busy {
+	if w.btnApply == nil || w.btnGone == nil || w.busy {
 		return
 	}
 	in, out := strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	w.btnApply.SetEnabled(w.layout != nil && in == w.scannedIn && out == w.scannedOut)
+	// the frames deleted on the receiver: known after a scan of this receiver
+	// and output, and until the frames are laid out again
+	w.btnGone.SetEnabled(w.layout != nil && w.model.gone != nil && in == w.scannedIn && out == w.scannedOut || w.model.mark)
 }
 
 func (w *window) setBusy(b bool) {
@@ -406,6 +419,7 @@ func (w *window) setBusy(b bool) {
 	w.fillBox.SetEnabled(!b)
 	if b {
 		w.btnApply.SetEnabled(false)
+		w.btnGone.SetEnabled(false)
 	} else {
 		w.foldersChanged()
 	}
@@ -494,8 +508,9 @@ func (w *window) scan() {
 			}
 			w.codeEdit.SetText("")
 			w.passEdit.SetText("")
-			w.layout, w.scannedIn, w.scannedOut = l, s.In, s.Out
-			w.model.set(l)
+			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
+			w.model.set(l, remote)
+			w.btnGone.SetText(goneOn)
 			w.showAll()
 			w.showNights(nights)
 			w.summary.SetText(l.Summary())
@@ -503,6 +518,9 @@ func (w *window) scan() {
 			msg := fmt.Sprintf("Кадров: %d, сессий: %d, объём %s.", l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
 			if remote {
 				msg += fmt.Sprintf(" Нет в выходном каталоге: %d (%s).", missing, sorter.FormatBytes(missingBytes))
+				if n := len(w.model.gone); n > 0 {
+					msg += fmt.Sprintf(" Удалены на приёмнике, но есть в выходном: %d — кнопка «%s».", n, goneOn)
+				}
 			}
 			if len(errs) > 0 {
 				msg += fmt.Sprintf(" Не прочитано: %d (%v).", len(errs), errs[0])
@@ -641,6 +659,9 @@ func (w *window) apply() {
 			w.setStatus(strings.SplitN(msg, "\n", 2)[0])
 			// files may have moved: the plan is to be made again
 			w.layout = nil
+			if w.model.mark {
+				w.toggleGone()
+			}
 			w.setBusy(false)
 			walk.MsgBox(w.mw, "ASIAIR Sorter", msg, icon)
 		})
@@ -706,6 +727,45 @@ func (w *window) showAll() {
 	w.btnAll.SetVisible(false)
 }
 
+// The texts of the button of the frames deleted on the receiver.
+const (
+	goneOn  = "Удалённые на приёмнике"
+	goneOff = "Снять подсветку"
+)
+
+// toggleGone highlights the frames of the output the receiver has no more
+// and shows only them, or takes the highlight off.
+func (w *window) toggleGone() {
+	if w.model.mark {
+		w.model.mark = false
+		w.btnGone.SetText(goneOn)
+		w.showAll()
+		w.foldersChanged()
+		return
+	}
+	if len(w.model.gone) == 0 {
+		w.setStatus("Все кадры выходного каталога есть на приёмнике: удалённых там нет.")
+		return
+	}
+	w.model.mark = true
+	w.btnGone.SetText(goneOff)
+	w.model.only = w.model.gone
+	w.kindBox.SetCurrentIndex(0)
+	w.model.kind = ""
+	w.filterChanged()
+	var bytes int64
+	for it := range w.model.gone {
+		bytes += it.Frame.Size
+	}
+	t := fmt.Sprintf("Удалены на приёмнике, остались в выходном каталоге: %d (%s)", len(w.model.gone), sorter.FormatBytes(bytes))
+	if w.readErrs > 0 {
+		t += fmt.Sprintf(". Заголовки %d кадров приёмника не прочитаны — их копии тоже могут оказаться здесь", w.readErrs)
+	}
+	setLong(w.onlyInfo, t)
+	w.btnAll.SetVisible(true)
+	w.tabs.SetCurrentIndex(0)
+}
+
 // filterChanged shows the model filtered again and how much it shows.
 func (w *window) filterChanged() {
 	w.model.filter()
@@ -716,6 +776,9 @@ func (w *window) filterChanged() {
 			t += ", суммарная выдержка " + sorter.FormatDuration(w.model.shown.seconds)
 		}
 		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
+		if w.model.mark {
+			t += " Красным — кадры, удалённые на приёмнике."
+		}
 	}
 	setLong(w.shownInfo, t)
 }

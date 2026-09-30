@@ -86,6 +86,20 @@ func (l *Layout) Frames() int {
 	return n
 }
 
+// Gone lists the frames of the output (its library and the lights of its
+// sessions) that no frame of the input matches — the same place and size.
+// For a receiver in the input these are the frames deleted there that are
+// still kept in the output.
+func (l *Layout) Gone() []*Item {
+	var out []*Item
+	for _, it := range l.Items {
+		if it.Frame.InLibrary && !it.Dup {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // Count of the frames placed (duplicates left out).
 func (g *Group) Count() int {
 	n := 0
