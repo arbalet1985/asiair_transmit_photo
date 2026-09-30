@@ -88,13 +88,20 @@
   .vbar .title { font-weight: 600; overflow-wrap: anywhere; flex: 1 1 200px; }
   .vbody { flex: 1; display: flex; min-height: 0; }
   .vmain { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .vnav { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); }
+  .vnav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--border); }
   .vnav .spacer { flex: 1; }
+  .vtools { display: flex; gap: 6px; align-items: center; }
+  .vtools button { min-width: 2.4em; }
+  .vtools .sep { width: 10px; }
+  #vZoomV { min-width: 4.2em; text-align: center; font-size: 12px; }
+  #vSpeed { width: 110px; }
+  #vSpeedV { min-width: 3.4em; font-size: 12px; }
+  #vPlay.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .vnav #vPrev, .vnav #vNext { min-width: 3.5em; }
   .vimg { flex: 1; overflow: auto; background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
   .vimg canvas, .vimg img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
   .vimg.zoom { display: block; }
-  .vimg.zoom canvas, .vimg.zoom img { width: auto; height: auto; max-width: none; object-fit: fill; cursor: zoom-out; }
+  .vimg.zoom canvas, .vimg.zoom img { display: block; width: auto; height: auto; max-width: none; object-fit: fill; cursor: zoom-out; }
   .vimg .msg { color: #bbb; position: absolute; }
   .vside { width: 270px; flex: none; padding: 10px 12px; border-left: 1px solid var(--border); overflow-y: auto; font-size: 13px; }
   .vside h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .03em; }
@@ -271,6 +278,12 @@
     .vnav { padding: 8px 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); gap: 10px; }
     .vnav button { padding: 12px 14px; font-size: 16px; }
     .vnav #vPrev, .vnav #vNext { min-width: 4.2em; }
+    /* zoom and blink take a row of their own, above the arrows */
+    .vtools { order: -1; flex: 1 1 100%; gap: 6px; }
+    .vnav .vtools button { padding: 8px 0; min-width: 44px; }
+    .vtools .sep { width: 4px; }
+    #vZoomV { display: none; }
+    #vSpeed { flex: 1; width: auto; min-width: 60px; }
     #toast { left: 12px; right: 12px; bottom: 12px; text-align: center; }
   }
 </style>
@@ -723,6 +736,16 @@
       <div class="vnav">
         <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
         <span class="spacer"></span>
+        <span class="vtools">
+          <button id="vZoomOut" title="Уменьшить (−)">−</button>
+          <span id="vZoomV" class="muted" title="Масштаб: 100% — пиксель кадра в пиксель экрана"></span>
+          <button id="vZoomIn" title="Увеличить (+)">+</button>
+          <button id="vFit" title="Вписать в окно (0)">⤢</button>
+          <span class="sep"></span>
+          <button id="vPlay" title="Блинк: показывать кадры друг за другом по кругу (пробел). Масштаб и место на кадре сохраняются">▶</button>
+          <input type="range" id="vSpeed" min="0.5" max="10" step="0.5" value="2" title="Скорость блинка, кадров в секунду">
+          <span id="vSpeedV" class="muted" title="Кадров в секунду"></span>
+        </span>
         <button id="vPrev" title="Предыдущий (←)">←</button>
         <button id="vNext" title="Следующий (→)">→</button>
       </div>
@@ -742,7 +765,7 @@
       </div>
       <h3>Кадр</h3>
       <dl class="kv" id="vInfo"></dl>
-      <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру — увеличить, Esc — закрыть.</div>
+      <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
     </div>
   </div>
@@ -2850,7 +2873,10 @@ $("dirChoose").onclick = async () => {
 // ---------- image viewer with auto stretch ----------
 const viewable = n => /\.(fits?|fts|jpe?g|png)$/i.test(n);
 const isFits = n => /\.(fits?|fts)$/i.test(n);
-const V = { all: [], list: [], idx: 0, img: null, req: 0, zoom: false };
+// scale: 1 is the frame fitted to the window, more is closer; fx, fy: the
+// point of the frame (0..1) in the middle of the window when closer. Both
+// stay from frame to frame, so a star can be followed while paging or blinking.
+const V = { all: [], list: [], idx: 0, img: null, node: null, req: 0, scale: 1, fx: 0.5, fy: 0.5, play: false, playGen: 0, timer: 0, full: new Set() };
 
 // midtones transfer function (PixInsight STF)
 function mtf(m, x) {
@@ -2880,6 +2906,10 @@ function computeStretch() {
   $("vBgV").textContent = target.toFixed(2);
   $("vWhiteV").textContent = c1.toFixed(3);
   for (const id of ["vShadow", "vBg", "vLinked"]) $(id).disabled = !auto;
+  // a frame drawn with these settings already (blinking comes back to it) is not drawn again
+  const key = [auto, linked, sigma, target, c1].join("|");
+  if (im.drawn === key) return;
+  im.drawn = key;
   const params = [];
   const groups = linked ? [[...Array(im.channels).keys()]] : [...Array(im.channels).keys()].map(c => [c]);
   if (!im.stats) im.stats = {};
@@ -2952,90 +2982,196 @@ function updateSel() {
   $("vDelete").disabled = selected.size === 0;
   $("vDelete").textContent = `Удалить отмеченные на ASIAIR (${selected.size})…`;
 }
+// Decoded FITS previews, most recent last: blinking and paging back show
+// them without loading again. Their memory is capped.
+const vCache = new Map();
+const vCacheMax = (navigator.deviceMemory ? Math.min(Math.max(navigator.deviceMemory * 48, 128), 512)
+  : window.innerWidth <= 700 ? 128 : 256) * 2 ** 20;
+function cacheTrim() {
+  let total = 0;
+  for (const e of vCache.values()) total += e.bytes;
+  for (const [k, e] of vCache) {
+    if (total <= vCacheMax) break;
+    if (!e.bytes || (V.img && e.img === V.img)) continue;
+    vCache.delete(k); total -= e.bytes;
+  }
+}
+// fitsMax: the preview width for the frame: the screen width fitted, the
+// full resolution for a closer look (unless the preview is full already)
+function fitsMax(f) {
+  if (V.scale > 1 && !V.full.has(f.path)) return 8000;
+  return Math.round(Math.min(2400, Math.max(800, window.innerWidth * (window.devicePixelRatio || 1))));
+}
+function fetchFits(f, max) {
+  const key = f.path + "|" + f.mtime + "|" + max;
+  let e = vCache.get(key);
+  if (e) { vCache.delete(key); vCache.set(key, e); return e.p; }
+  e = { bytes: 0, img: null };
+  e.p = (async () => {
+    const r = await fetch(`/ui/preview?path=${encodeURIComponent(f.path)}&max=${max}`);
+    if (!r.ok) throw new Error(await r.text());
+    const buf = await r.arrayBuffer();
+    const n = new DataView(buf).getUint32(0, true);
+    const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+    const data = new Uint16Array(buf, 4 + n, meta.width * meta.height * meta.channels);
+    const canvas = el("canvas", { width: meta.width, height: meta.height });
+    // the screen-sized preview is the full frame already: no need for more
+    if (max < 8000 && meta.binning <= (meta.bayer ? 2 : 1)) V.full.add(f.path);
+    return { ...meta, data, canvas, max };
+  })();
+  vCache.set(key, e);
+  e.p.then(im => { e.img = im; e.bytes = imBytes(im); cacheTrim(); }, () => vCache.delete(key));
+  return e.p;
+}
+const imBytes = im => im.data.byteLength + im.width * im.height * 4;
+
 async function showFile() {
   const f = V.list[V.idx], req = ++V.req;
   $("vTitle").textContent = f.path;
   $("vPos").textContent = `${V.idx + 1} / ${V.list.length}`;
   $("vPrev").disabled = V.idx === 0;
   $("vNext").disabled = V.idx === V.list.length - 1;
+  $("vPlay").disabled = V.list.length < 2;
   updateSel();
-  const box = $("vImgBox");
-  V.zoom = false;
-  box.classList.remove("zoom");
-  $("vMsg").textContent = "загрузка…";
-  showInfo(f, null);
+  // the frame shown stays until the next one is ready: no blank between them
+  const slow = setTimeout(() => { if (req === V.req) $("vMsg").textContent = "загрузка…"; }, V.play ? 800 : 150);
+  if (!V.play) showInfo(f, null);
   $("vStretch").hidden = !isFits(f.name);
-  if (!isFits(f.name)) {
-    const img = el("img", { src: "/ui/file?path=" + encodeURIComponent(f.path), alt: f.name });
-    img.onload = () => { if (req === V.req) $("vMsg").textContent = ""; };
-    img.onclick = toggleZoom;
-    V.img = null;
-    box.replaceChildren($("vMsg"), img);
-    return;
-  }
   try {
-    const max = Math.round(Math.min(2400, Math.max(800, window.innerWidth * (window.devicePixelRatio || 1))));
-    if (!(await loadFits(f, max, req))) return;
+    let node, im = null;
+    if (isFits(f.name)) {
+      im = await fetchFits(f, fitsMax(f));
+      if (req !== V.req) return;
+      V.img = im;
+      computeStretch();
+      node = im.canvas;
+    } else {
+      node = el("img", { src: "/ui/file?path=" + encodeURIComponent(f.path), alt: f.name });
+      await node.decode();
+      if (req !== V.req) return;
+      V.img = null;
+    }
+    clearTimeout(slow);
     $("vMsg").textContent = "";
-    showInfo(f, V.img);
+    place(node);
+    showInfo(f, im);
+    if (V.play) prefetch();
   } catch (e) {
+    clearTimeout(slow);
     if (req === V.req) $("vMsg").textContent = "Не удалось открыть: " + e.message;
   }
 }
-// loadFits fetches a preview of at most max pixels wide and shows it with
-// the current stretch settings. It returns false if another file was chosen.
-async function loadFits(f, max, req) {
-  const r = await fetch(`/ui/preview?path=${encodeURIComponent(f.path)}&max=${max}`);
-  if (!r.ok) throw new Error(await r.text());
-  const buf = await r.arrayBuffer();
-  if (req !== V.req) return false;
-  const n = new DataView(buf).getUint32(0, true);
-  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
-  const data = new Uint16Array(buf, 4 + n, meta.width * meta.height * meta.channels);
-  const canvas = el("canvas", { width: meta.width, height: meta.height });
-  canvas.onclick = toggleZoom;
-  V.img = { ...meta, data, canvas, max };
-  $("vImgBox").replaceChildren($("vMsg"), canvas);
-  computeStretch();
-  return true;
+// while blinking the next FITS frame is loaded while this one is shown
+function prefetch() {
+  const f = V.list[(V.idx + 1) % V.list.length];
+  if (f && isFits(f.name)) fetchFits(f, fitsMax(f)).catch(() => {});
 }
-// toggleZoom switches between "fit to window" and a closer look centred on
-// the clicked point; FITS frames are reloaded at full sensor resolution.
-async function toggleZoom(e) {
-  const box = $("vImgBox"), node = e.currentTarget;
-  const natW = node.width || node.naturalWidth, natH = node.height || node.naturalHeight;
-  const r = node.getBoundingClientRect();
-  // where the click was on the picture (object-fit leaves margins)
-  let fx = 0.5, fy = 0.5;
-  if (!V.zoom) {
-    const sc = Math.min(r.width / natW, r.height / natH), dw = natW * sc, dh = natH * sc;
-    fx = Math.min(Math.max((e.clientX - r.left - (r.width - dw) / 2) / dw, 0), 1);
-    fy = Math.min(Math.max((e.clientY - r.top - (r.height - dh) / 2) / dh, 0), 1);
+function place(node) {
+  if (V.node !== node) {
+    $("vImgBox").replaceChildren($("vMsg"), node);
+    V.node = node;
   }
-  V.zoom = !V.zoom;
-  if (!V.zoom) {
-    box.classList.remove("zoom");
-    node.style.width = node.style.height = "";
-    return;
-  }
+  node.onclick = zoomClick;
+  layout();
+}
+// frame size in pixels of the sensor / of the picture shown
+const natSize = n => [n.width || n.naturalWidth, n.height || n.naturalHeight];
+const srcWidth = n => V.img && V.img.canvas === n && V.img.source && V.img.source[0] ? V.img.source[0] : natSize(n)[0];
+// the width of the frame fitted to the window
+function fitWidth(n) {
+  const box = $("vImgBox"), [w, h] = natSize(n);
+  return w && h ? Math.min(box.clientWidth, box.clientHeight * w / h) : 0;
+}
+// up to 4 screen pixels per pixel of the frame, at least twice the fitted size
+function maxScale() {
+  const n = V.node, fw = n && fitWidth(n);
+  return fw ? Math.max(2, 4 * srcWidth(n) / fw) : 8;
+}
+// layout sizes the picture for the scale and scrolls to the point kept
+function layout() {
+  const box = $("vImgBox"), n = V.node;
+  if (!n) return;
+  const zoomed = V.scale > 1;
+  box.classList.toggle("zoom", zoomed);
+  const fw = fitWidth(n);
+  $("vZoomV").textContent = !zoomed ? "вписано" : fw ? Math.round(100 * fw * V.scale / srcWidth(n)) + "%" : "";
+  $("vZoomOut").disabled = $("vFit").disabled = !zoomed;
+  $("vZoomIn").disabled = V.scale >= maxScale();
+  if (!zoomed) { n.style.width = n.style.height = n.style.margin = ""; return; }
+  const [nw, nh] = natSize(n), w = fw * V.scale, h = w * nh / nw;
+  const bw = box.clientWidth, bh = box.clientHeight;
+  const ml = Math.max(0, (bw - w) / 2), mt = Math.max(0, (bh - h) / 2);
+  n.style.width = w + "px";
+  n.style.height = h + "px";
+  n.style.margin = `${mt}px 0 0 ${ml}px`;
+  box.scrollLeft = V.fx * w + ml - bw / 2;
+  box.scrollTop = V.fy * h + mt - bh / 2;
+}
+// setScale zooms keeping the point fx, fy (the middle of the window if not given)
+function setScale(s, fx, fy) {
+  s = Math.min(Math.max(s, 1), maxScale());
+  if (s < 1.05) s = 1;
+  if (fx != null) { V.fx = fx; V.fy = fy; }
+  if (s === 1) V.fx = V.fy = 0.5;
+  V.scale = s;
+  layout();
+  // a closer look at a FITS frame needs its full resolution
   const f = V.list[V.idx];
-  let target = node;
-  if (V.img && isFits(f.name) && V.img.binning > (V.img.bayer ? 2 : 1) && V.img.max < 8000) {
-    $("vMsg").textContent = "загрузка полного разрешения…";
-    try {
-      if (!(await loadFits(f, 8000, V.req))) return;
-      target = V.img.canvas;
-      $("vMsg").textContent = "";
-      showInfo(f, V.img);
-    } catch (err) { $("vMsg").textContent = err.message; }
-  }
-  box.classList.add("zoom");
-  const w = Math.max(target.width || target.naturalWidth, box.clientWidth * 2);
-  target.style.width = w + "px";
-  target.style.height = "auto";
-  box.scrollLeft = fx * target.offsetWidth - box.clientWidth / 2;
-  box.scrollTop = fy * target.offsetHeight - box.clientHeight / 2;
+  if (s > 1 && V.img && f && isFits(f.name) && V.img.max < fitsMax(f)) showFile();
 }
+// a click on the picture: a closer look centred on the clicked point, or back
+function zoomClick(e) {
+  if (V.scale > 1) { setScale(1); return; }
+  const n = e.currentTarget, r = n.getBoundingClientRect(), [nw, nh] = natSize(n);
+  // where the click was on the picture (object-fit leaves margins)
+  const sc = Math.min(r.width / nw, r.height / nh), dw = nw * sc, dh = nh * sc;
+  const fx = Math.min(Math.max((e.clientX - r.left - (r.width - dw) / 2) / dw, 0), 1);
+  const fy = Math.min(Math.max((e.clientY - r.top - (r.height - dh) / 2) / dh, 0), 1);
+  const fw = fitWidth(n);
+  setScale(fw ? Math.max(2, srcWidth(n) / fw) : 2, fx, fy);
+}
+// the point in the middle of the window follows scrolling
+$("vImgBox").addEventListener("scroll", () => {
+  const box = $("vImgBox"), n = V.node;
+  if (V.scale <= 1 || !n || !n.offsetWidth) return;
+  V.fx = Math.min(Math.max((box.scrollLeft + box.clientWidth / 2 - n.offsetLeft) / n.offsetWidth, 0), 1);
+  V.fy = Math.min(Math.max((box.scrollTop + box.clientHeight / 2 - n.offsetTop) / n.offsetHeight, 0), 1);
+}, { passive: true });
+window.addEventListener("resize", () => { if ($("viewer").open) layout(); });
+$("vZoomIn").onclick = () => setScale(V.scale * 1.5);
+$("vZoomOut").onclick = () => setScale(V.scale / 1.5);
+$("vFit").onclick = () => setScale(1);
+
+// Blink: the frames one after another in a loop, at the speed of the slider.
+const blinkDelay = () => 1000 / +$("vSpeed").value;
+function showSpeed() { $("vSpeedV").textContent = (+$("vSpeed").value).toLocaleString("ru") + " к/с"; }
+$("vSpeed").value = store.get("blinkSpeed", 2);
+showSpeed();
+$("vSpeed").oninput = () => {
+  showSpeed();
+  store.set("blinkSpeed", +$("vSpeed").value);
+  if (V.play) setPlay(true); // the next frame comes at the new speed
+};
+function setPlay(on) {
+  on = on && V.list.length > 1;
+  V.play = on;
+  clearTimeout(V.timer);
+  const gen = ++V.playGen;
+  $("vPlay").textContent = on ? "⏸" : "▶";
+  $("vPlay").classList.toggle("on", on);
+  if (on) { prefetch(); V.timer = setTimeout(() => blinkTick(gen), blinkDelay()); }
+}
+async function blinkTick(gen) {
+  if (gen !== V.playGen) return;
+  const t0 = performance.now();
+  V.idx = (V.idx + 1) % V.list.length;
+  await showFile(); // a frame that loads slowly holds the next one back
+  if (gen !== V.playGen) return;
+  V.timer = setTimeout(() => blinkTick(gen), Math.max(0, blinkDelay() - (performance.now() - t0)));
+}
+$("vPlay").onclick = () => setPlay(!V.play);
+$("viewer").addEventListener("close", () => setPlay(false));
+
 // The viewer steps through the frames of the folder of the opened one; with
 // "все папки" ticked it goes on into the next folder.
 function setViewList(path) {
@@ -3051,12 +3187,17 @@ $("vCross").onchange = () => {
 function openViewer(path, files) {
   V.all = files.filter(f => f.local && viewable(f.name) && (!isThumb(f.name) || f.path === path));
   setViewList(path);
-  V.zoom = false; $("vImgBox").classList.remove("zoom");
+  setPlay(false);
+  V.scale = 1; V.fx = V.fy = 0.5; V.node = null; V.img = null;
+  $("vImgBox").replaceChildren($("vMsg"));
+  $("vImgBox").classList.remove("zoom");
   $("vOpen").hidden = isRemote();
   $("viewer").showModal();
   showFile();
 }
+// step pages by hand; the zoom and the point looked at stay
 function step(d) {
+  setPlay(false);
   const i = V.idx + d;
   if (i < 0 || i >= V.list.length) return;
   V.idx = i;
@@ -3084,7 +3225,7 @@ $("vReset").onclick = () => {
 // on a phone: swipe left or right to go to the next or previous frame
 {
   let t0 = null;
-  $("vImgBox").addEventListener("touchstart", e => { t0 = e.touches.length === 1 && !V.zoom ? e.touches[0] : null; }, { passive: true });
+  $("vImgBox").addEventListener("touchstart", e => { t0 = e.touches.length === 1 && V.scale <= 1 ? e.touches[0] : null; }, { passive: true });
   $("vImgBox").addEventListener("touchend", e => {
     if (!t0) return;
     const t = e.changedTouches[0], dx = t.clientX - t0.clientX, dy = t.clientY - t0.clientY;
@@ -3094,9 +3235,15 @@ $("vReset").onclick = () => {
 }
 $("viewer").addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" && e.target.type === "range") return;
-  if (e.key === "ArrowLeft") { step(-1); e.preventDefault(); }
-  else if (e.key === "ArrowRight") { step(1); e.preventDefault(); }
-  else if (e.key === "Delete") { toggleSel(); e.preventDefault(); }
+  if (e.key === "ArrowLeft") step(-1);
+  else if (e.key === "ArrowRight") step(1);
+  else if (e.key === "Delete") toggleSel();
+  else if (e.key === " " && !["BUTTON", "INPUT", "SELECT"].includes(e.target.tagName)) setPlay(!V.play);
+  else if (e.key === "+" || e.key === "=") setScale(V.scale * 1.5);
+  else if (e.key === "-") setScale(V.scale / 1.5);
+  else if (e.key === "0") setScale(1);
+  else return;
+  e.preventDefault();
 });
 
 // ---------- start with Windows ----------
