@@ -61,6 +61,7 @@ type persisted struct {
 	Cleanup  CleanupSettings  `json:"cleanup"`
 	Schedule ScheduleSettings `json:"schedule"`
 	Site     Site             `json:"site"`
+	Planner  PlannerState     `json:"planner"`
 	Paused   bool             `json:"paused"` // transfer paused from the page
 	// WaitStart: a new receiver shows the ASIAIR tree but does not let the
 	// agent transfer until "Старт" is pressed on the page.

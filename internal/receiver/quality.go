@@ -21,6 +21,10 @@ type qualityEntry struct {
 	HFR   float64 `json:"hfr,omitempty"`
 	Stars int     `json:"stars"`
 	Err   string  `json:"err,omitempty"`
+	// Sky: where the frame was taken, from its header (for the planner);
+	// NoSky: the header was read and tells nothing of it
+	Sky   *skyEntry `json:"sky,omitempty"`
+	NoSky bool      `json:"nosky,omitempty"`
 }
 
 // quality keeps the star measurements of the received Light frames in
@@ -58,6 +62,19 @@ func (q *quality) set(p string, e qualityEntry) {
 	q.m[p] = e
 	q.dirty = true
 	q.mu.Unlock()
+}
+
+// skies: the frames with where they were taken.
+func (q *quality) skies() []skyEntry {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]skyEntry, 0, len(q.m))
+	for _, e := range q.m {
+		if e.Sky != nil {
+			out = append(out, *e.Sky)
+		}
+	}
+	return out
 }
 
 func (q *quality) save() {
@@ -143,14 +160,16 @@ func (s *Server) measurePending(ctx context.Context) int {
 		return 0
 	}
 	keep := map[string]bool{}
-	var todo []LocalFile
+	var todo, hdrTodo []LocalFile
 	for _, f := range local {
 		if !measurable(f.Path) {
 			continue
 		}
 		keep[f.Path] = true
-		if _, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok {
+		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok {
 			todo = append(todo, f)
+		} else if e.Sky == nil && !e.NoSky {
+			hdrTodo = append(hdrTodo, f) // measured by an older version
 		}
 	}
 	s.quality.forget(keep)
@@ -166,6 +185,7 @@ func (s *Server) measurePending(ctx context.Context) int {
 		if err != nil {
 			e.Err = err.Error()
 		}
+		e.Sky, e.NoSky = readSky(store.Local(f.Path), f.Path)
 		s.quality.set(f.Path, e)
 		n++
 		if n%20 == 0 {
@@ -179,5 +199,18 @@ func (s *Server) measurePending(ctx context.Context) int {
 	if n > 0 {
 		log.Printf("Приёмник: оценено кадров (звёзды, HFR): %d", n)
 	}
-	return n
+	// the headers only, of the frames measured before the planner
+	for i, f := range hdrTodo {
+		if ctx.Err() != nil {
+			break
+		}
+		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); ok {
+			e.Sky, e.NoSky = readSky(store.Local(f.Path), f.Path)
+			s.quality.set(f.Path, e)
+		}
+		if i%200 == 199 {
+			s.quality.save()
+		}
+	}
+	return n + len(hdrTodo)
 }
