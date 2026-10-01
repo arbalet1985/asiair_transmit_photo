@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
 
@@ -49,6 +50,15 @@ type Frame struct {
 	Camera   string
 	Time     time.Time // local time at the observatory (the UTC fields hold it)
 	Night    string    // YYYY-MM-DD of the evening the night began
+	// UTC is the moment of the frame: DATE-OBS, else Time in this
+	// computer's zone
+	UTC time.Time
+	// where the telescope pointed (J2000, degrees) and the observatory,
+	// from the header (RA/DEC or OBJCTRA/OBJCTDEC, SITELAT/SITELONG)
+	RA, Dec   float64
+	HasTarget bool
+	Lat, Lon  float64
+	HasSite   bool
 
 	// Src is the receiver the frame is downloaded from (nil: a file on
 	// disk); Path is then its path there, MTime its file time and Cards
@@ -154,6 +164,9 @@ func describe(get func(string) string, rel string, mtime time.Time) Frame {
 
 	fr.Time = timeOf(get, name, mtime)
 	fr.Night = fr.Time.Add(-12 * time.Hour).Format("2006-01-02")
+	fr.UTC = utcOf(get, fr.Time)
+	fr.RA, fr.Dec, fr.HasTarget = moon.Target(get)
+	fr.Lat, fr.Lon, fr.HasSite = moon.Site(get)
 	return fr
 }
 
@@ -252,6 +265,21 @@ func timeOf(get func(string) string, name string, mtime time.Time) time.Time {
 		}
 	}
 	return wall(mtime.In(time.Local))
+}
+
+// utcOf: DATE-OBS (UTC), else the clock reading wall in this computer's zone.
+func utcOf(get func(string) string, wall time.Time) time.Time {
+	if s := strings.TrimSuffix(strings.Trim(get("DATE-OBS"), "' "), "Z"); s != "" {
+		for _, l := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
+			if t, err := time.ParseInLocation(l, s, time.UTC); err == nil {
+				return t
+			}
+		}
+	}
+	if wall.Year() < 2000 {
+		return time.Time{}
+	}
+	return time.Date(wall.Year(), wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), wall.Second(), 0, time.Local).UTC()
 }
 
 // wall keeps the clock reading of t in the UTC fields.

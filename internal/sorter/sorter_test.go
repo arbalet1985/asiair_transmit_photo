@@ -48,6 +48,15 @@ func TestDescribeHeader(t *testing.T) {
 	if f.Night != "2026-09-26" {
 		t.Fatalf("night %s", f.Night)
 	}
+	if f.HasTarget || f.HasSite {
+		t.Fatalf("no coordinates in the header: %+v", f)
+	}
+	keys["RA"], keys["DEC"], keys["SITELAT"], keys["SITELONG"] = "10.68", "41.27", "+55 45 00", "37.62"
+	keys["DATE-OBS"] = "2026-09-26T20:10:00.123"
+	f = describe(func(k string) string { return keys[k] }, "x/Light_1.fit", time.Now())
+	if !f.HasTarget || f.RA != 10.68 || !f.HasSite || f.Lat != 55.75 || !f.UTC.Equal(time.Date(2026, 9, 26, 20, 10, 0, 123e6, time.UTC)) {
+		t.Fatalf("coordinates: %+v", f)
+	}
 }
 
 func TestDescribeFromName(t *testing.T) {
