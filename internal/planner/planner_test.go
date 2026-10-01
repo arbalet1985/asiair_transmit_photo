@@ -200,3 +200,23 @@ func TestInferHorizon(t *testing.T) {
 		t.Errorf("horizon opposite: %v", h)
 	}
 }
+
+// One sample does not lift the horizon all round.
+func TestInferLoneSample(t *testing.T) {
+	m31 := Obs{Object: "M 31", Night: "2026-10-15", Exposure: 300, RA: 10.68, Dec: 41.27, Lat: lat, Lon: lon}
+	dusk, _, _ := Night("2026-10-15", lat, lon, -18)
+	var obs []Obs
+	for i := 0; i < 24; i++ {
+		o := m31
+		o.UTC = dusk.Add(time.Duration(60+5*i) * time.Minute) // begun an hour after dusk, still rising
+		obs = append(obs, o)
+	}
+	g := Infer(obs, 15)
+	first := at(Target{RA: m31.RA, Dec: m31.Dec}, obs[0].UTC)
+	if h := g.Horizon.At(first.Az); math.Abs(h-(first.Alt-1)) > 1 {
+		t.Errorf("at the sample: %v, frame at %+v", h, first)
+	}
+	if h := g.Horizon.At(first.Az + 120); h != 15 {
+		t.Errorf("far from the sample: %v", h)
+	}
+}

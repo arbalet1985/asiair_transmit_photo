@@ -29,7 +29,11 @@ type Guess struct {
 	Zones, Maybe []Zone
 }
 
-const binDeg = 5
+const (
+	binDeg  = 5
+	maxSpan = 60 // degrees of azimuth between two samples joined by the horizon
+	nearDeg = 10 // a lone sample holds this far on both sides
+)
 
 // Infer guesses the horizon and the closed zones from the frames taken:
 //
@@ -119,8 +123,19 @@ func Infer(obs []Obs, minAlt float64) Guess {
 					break
 				}
 			}
+			// between samples close enough (the same trees, the same
+			// house); far from any, the frames tell nothing
 			va, vb := sample[(a+bins)%bins]-1, sample[b%bins]-1
-			h[i] = va + (vb-va)*float64(i-a)/float64(b-a)
+			switch {
+			case b-a <= maxSpan/binDeg:
+				h[i] = va + (vb-va)*float64(i-a)/float64(b-a)
+			case i-a <= nearDeg/binDeg:
+				h[i] = va
+			case b-i <= nearDeg/binDeg:
+				h[i] = vb
+			default:
+				h[i] = minAlt
+			}
 		}
 		if !math.IsInf(upper[i], 1) {
 			h[i] = math.Min(h[i], upper[i]-1)

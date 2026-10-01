@@ -286,6 +286,21 @@
     #vSpeed { flex: 1; width: auto; min-width: 60px; }
     #toast { left: 12px; right: 12px; bottom: 12px; text-align: center; }
   }
+  /* the planner */
+  #plSky { display: block; width: 100%; height: 320px; border-radius: 6px; background: #10141c; margin: 4px 0 6px; }
+  #plSky.editing { touch-action: none; cursor: crosshair; }
+  input.pln { width: 4.5em; border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; }
+  #plNight { border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; }
+  .plbar #plTime { flex: 1 1 200px; min-width: 120px; }
+  details.plcost { margin: 0 0 8px; }
+  details.plcost summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
+  #plTargets tr, #plSteps tr { cursor: pointer; }
+  #plTargets tr.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  #plTargets tr.off td { color: var(--muted); }
+  #plSteps tr.now td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  #plSteps tr.minor td { color: var(--muted); }
+  .plsw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  #plTargets button { padding: 1px 7px; }
 </style>
 </head>
 <body>
@@ -439,6 +454,85 @@
       </table></div>
       <div class="line" id="summaryTotals"></div>
       <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
+    </div>
+  </section>
+
+  <section class="panel" id="plannerPanel">
+    <h2 class="fold" id="plannerHead">Планировщик ночи</h2>
+    <div class="fbody">
+      <div class="toolbar">
+        <label>ночь с <input type="date" id="plNight"></label>
+        <label>сумерки <select id="plTwilight"><option value="-18">астрономические (−18°)</option><option value="-12">навигационные (−12°)</option><option value="-6">гражданские (−6°)</option></select></label>
+        <label title="Не снимать ниже этой высоты, где бы ни был горизонт">не ниже <input type="number" id="plMinAlt" min="0" max="80" step="1" class="pln">°</label>
+        <label title="Часовой пояс обсерватории: по нему показан план (угадывается по кадрам)">часы обсерватории UTC <input type="number" id="plTZ" min="-12" max="14" step="0.5" class="pln"></label>
+      </div>
+      <details class="plcost">
+        <summary>Издержки: переход, фокусировка, дизеринг, перекладка <span class="muted" id="plCostInfo"></span></summary>
+        <div class="toolbar">
+          <label title="Наведение, решение поля, запуск гида — на каждую смену объекта">переход на объект <input type="number" id="plSwitch" min="0" max="60" step="0.5" class="pln"> мин</label>
+          <label title="Сколько длится автофокус">фокусировка <input type="number" id="plFocus" min="0" max="30" step="0.5" class="pln"> мин</label>
+          <label title="0 — не перефокусироваться">каждые <input type="number" id="plFocusEvery" min="0" max="600" step="5" class="pln"> мин</label>
+          <label><input type="checkbox" id="plFocusSwitch"> и после перехода</label>
+        </div>
+        <div class="toolbar">
+          <label title="Сдвиг и успокоение гида">дизеринг <input type="number" id="plDither" min="0" max="600" step="1" class="pln"> с</label>
+          <label title="0 — без дизеринга">каждые <input type="number" id="plDitherEvery" min="0" max="100" step="1" class="pln"> кадр.</label>
+          <label title="Скачивание кадра с камеры">между кадрами <input type="number" id="plDownload" min="0" max="120" step="1" class="pln"> с</label>
+        </div>
+        <div class="toolbar">
+          <label title="Экваториальная монтировка: после меридиана телескоп перекладывается"><input type="checkbox" id="plFlip"> перекладка через меридиан</label>
+          <label>через <input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"> мин после меридиана,</label>
+          <label>занимает <input type="number" id="plFlipMin" min="0" max="60" step="0.5" class="pln"> мин</label>
+        </div>
+        <div class="toolbar">
+          <label title="Объект, который будет виден меньше, не берётся: переход не окупится">не идти на объект меньше чем на <input type="number" id="plBlock" min="0" max="240" step="5" class="pln"> мин</label>
+          <label title="0 — Луна не мешает">до Луны не ближе <input type="number" id="plMoonSep" min="0" max="180" step="5" class="pln">°</label>
+        </div>
+      </details>
+      <canvas id="plSky" aria-label="Небо обсерватории"></canvas>
+      <div class="toolbar plbar">
+        <button id="plPlay" title="Анимация ночи: как телескоп переходит между объектами и ведёт их">▶</button>
+        <input type="range" id="plTime" min="0" max="600" value="0" aria-label="Время ночи">
+        <span id="plTimeLabel" class="mono"></span>
+        <select id="plSpeed" aria-label="Скорость анимации"><option value="5">5 мин/с</option><option value="15">15 мин/с</option><option value="30" selected>30 мин/с</option><option value="60">1 ч/с</option></select>
+        <label title="Где снимались полученные кадры (цвет — объект)"><input type="checkbox" id="plPoints" checked> кадры</label>
+        <label title="Править горизонт и закрытые зоны на рисунке"><input type="checkbox" id="plEdit"> правка неба</label>
+        <select id="plMode" hidden aria-label="Что делает касание"><option value="h">точки горизонта</option><option value="z">новая зона</option><option value="d">удалить</option></select>
+        <button id="plGuess" title="Заменить горизонт и зоны угаданными по полученным кадрам">Горизонт по кадрам</button>
+        <button id="plReset" title="Ровный горизонт на высоте «не ниже», без зон">Сбросить</button>
+      </div>
+      <div class="line muted" id="plInfo"></div>
+      <div class="hint" id="plEditHint" hidden>Горизонт — жёлтая линия: тащите точки, касание вне точки добавляет новую. Закрытые зоны (провода) — красная штриховка: тащите зону или её угол; «новая зона» (или Shift) — протянуть прямоугольник; «удалить» (или правая кнопка) — точку или зону; касание бледной «возможной» зоны принимает её.</div>
+      <h2 style="margin-top:14px">Объекты</h2>
+      <div class="toolbar">
+        <input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" style="width:12em">
+        <button id="plFind">Найти</button>
+        <select id="plFound" aria-label="Найденное" style="max-width:22em"></select>
+      </div>
+      <div class="toolbar">
+        <label title="Прямое восхождение J2000, часы: 07 29 03 или 7.484">RA <input type="text" id="plRA" style="width:7em"></label>
+        <label title="Склонение J2000, градусы: +13 14 49 или 13.25">Dec <input type="text" id="plDec" style="width:7em"></label>
+        <label>выдержка <input type="number" id="plExp" min="1" max="3600" step="1" value="300" class="pln"> с</label>
+        <label title="Сколько часов выдержки набрать (0 — сколько получится)">нужно <input type="number" id="plWant" min="0" max="24" step="0.5" value="0" class="pln"> ч</label>
+        <label>фильтр <input type="text" id="plFilter" style="width:4em"></label>
+        <button class="primary" id="plAdd">Добавить</button>
+        <button id="plUpdate" title="Записать поля в выбранную строку" disabled>Изменить</button>
+      </div>
+      <div class="tablewrap"><table id="plTargetsTable">
+        <thead><tr><th title="В плане">✓</th><th>№</th><th>Объект</th><th>RA</th><th>Dec</th><th>Выдержка</th><th>Нужно</th><th>Фильтр</th><th>Макс. высота</th><th>В плане</th><th></th></tr></thead>
+        <tbody id="plTargets"></tbody>
+      </table></div>
+      <div class="hint">Порядок строк — приоритет: в каждый момент снимается самый верхний объект, который виден (над горизонтом, вне закрытых зон, не ближе заданного к Луне) и которому ещё нужна выдержка. Если объект закрыт ненадолго — ожидание, если надолго — переход на следующий, а когда более важный снова виден — возврат к нему.</div>
+      <div class="toolbar" style="margin-top:12px">
+        <button class="primary" id="plMake">Составить план</button>
+        <button id="plCopy" title="Текст плана — для ввода в план ASIAIR">Копировать план</button>
+        <button id="plCSV">Скачать CSV</button>
+        <span class="muted" id="plSummary"></span>
+      </div>
+      <div class="tablewrap"><table id="plStepsTable">
+        <thead><tr><th>Начало</th><th>Конец</th><th>Действие</th><th>Объект</th><th>Кадров</th><th>Высота</th><th>До Луны</th><th></th></tr></thead>
+        <tbody id="plSteps"></tbody>
+      </table></div>
     </div>
   </section>
 
@@ -2679,10 +2773,668 @@ $("infoToggle").onclick = () => {
   store.set("infoFolded", f);
   if (state) renderInfoSummary();
 };
+// ---------- the planner of the night ----------
+// The sky of the observatory (the horizon and the zones hidden by wires,
+// guessed by the receiver from the frames and edited here), the targets by
+// priority, the plan computed by the receiver and its animation.
+const PL = { st: null, guess: null, objects: [], tzGuess: 0, plan: null, t: 0, playing: false, found: [], sel: -1,
+  drag: null, saveH: 0, planH: 0, loaded: false, loading: false, err: "" };
+const plParams = [ // field, key of the parameters, kind
+  ["plSwitch", "switch_min"], ["plFocus", "refocus_min"], ["plFocusEvery", "refocus_every"], ["plFocusSwitch", "refocus_switch", "bool"],
+  ["plDither", "dither_sec"], ["plDitherEvery", "dither_every", "int"], ["plDownload", "download_sec"], ["plFlip", "flip", "bool"],
+  ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
+];
+const plColors = ["#5ac8ff", "#ffaa3c", "#78e678", "#f06ec8", "#fae65a", "#aa8cff", "#ff6e64", "#64e6d2"];
+const plColor = i => i < 0 ? "#a0a0a0" : plColors[i % plColors.length];
+const plAltMin = -10;
+const plKinds = { shoot: "съёмка", slew: "переход", flip: "перекладка", refocus: "фокусировка", wait: "ожидание" };
+
+function plDefaultNight() {
+  const d = new Date();
+  if (d.getHours() < 12) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function plTZ() { const v = parseFloat($("plTZ").value); return isNaN(v) ? PL.tzGuess : v; }
+// hh:mm on the clock of the observatory
+function plHM(ms) { return new Date(ms + plTZ() * 3600e3).toISOString().substr(11, 5); }
+function plFmtRA(deg) {
+  let s = Math.round(((deg / 15 * 3600) % 86400 + 86400) % 86400);
+  return [s / 3600 | 0, (s / 60 | 0) % 60, s % 60].map(v => String(v).padStart(2, "0")).join(" ");
+}
+function plFmtDec(deg) {
+  const s = Math.round(Math.abs(deg) * 3600);
+  return (deg < 0 ? "-" : "+") + [s / 3600 | 0, (s / 60 | 0) % 60, s % 60].map(v => String(v).padStart(2, "0")).join(" ");
+}
+// 7.484, "07 29 03", "07:29:03", "7h29m3s", "+13°14'49"
+function plParseAngle(v) {
+  v = String(v || "").trim();
+  if (!v) return NaN;
+  if (/^[+-]?\d+(\.\d+)?$/.test(v)) return parseFloat(v);
+  const neg = v.startsWith("-");
+  const parts = v.replace(/^[+-]/, "").split(/[\s:hmsd°'"′″]+/).filter(Boolean);
+  if (!parts.length || parts.length > 3 || parts.some(p => isNaN(+p))) return NaN;
+  const r = parts.reduce((a, p, i) => a + p / Math.pow(60, i), 0);
+  return neg ? -r : r;
+}
+
+async function plLoad() {
+  if (PL.loading) return;
+  PL.loading = true;
+  try {
+    const r = await fetch("/ui/api/planner");
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    PL.st = d.state; PL.guess = d.guess; PL.objects = d.objects || []; PL.tzGuess = d.tz_guess; PL.frames = d.frames;
+    PL.loaded = true;
+    if (!$("plNight").value) $("plNight").value = plDefaultNight();
+    const p = PL.st.params;
+    $("plTwilight").value = String(p.sun_alt);
+    $("plMinAlt").value = PL.st.sky.min_alt;
+    $("plTZ").value = PL.st.tz != null ? PL.st.tz : PL.tzGuess;
+    for (const [id, key, kind] of plParams) {
+      if (kind === "bool") $(id).checked = !!p[key]; else $(id).value = p[key];
+    }
+    plRenderTargets();
+    await plMakePlan();
+  } catch (e) {
+    $("plInfo").textContent = "Планировщик: " + e.message;
+  } finally {
+    PL.loading = false;
+  }
+}
+
+// plRead: the fields into the state
+function plRead() {
+  const p = PL.st.params;
+  p.sun_alt = parseFloat($("plTwilight").value);
+  for (const [id, key, kind] of plParams) {
+    if (kind === "bool") p[key] = $(id).checked;
+    else { const v = parseFloat($(id).value); p[key] = isNaN(v) ? 0 : kind === "int" ? Math.round(v) : v; }
+  }
+  const m = parseFloat($("plMinAlt").value);
+  PL.st.sky.min_alt = isNaN(m) ? 0 : m;
+  const tz = parseFloat($("plTZ").value);
+  PL.st.tz = isNaN(tz) ? null : tz;
+  $("plCostInfo").textContent = `— переход ${p.switch_min} мин, фокус ${p.refocus_min} мин / ${p.refocus_every} мин, дизеринг ${p.dither_sec} с / ${p.dither_every} кадр.` +
+    (p.flip ? `, перекладка ${p.flip_min} мин` : "");
+}
+
+// plChanged: keep the state on the receiver and plan again (a moment later,
+// so typing does not plan at every key)
+function plChanged() {
+  if (!PL.st) return;
+  plRead();
+  PL.st.targets.forEach((t, i) => { t.priority = i + 1; });
+  clearTimeout(PL.saveH);
+  PL.saveH = setTimeout(() => post("/ui/api/planner", PL.st).catch(e => toast("Планировщик не сохранён: " + e.message)), 500);
+  clearTimeout(PL.planH);
+  PL.planH = setTimeout(plMakePlan, 350);
+  plRenderTargets();
+  plDraw();
+}
+
+async function plMakePlan() {
+  if (!PL.st) return;
+  plRead();
+  try {
+    PL.plan = await post("/ui/api/plan", { night: $("plNight").value, state: PL.st });
+    PL.err = "";
+  } catch (e) {
+    PL.plan = null;
+    PL.err = e.message;
+  }
+  const pl = PL.plan;
+  if (pl) {
+    if (!(PL.t >= pl.dusk && PL.t <= pl.dawn)) PL.t = pl.dusk;
+    $("plTime").max = Math.round((pl.dawn - pl.dusk) / 60e3);
+    const mid = pl.illum[pl.illum.length >> 1] || 0;
+    $("plInfo").textContent = `Ночь ${plHM(pl.dusk)} – ${plHM(pl.dawn)} (${fmtHours((pl.dawn - pl.dusk) / 1e3)}), Луна ${mid >= 0 ? "растущая" : "убывающая"}, освещена на ${Math.round(Math.abs(mid) * 100)}%.` +
+      (PL.frames ? ` Горизонт и зоны — по ${PL.frames} кадрам с координатами.` : " Кадров с координатами (RA, DEC, SITELAT, SITELONG) пока нет: горизонт задайте сами.");
+  } else {
+    $("plInfo").textContent = PL.err;
+  }
+  plRenderTargets();
+  plRenderSteps();
+  plSetTime(PL.t);
+}
+function fmtHours(sec) {
+  const m = Math.round(sec / 60);
+  return m < 60 ? m + " мин" : `${m / 60 | 0} ч ${String(m % 60).padStart(2, "0")} мин`;
+}
+
+function plRenderTargets() {
+  const tb = $("plTargets");
+  tb.replaceChildren();
+  const pl = PL.plan;
+  PL.st.targets.forEach((t, i) => {
+    const tr = el("tr", { className: (i === PL.sel ? "sel " : "") + (t.off ? "off" : "") });
+    const cb = el("input", { type: "checkbox", checked: !t.off, title: "В плане" });
+    cb.onclick = e => { e.stopPropagation(); t.off = !cb.checked; plChanged(); };
+    let best = "";
+    if (pl && pl.tracks[i]) {
+      let k = -1;
+      pl.tracks[i].forEach((p, j) => { if (k < 0 || p[1] > pl.tracks[i][k][1]) k = j; });
+      if (k >= 0) best = `${Math.round(pl.tracks[i][k][1])}° в ${plHM(pl.dusk + k * pl.every)}`;
+    }
+    let inPlan = "";
+    if (pl && pl.planned && pl.totals[i] && !t.off) inPlan = `${pl.totals[i].frames} × ${t.exposure} с · ${pl.totals[i].time}`;
+    const btn = (txt, title, f) => { const b = el("button", { textContent: txt, title }); b.onclick = e => { e.stopPropagation(); f(); }; return b; };
+    const move = d => {
+      const j = i + d;
+      if (j < 0 || j >= PL.st.targets.length) return;
+      [PL.st.targets[i], PL.st.targets[j]] = [PL.st.targets[j], PL.st.targets[i]];
+      PL.sel = j;
+      plChanged();
+    };
+    tr.append(el("td", {}, cb), el("td", { className: "num", textContent: i + 1 }),
+      el("td", { className: "name" }, el("span", { className: "plsw", style: "background:" + plColor(i) }), t.name),
+      el("td", { className: "mono", textContent: plFmtRA(t.ra) }), el("td", { className: "mono", textContent: plFmtDec(t.dec) }),
+      el("td", { className: "num", textContent: t.exposure + " с" }), el("td", { textContent: t.want_sec > 0 ? fmtHours(t.want_sec) : "сколько выйдет" }),
+      el("td", { textContent: t.filter || "" }), el("td", { textContent: best }), el("td", { textContent: inPlan }),
+      el("td", {}, btn("↑", "Важнее", () => move(-1)), " ", btn("↓", "Менее важно", () => move(1)), " ",
+        btn("✕", "Удалить", () => { PL.st.targets.splice(i, 1); PL.sel = -1; plChanged(); })));
+    tr.onclick = () => {
+      PL.sel = i;
+      $("plName").value = t.name; $("plRA").value = plFmtRA(t.ra); $("plDec").value = plFmtDec(t.dec);
+      $("plExp").value = t.exposure; $("plWant").value = (t.want_sec || 0) / 3600; $("plFilter").value = t.filter || "";
+      $("plFound").replaceChildren(); PL.found = [];
+      plRenderTargets();
+    };
+    tb.append(tr);
+  });
+  if (!PL.st.targets.length) tb.append(el("tr", {}, el("td", { colSpan: 11, className: "muted", textContent: "Найдите объект по названию и нажмите «Добавить»." })));
+  $("plUpdate").disabled = PL.sel < 0 || PL.sel >= PL.st.targets.length;
+}
+
+function plRenderSteps() {
+  const tb = $("plSteps");
+  tb.replaceChildren();
+  const pl = PL.plan;
+  $("plSummary").textContent = "";
+  if (!pl || !pl.planned) {
+    $("plCopy").disabled = $("plCSV").disabled = true;
+    return;
+  }
+  $("plCopy").disabled = $("plCSV").disabled = false;
+  $("plSummary").textContent = PL.st.targets.map((t, i) => t.off ? "" : `${t.name} ${pl.totals[i].time}`).filter(Boolean).join(", ");
+  pl.steps.forEach((s, k) => {
+    const name = s.target >= 0 ? PL.st.targets[s.target]?.name || "" : "";
+    const tr = el("tr", { className: s.kind === "shoot" ? "" : "minor" });
+    tr.dataset.k = k;
+    tr.append(el("td", { className: "mono", textContent: plHM(s.start) }), el("td", { className: "mono", textContent: plHM(s.end) }),
+      el("td", { textContent: s.label }),
+      el("td", { className: "name" }, s.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(s.target) }) : "", name),
+      el("td", { className: "num", textContent: s.kind === "shoot" ? s.frames : "" }),
+      el("td", { className: "num", textContent: s.target >= 0 ? `${Math.round(s.alt1)}° → ${Math.round(s.alt2)}°` : "" }),
+      el("td", { className: "num", textContent: s.target >= 0 ? s.moon + "°" : "" }), el("td", { className: "muted", textContent: s.note || "" }));
+    tr.onclick = () => { plSetPlay(false); plSetTime(s.start); };
+    tb.append(tr);
+  });
+}
+
+// ---- the time and the animation
+function plSetTime(t) {
+  PL.t = t;
+  const pl = PL.plan;
+  if (pl) {
+    $("plTime").value = Math.round((t - pl.dusk) / 60e3);
+    $("plTimeLabel").textContent = plHM(t);
+    const k = plStepAt(t);
+    for (const tr of $("plSteps").children) tr.classList.toggle("now", +tr.dataset.k === k);
+  } else {
+    $("plTimeLabel").textContent = "";
+  }
+  plDraw();
+}
+function plStepAt(t) {
+  const pl = PL.plan;
+  if (!pl || !pl.planned) return -1;
+  return pl.steps.findIndex(s => t >= s.start && t < s.end);
+}
+// the sample of arr at t, between two samples (azimuth through the north)
+function plSample(arr, t) {
+  const pl = PL.plan;
+  if (!arr || !arr.length) return null;
+  const f = Math.max(0, Math.min(arr.length - 1, (t - pl.dusk) / pl.every));
+  const i = Math.floor(f), j = Math.min(i + 1, arr.length - 1), k = f - i;
+  const a = arr[i], b = arr[j];
+  let daz = b[0] - a[0];
+  if (daz > 180) daz -= 360;
+  if (daz < -180) daz += 360;
+  return [((a[0] + daz * k) % 360 + 360) % 360, a[1] + (b[1] - a[1]) * k, a, b];
+}
+function plSetPlay(on) {
+  PL.playing = on && !!PL.plan;
+  $("plPlay").textContent = PL.playing ? "⏸" : "▶";
+  if (!PL.playing) return;
+  if (PL.t >= PL.plan.dawn) PL.t = PL.plan.dusk;
+  let last = performance.now();
+  const step = now => {
+    if (!PL.playing || !PL.plan) return;
+    const dt = now - last;
+    last = now;
+    const t = PL.t + dt / 1000 * parseFloat($("plSpeed").value) * 60e3;
+    if (t >= PL.plan.dawn) { plSetTime(PL.plan.dawn); plSetPlay(false); return; }
+    plSetTime(t);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ---- drawing the sky: azimuth from the north through the east (south in
+// the middle), altitude to the zenith
+function plGeom() {
+  const c = $("plSky"), w = c.clientWidth, h = c.clientHeight;
+  return { w, h, x0: 34, y0: 22, x1: w - 8, y1: h - 20 };
+}
+function plXY(g, az, alt) {
+  return [g.x0 + ((az % 360 + 360) % 360) / 360 * (g.x1 - g.x0), g.y1 - (alt - plAltMin) / (90 - plAltMin) * (g.y1 - g.y0)];
+}
+function plAzAlt(g, x, y) {
+  const az = Math.max(0, Math.min(359.99, (x - g.x0) / (g.x1 - g.x0) * 360));
+  const alt = Math.max(plAltMin, Math.min(90, plAltMin + (g.y1 - y) / (g.y1 - g.y0) * (90 - plAltMin)));
+  return { az, alt };
+}
+// the horizon: a broken line over the azimuth, closed through the north
+function plHorizonAt(h, az) {
+  if (!h.length) return 0;
+  if (h.length === 1) return h[0].alt;
+  const s = [...h].sort((a, b) => a.az - b.az);
+  let i = s.findIndex(p => p.az > az);
+  if (i < 0) i = s.length;
+  const a = s[(i - 1 + s.length) % s.length], b = s[i % s.length];
+  const span = ((b.az - a.az) % 360 + 360) % 360;
+  if (!span) return Math.max(a.alt, b.alt);
+  return a.alt + (b.alt - a.alt) * (((az - a.az) % 360 + 360) % 360) / span;
+}
+function plInZone(z, az, alt) {
+  if (alt < Math.min(z.alt1, z.alt2) || alt > Math.max(z.alt1, z.alt2)) return false;
+  return ((az - z.az1) % 360 + 360) % 360 <= ((z.az2 - z.az1) % 360 + 360) % 360;
+}
+// rectangles of a zone on the strip (two when it goes through the north)
+function plZoneRects(g, z) {
+  const parts = z.az1 <= z.az2 ? [[z.az1, z.az2]] : [[z.az1, 360], [0, z.az2]];
+  return parts.map(([a, b]) => {
+    const [xa, ya] = plXY(g, a, Math.max(z.alt1, z.alt2)), [, yb] = plXY(g, a, Math.min(z.alt1, z.alt2));
+    const xb = b >= 360 ? g.x1 : plXY(g, b, 0)[0];
+    return [xa, ya, xb - xa, yb - ya];
+  });
+}
+let plHatch = null, plHatchMaybe = null;
+function plPattern(ctx, color, gap) {
+  const c = document.createElement("canvas");
+  c.width = c.height = gap;
+  const x = c.getContext("2d");
+  x.strokeStyle = color; x.lineWidth = 2;
+  x.beginPath(); x.moveTo(0, gap); x.lineTo(gap, 0); x.stroke();
+  return ctx.createPattern(c, "repeat");
+}
+function plMoonDisc(ctx, cx, cy, r, illum) {
+  const k = Math.abs(illum), waxing = illum >= 0, rx = r * Math.abs(1 - 2 * k), w = waxing ? 1 : 0;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.fillStyle = "#3a3f4a"; ctx.fill();
+  ctx.strokeStyle = "#8d96a6"; ctx.lineWidth = 0.5; ctx.stroke();
+  ctx.fillStyle = "#f3e6b0";
+  ctx.fill(new Path2D(`M${cx},${cy - r}A${r},${r} 0 0 ${w} ${cx},${cy + r}A${rx},${r} 0 0 ${(k > 0.5) === waxing ? 1 : 0} ${cx},${cy - r}Z`));
+}
+
+function plDraw() {
+  const c = $("plSky");
+  if (!PL.st || !c.clientWidth) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = c.clientWidth;
+  c.style.height = Math.round(Math.max(220, Math.min(380, cw * 0.42))) + "px";
+  const g = plGeom();
+  if (c.width !== Math.round(g.w * dpr) || c.height !== Math.round(g.h * dpr)) {
+    c.width = Math.round(g.w * dpr); c.height = Math.round(g.h * dpr);
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, g.w, g.h);
+  ctx.font = "12px system-ui, sans-serif";
+  const pl = PL.plan, t = PL.t, sky = PL.st.sky;
+  const sun = pl ? plSample(pl.sun, t) : null;
+  // the sky: lighter in the twilight
+  const f = sun ? Math.max(0, Math.min(1, (sun[1] + 18) / 18)) : 0;
+  const mix = (a, b) => Math.round(a + (b - a) * f);
+  ctx.fillStyle = `rgb(${mix(10, 70)},${mix(14, 95)},${mix(28, 150)})`;
+  ctx.fillRect(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0);
+  // the ground under the horizon, darker under 0°
+  ctx.beginPath();
+  ctx.moveTo(g.x0, g.y1);
+  for (let az = 0; az <= 360; az += 1) {
+    const [x, y] = plXY(g, az, Math.max(plHorizonAt(sky.horizon, az % 360), sky.min_alt));
+    ctx.lineTo(az === 360 ? g.x1 : x, y);
+  }
+  ctx.lineTo(g.x1, g.y1); ctx.closePath();
+  ctx.fillStyle = "#3a2c20"; ctx.fill();
+  const [, y0] = plXY(g, 0, 0);
+  ctx.fillStyle = "#261e18"; ctx.fillRect(g.x0, y0, g.x1 - g.x0, g.y1 - y0);
+  // the zones
+  plHatch = plHatch || plPattern(ctx, "rgba(220,80,80,.85)", 7);
+  plHatchMaybe = plHatchMaybe || plPattern(ctx, "rgba(200,170,90,.45)", 10);
+  for (const z of PL.guess.maybe || []) for (const r of plZoneRects(g, z)) { ctx.fillStyle = plHatchMaybe; ctx.fillRect(...r); }
+  for (const z of sky.zones) for (const r of plZoneRects(g, z)) {
+    ctx.fillStyle = "rgba(90,34,34,.55)"; ctx.fillRect(...r);
+    ctx.fillStyle = plHatch; ctx.fillRect(...r);
+    ctx.strokeStyle = "#e65a5a"; ctx.lineWidth = 1; ctx.strokeRect(...r);
+  }
+  // the grid
+  ctx.strokeStyle = "rgba(120,135,165,.35)"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#9aa3b2"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let alt = 0; alt <= 90; alt += 15) {
+    const [, y] = plXY(g, 0, alt);
+    ctx.beginPath(); ctx.moveTo(g.x0, y); ctx.lineTo(g.x1, y); ctx.stroke();
+    ctx.fillText(alt + "°", g.x0 - 4, y);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ", "С"].forEach((n, i) => {
+    const x = i === 8 ? g.x1 : plXY(g, i * 45, 0)[0];
+    ctx.beginPath(); ctx.moveTo(x, g.y0); ctx.lineTo(x, g.y1); ctx.stroke();
+    ctx.fillText(n, x, g.y1 + 3);
+  });
+  // the frames received
+  if ($("plPoints").checked) {
+    for (const [az, alt, k] of PL.guess.points || []) {
+      const [x, y] = plXY(g, az, alt);
+      ctx.fillStyle = plColor(k) + "99";
+      ctx.fillRect(x - 1, y - 1, 2.5, 2.5);
+    }
+  }
+  // the horizon line and its points
+  ctx.strokeStyle = "#e6be78"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let az = 0; az <= 360; az += 1) {
+    const [x, y] = plXY(g, az, Math.max(plHorizonAt(sky.horizon, az % 360), sky.min_alt));
+    az ? ctx.lineTo(az === 360 ? g.x1 : x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+  const editing = $("plEdit").checked;
+  ctx.fillStyle = "#ffdc96";
+  for (const p of sky.horizon) {
+    const [x, y] = plXY(g, p.az, p.alt), r = editing ? 4 : 2.5;
+    ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+  }
+  if (editing) {
+    ctx.fillStyle = "#ff8080";
+    for (const z of sky.zones) for (const [az, alt] of plCorners(z)) { const [x, y] = plXY(g, az, alt); ctx.fillRect(x - 3, y - 3, 6, 6); }
+  }
+  if (pl) {
+    // the paths of the targets, thick where they are shot
+    const track = (pts, i0, i1) => {
+      ctx.beginPath();
+      let pen = false, last = null;
+      for (let i = i0; i <= i1 && i < pts.length; i++) {
+        const [az, alt] = pts[i];
+        if (alt < plAltMin || last !== null && Math.abs(az - last) > 180) pen = false;
+        last = az;
+        if (alt < plAltMin) continue;
+        const [x, y] = plXY(g, az, alt);
+        pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        pen = true;
+      }
+      ctx.stroke();
+    };
+    PL.st.targets.forEach((tg, i) => {
+      const pts = pl.tracks[i];
+      if (tg.off || !pts) return;
+      ctx.strokeStyle = plColor(i); ctx.lineWidth = 1;
+      track(pts, 0, pts.length - 1);
+      if (pl.planned) {
+        ctx.lineWidth = 4; ctx.lineCap = "round";
+        for (const s of pl.steps) if (s.kind === "shoot" && s.target === i)
+          track(pts, Math.floor((s.start - pl.dusk) / pl.every), Math.ceil((s.end - pl.dusk) / pl.every));
+        ctx.lineCap = "butt";
+      }
+      let k = 0;
+      pts.forEach((p, j) => { if (p[1] > pts[k][1]) k = j; });
+      if (pts[k][1] > plAltMin) {
+        const [x, y] = plXY(g, pts[k][0], pts[k][1]);
+        ctx.fillStyle = plColor(i); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        ctx.fillText(tg.name, Math.max(g.x0 + 40, Math.min(g.x1 - 40, x)), y - 6);
+      }
+    });
+    // the Moon: its path every half hour, and now with its phase
+    ctx.fillStyle = "rgba(170,170,150,.7)";
+    for (let i = 0; i < pl.moon.length; i += 15) {
+      const [az, alt] = pl.moon[i];
+      if (alt > plAltMin) { const [x, y] = plXY(g, az, alt); ctx.beginPath(); ctx.arc(x, y, 1.6, 0, 2 * Math.PI); ctx.fill(); }
+    }
+    const m = plSample(pl.moon, t);
+    if (m && m[1] > plAltMin) {
+      const [x, y] = plXY(g, m[0], m[1]);
+      ctx.globalAlpha = m[1] < 0 ? 0.45 : 1;
+      plMoonDisc(ctx, x, y, 9, pl.illum[Math.round((t - pl.dusk) / pl.every)] ?? pl.illum[0]);
+      ctx.globalAlpha = 1;
+    }
+    if (sun && sun[1] > plAltMin) {
+      const [x, y] = plXY(g, sun[0], sun[1]);
+      ctx.fillStyle = "#ffd250"; ctx.beginPath(); ctx.arc(x, y, 8, 0, 2 * Math.PI); ctx.fill();
+    }
+    // the telescope
+    let line = `${plHM(t)}  Солнце ${Math.round(sun ? sun[1] : 0)}°`;
+    if (pl.planned) {
+      const sc = plSample(pl.scope, t), k = plStepAt(t);
+      const [x, y] = plXY(g, sc[0], sc[1]);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, 2 * Math.PI);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(x + dx * 6, y + dy * 6); ctx.lineTo(x + dx * 15, y + dy * 15); }
+      ctx.stroke();
+      let what = "телескоп в парковке", label = "телескоп";
+      if (k >= 0) {
+        const s = pl.steps[k], tg = PL.st.targets[s.target];
+        what = plKinds[s.kind] || s.kind;
+        if (tg) {
+          label = tg.name;
+          what += " " + tg.name + (s.kind === "shoot" ? `, ${tg.exposure} с` : "") + `, высота ${Math.round(sc[1])}°`;
+          if (m) what += `, до Луны ${separation({ az: sc[0], alt: sc[1] }, { az: m[0], alt: m[1] })}°`;
+          if (PL.st.params.flip && s.kind !== "slew") what += sc[2][3] ? "; после перекладки" : "; до перекладки";
+        }
+      }
+      line += "  ·  " + what;
+      ctx.fillStyle = "#fff"; ctx.textBaseline = "middle";
+      const right = x + 18 + ctx.measureText(label).width < g.x1;
+      ctx.textAlign = right ? "left" : "right";
+      ctx.fillText(label, right ? x + 18 : x - 18, y);
+    }
+    ctx.fillStyle = "#dfe4ec"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(line, g.x0, g.y0 / 2, g.x1 - g.x0);
+  }
+}
+const plCorners = z => [[z.az1, z.alt1], [z.az2, z.alt1], [z.az1, z.alt2], [z.az2, z.alt2]];
+
+// ---- editing the sky with the mouse or a finger
+function plPointer(e) {
+  const r = $("plSky").getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+function plNear(g, x, y, az, alt, d) {
+  const [px, py] = plXY(g, az, alt);
+  return Math.abs(px - x) <= d && Math.abs(py - y) <= d;
+}
+function plSkyEdited() { PL.st.sky_set = true; plChanged(); }
+$("plSky").addEventListener("pointerdown", e => {
+  if (!$("plEdit").checked || !PL.st) return;
+  e.preventDefault();
+  const g = plGeom(), [x, y] = plPointer(e), pt = plAzAlt(g, x, y), sky = PL.st.sky;
+  const d = e.pointerType === "touch" ? 14 : 7;
+  const mode = e.button === 2 ? "d" : e.shiftKey ? "z" : $("plMode").value;
+  const node = sky.horizon.findIndex(p => plNear(g, x, y, p.az, p.alt, d));
+  const zoneAt = zs => { for (let i = zs.length - 1; i >= 0; i--) if (plInZone(zs[i], pt.az, pt.alt)) return i; return -1; };
+  if (mode === "d") {
+    let i;
+    if (node >= 0) sky.horizon.splice(node, 1);
+    else if ((i = zoneAt(sky.zones)) >= 0) sky.zones.splice(i, 1);
+    else if ((i = zoneAt(PL.guess.maybe || [])) >= 0) PL.guess.maybe.splice(i, 1);
+    else return;
+    plSkyEdited();
+    return;
+  }
+  $("plSky").setPointerCapture(e.pointerId);
+  if (node >= 0) { PL.drag = { kind: "node", i: node }; return; }
+  for (let i = 0; i < sky.zones.length; i++) {
+    const c = plCorners(sky.zones[i]).findIndex(([az, alt]) => plNear(g, x, y, az, alt, d));
+    if (c >= 0) { PL.drag = { kind: "corner", i, c }; return; }
+  }
+  if (mode === "z") {
+    sky.zones.push({ az1: pt.az, az2: pt.az, alt1: pt.alt, alt2: pt.alt });
+    PL.drag = { kind: "new", i: sky.zones.length - 1, start: pt };
+    return;
+  }
+  let i = zoneAt(sky.zones);
+  if (i >= 0) { PL.drag = { kind: "zone", i, start: pt, orig: { ...sky.zones[i] } }; return; }
+  i = zoneAt(PL.guess.maybe || []);
+  if (i >= 0) {
+    sky.zones.push(Object.assign({}, PL.guess.maybe[i], { auto: true }));
+    PL.guess.maybe.splice(i, 1);
+    plSkyEdited();
+    return;
+  }
+  sky.horizon.push({ az: pt.az, alt: Math.max(pt.alt, 0) });
+  PL.drag = { kind: "node", i: sky.horizon.length - 1 };
+  plDraw();
+});
+$("plSky").addEventListener("pointermove", e => {
+  const dr = PL.drag;
+  if (!dr) return;
+  const g = plGeom(), [x, y] = plPointer(e), pt = plAzAlt(g, x, y), sky = PL.st.sky;
+  pt.alt = Math.max(pt.alt, 0);
+  const z = sky.zones[dr.i];
+  if (dr.kind === "node") sky.horizon[dr.i] = pt;
+  else if (dr.kind === "new") Object.assign(z, { az1: Math.min(dr.start.az, pt.az), az2: Math.max(dr.start.az, pt.az),
+    alt1: Math.min(dr.start.alt, pt.alt), alt2: Math.max(dr.start.alt, pt.alt) });
+  else if (dr.kind === "corner") {
+    if (dr.c % 2 === 0) z.az1 = pt.az; else z.az2 = pt.az;
+    if (dr.c < 2) z.alt1 = pt.alt; else z.alt2 = pt.alt;
+    z.auto = false;
+  } else if (dr.kind === "zone") {
+    const daz = pt.az - dr.start.az, dalt = pt.alt - dr.start.alt;
+    Object.assign(z, { az1: ((dr.orig.az1 + daz) % 360 + 360) % 360, az2: ((dr.orig.az2 + daz) % 360 + 360) % 360,
+      alt1: dr.orig.alt1 + dalt, alt2: dr.orig.alt2 + dalt, auto: false });
+  }
+  plDraw();
+});
+function plDragEnd() {
+  const dr = PL.drag;
+  if (!dr) return;
+  PL.drag = null;
+  const sky = PL.st.sky;
+  if (dr.kind === "corner" || dr.kind === "new") {
+    const z = sky.zones[dr.i];
+    if (z.alt1 > z.alt2) [z.alt1, z.alt2] = [z.alt2, z.alt1];
+    if (dr.kind === "new" && (Math.abs(z.az2 - z.az1) < 0.5 || z.alt2 - z.alt1 < 0.5)) sky.zones.splice(dr.i, 1);
+  }
+  if (dr.kind === "node") sky.horizon.sort((a, b) => a.az - b.az);
+  plSkyEdited();
+}
+$("plSky").addEventListener("pointerup", plDragEnd);
+$("plSky").addEventListener("pointercancel", plDragEnd);
+$("plSky").addEventListener("contextmenu", e => { if ($("plEdit").checked) e.preventDefault(); });
+$("plEdit").onchange = () => {
+  const on = $("plEdit").checked;
+  $("plSky").classList.toggle("editing", on);
+  $("plMode").hidden = $("plEditHint").hidden = !on;
+  plDraw();
+};
+$("plGuess").onclick = () => {
+  if (!PL.guess || !PL.guess.points.length) return alert("Нет полученных Light-кадров с координатами объекта и обсерватории (RA, DEC, SITELAT, SITELONG в заголовке).");
+  PL.st.sky.horizon = JSON.parse(JSON.stringify(PL.guess.horizon || []));
+  PL.st.sky.zones = JSON.parse(JSON.stringify(PL.guess.zones || []));
+  PL.st.sky_set = false;
+  plChanged();
+};
+$("plReset").onclick = () => {
+  if (!confirm("Убрать горизонт и закрытые зоны? Останется ровный горизонт на высоте «не ниже».")) return;
+  PL.st.sky.horizon = []; PL.st.sky.zones = [];
+  plSkyEdited();
+};
+
+// ---- the targets
+$("plFind").onclick = async () => {
+  const q = $("plName").value.trim();
+  if (!q) return;
+  const sel = $("plFound");
+  try {
+    let r = await fetch("/ui/api/catalog?q=" + encodeURIComponent(q));
+    let list = r.ok ? await r.json() : [];
+    if (!list.length) {
+      $("plInfo").textContent = `В каталоге нет «${q}», ищу в SIMBAD…`;
+      r = await fetch("/ui/api/catalog?resolve=1&q=" + encodeURIComponent(q));
+      if (!r.ok) throw new Error(await r.text());
+      list = await r.json();
+      $("plInfo").textContent = "Найдено в SIMBAD: " + list[0].name;
+    }
+    PL.found = list;
+    sel.replaceChildren(...list.map((o, i) => el("option", { value: i, textContent: (o.label || o.name) + (o.kind === "кадры" ? " (из кадров)" : "") })));
+    sel.onchange();
+  } catch (e) {
+    PL.found = []; sel.replaceChildren();
+    $("plInfo").textContent = e.message;
+  }
+};
+$("plName").addEventListener("keydown", e => { if (e.key === "Enter") $("plFind").onclick(); });
+$("plFound").onchange = () => {
+  const o = PL.found[+$("plFound").value];
+  if (!o) return;
+  $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
+};
+function plFieldsTarget() {
+  let name = $("plName").value.trim();
+  const o = PL.found[+$("plFound").value];
+  if (o) name = o.kind === "кадры" ? o.name : (o.label || o.name).split(" — ")[0];
+  const ra = plParseAngle($("plRA").value), dec = plParseAngle($("plDec").value);
+  if (!name || isNaN(ra) || isNaN(dec) || ra < 0 || ra >= 24 || Math.abs(dec) > 90) {
+    alert("Укажите объект и его координаты: найдите его по названию или впишите RA (часы, 0–24) и Dec (градусы).");
+    return null;
+  }
+  return { name, ra: ra * 15, dec, exposure: Math.max(1, parseFloat($("plExp").value) || 300),
+    want_sec: Math.max(0, parseFloat($("plWant").value) || 0) * 3600, filter: $("plFilter").value.trim(), priority: 0 };
+}
+$("plAdd").onclick = () => {
+  const t = plFieldsTarget();
+  if (!t) return;
+  PL.st.targets.push(t);
+  PL.sel = PL.st.targets.length - 1;
+  plChanged();
+};
+$("plUpdate").onclick = () => {
+  const i = PL.sel, t = plFieldsTarget();
+  if (!t || i < 0 || i >= PL.st.targets.length) return;
+  t.off = PL.st.targets[i].off;
+  PL.st.targets[i] = t;
+  plChanged();
+};
+
+// ---- the plan
+$("plMake").onclick = plMakePlan;
+$("plCopy").onclick = async () => {
+  const text = PL.plan && PL.plan.text;
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) { // not on a secure page: the old way
+    const ta = el("textarea", { value: text });
+    document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  toast("План скопирован: перенесите его в план ASIAIR");
+};
+$("plCSV").onclick = () => {
+  if (!PL.plan || !PL.plan.csv) return;
+  const a = el("a", { href: URL.createObjectURL(new Blob(["﻿" + PL.plan.csv], { type: "text/csv" })), download: `план ${$("plNight").value}.csv` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+$("plPlay").onclick = () => plSetPlay(!PL.playing);
+$("plTime").oninput = () => { if (PL.plan) { plSetPlay(false); plSetTime(PL.plan.dusk + $("plTime").value * 60e3); } };
+$("plPoints").onchange = plDraw;
+$("plNight").onchange = () => { PL.t = 0; plMakePlan(); };
+for (const id of ["plTwilight", "plMinAlt", "plTZ", ...plParams.map(p => p[0])]) $(id).addEventListener("change", plChanged);
+window.addEventListener("resize", () => plDraw());
+function plMaybeLoad() { if (!PL.loaded && !$("plannerPanel").classList.contains("folded")) plLoad(); }
+
 // every settings and status panel folds by its title
 {
   const folded = new Set(store.get("foldedPanels", []));
-  document.querySelectorAll("#infoGrid .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2").forEach(h => {
+  document.querySelectorAll("#infoGrid .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2, #plannerPanel > h2").forEach(h => {
     const key = h.textContent.trim();
     h.classList.add("fold");
     h.title = "Свернуть или развернуть";
@@ -2694,6 +3446,9 @@ $("infoToggle").onclick = () => {
     };
   });
 }
+// the planner loads when its panel is open
+$("plannerHead").addEventListener("click", plMaybeLoad);
+plMaybeLoad();
 loadFilters();
 for (const c of store.get("collapsed", [])) collapsed.add(c);
 setFiltersFolded(store.get("filtersFolded", matchMedia("(max-width: 700px)").matches)); // folded on a phone
