@@ -53,3 +53,28 @@ func TestObject(t *testing.T) {
 		t.Errorf("OBJCTRA: %v %v %v", ra, dec, ok)
 	}
 }
+
+func TestSun(t *testing.T) {
+	// Moscow: the Sun is high at local noon in June, deep below at midnight
+	if s := Sun(time.Date(2026, 6, 21, 9, 30, 0, 0, time.UTC), 55.75, 37.62); s.Alt < 55 || s.Alt > 60 || math.Abs(s.Az-180) > 5 {
+		t.Errorf("noon: %+v", s)
+	}
+	if s := Sun(time.Date(2026, 12, 21, 21, 30, 0, 0, time.UTC), 55.75, 37.62); s.Alt > -50 {
+		t.Errorf("midnight: %+v", s)
+	}
+}
+
+func TestHourAngle(t *testing.T) {
+	// on the meridian an object is due south (north latitudes, dec < lat)
+	tm := time.Date(2026, 10, 1, 20, 0, 0, 0, time.UTC)
+	for _, ra := range []float64{0, 90, 200, 330} {
+		h := HourAngle(tm, 37.62, ra)
+		if h < -12 || h >= 12 {
+			t.Fatalf("hour angle %v out of range", h)
+		}
+		at := tm.Add(-time.Duration(h * float64(time.Hour) / 1.0027379))
+		if p := Object(at, 55.75, 37.62, ra, 20); math.Abs(p.Az-180) > 1 {
+			t.Errorf("ra %v: at hour angle 0 the azimuth is %v", ra, p.Az)
+		}
+	}
+}

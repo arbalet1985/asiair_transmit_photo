@@ -40,6 +40,9 @@ import (
 // the manifest the window needs (common controls v6, DPI awareness).
 //go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --icon ../../internal/gui/icon.png --manifest gui --product-name "ASIAIR Sorter" --file-description "ASIAIR Sorter"
 
+// plannerTab is the index of the tab of the planner.
+const plannerTab = 3
+
 const title = "ASIAIR Sorter — раскладка кадров для Siril"
 
 // receiverLogin is what is kept of a receiver: its certificate and the
@@ -57,6 +60,7 @@ type settings struct {
 	BlinkSpeed      int                      `json:"blink_speed,omitempty"` // half frames per second
 	ShowMoon        bool                     `json:"show_moon,omitempty"`
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
+	Planner         plannerSettings          `json:"planner"`
 }
 
 func configDir() string {
@@ -145,6 +149,8 @@ type window struct {
 	moonView                   *walk.CustomWidget
 	moon                       *moon.Info // of the frame shown
 	skyObj                     *skyObject
+	pl                         *plannerUI
+	rightPane                  *walk.Composite
 
 	mu    sync.Mutex // guards saved (changed from the network goroutines)
 	saved settings
@@ -159,6 +165,7 @@ func main() {
 	w := &window{model: &frameModel{}, nights: &nightModel{}, zoom: newZoomView()}
 	s := loadSettings()
 	w.saved = s
+	w.pl = newPlanner(w, s.Planner)
 	var kinds []string
 	for _, k := range kindFilters {
 		kinds = append(kinds, k.label)
@@ -276,6 +283,12 @@ func main() {
 					TabWidget{
 						AssignTo:      &w.tabs,
 						StretchFactor: 3,
+						OnCurrentIndexChanged: func() {
+							// the planner takes the whole width
+							if w.rightPane != nil {
+								w.rightPane.SetVisible(w.tabs.CurrentIndex() != plannerTab)
+							}
+						},
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true,
@@ -298,9 +311,11 @@ func main() {
 							{Title: "Структура и калибровка", Layout: VBox{}, Children: []Widget{
 								TextEdit{AssignTo: &w.summary, ReadOnly: true, VScroll: true, HScroll: true, Font: mono},
 							}},
+							w.pl.page(),
 						},
 					},
 					Composite{
+						AssignTo:      &w.rightPane,
 						StretchFactor: 2,
 						Layout:        VBox{MarginsZero: true},
 						Children: []Widget{
@@ -349,6 +364,7 @@ func main() {
 	w.zoom.changed = w.zoomChanged
 	w.speedChanged()
 	w.inputChanged()
+	w.pl.init()
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
 			w.cancel()
@@ -365,6 +381,7 @@ func (w *window) settings() settings {
 	s := w.saved
 	s.In, s.Out = strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	s.Mode, s.FillCalibration = w.modeBox.CurrentIndex(), w.fillBox.Checked()
+	s.Planner = w.pl.settings()
 	w.saved = s
 	return s
 }
@@ -552,6 +569,7 @@ func (w *window) scan() {
 			w.showAll()
 			w.showNights(nights)
 			w.summary.SetText(l.Summary())
+			w.pl.setFrames(frames)
 			w.foldersChanged()
 			msg := fmt.Sprintf("Кадров: %d, сессий: %d, объём %s.", l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
 			if remote {

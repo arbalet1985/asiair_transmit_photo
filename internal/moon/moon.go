@@ -33,10 +33,7 @@ func At(t time.Time, lat, lon float64, hasSite bool) Info {
 	dec := func(l, b float64) float64 {
 		return math.Asin(math.Sin(b)*math.Cos(e) + math.Cos(b)*math.Sin(e)*math.Sin(l))
 	}
-	// the Sun
-	M := rad * (357.5291 + 0.98560028*d)
-	L := M + rad*(1.9148*math.Sin(M)+0.02*math.Sin(2*M)+0.0003*math.Sin(3*M)) + rad*102.9372 + math.Pi
-	sra, sdec := ra(L, 0), dec(L, 0)
+	sra, sdec := sun(d)
 	// the Moon
 	ml, mm, mf := rad*(218.316+13.176396*d), rad*(134.963+13.064993*d), rad*(93.272+13.229350*d)
 	l, b := ml+rad*6.289*math.Sin(mm), rad*5.128*math.Sin(mf)
@@ -53,6 +50,36 @@ func At(t time.Time, lat, lon float64, hasSite bool) Info {
 	in.HasPos = true
 	in.Alt, in.Az = altAz(d, lat, lon, mra, mdec)
 	return in
+}
+
+// sun: right ascension and declination of the Sun (radians) d days after J2000.
+func sun(d float64) (ra, dec float64) {
+	e := rad * 23.4397
+	M := rad * (357.5291 + 0.98560028*d)
+	L := M + rad*(1.9148*math.Sin(M)+0.02*math.Sin(2*M)+0.0003*math.Sin(3*M)) + rad*102.9372 + math.Pi
+	return math.Atan2(math.Sin(L)*math.Cos(e), math.Cos(L)), math.Asin(math.Sin(e) * math.Sin(L))
+}
+
+// Sun is where the Sun is at t seen from lat, lon: below -18° the night
+// is astronomical.
+func Sun(t time.Time, lat, lon float64) Pos {
+	d := days(t)
+	ra, dec := sun(d)
+	alt, az := altAz(d, lat, lon, ra, dec)
+	return Pos{alt, az}
+}
+
+// HourAngle of the point raDeg at t from the longitude lon, in hours from
+// -12 to 12: negative east of the meridian, 0 on it, positive after it.
+func HourAngle(t time.Time, lon, raDeg float64) float64 {
+	h := math.Mod(280.16+360.9856235*days(t)+lon-raDeg, 360)
+	if h < 0 {
+		h += 360
+	}
+	if h >= 180 {
+		h -= 360
+	}
+	return h / 15
 }
 
 // days since J2000 (as SunCalc counts them)
