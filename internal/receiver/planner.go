@@ -279,6 +279,7 @@ const sampleEvery = 2 * time.Minute
 func (s *Server) handleUIPlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Night string       `json:"night"`
+		Start string       `json:"start,omitempty"` // "ЧЧ:ММ" on the clock of the observatory
 		State PlannerState `json:"state"`
 	}
 	if !readJSON(w, r, &req) {
@@ -297,7 +298,7 @@ func (s *Server) handleUIPlan(w http.ResponseWriter, r *http.Request) {
 	if req.State.TZ != nil {
 		tz = *req.State.TZ
 	}
-	prm.Night, prm.Lat, prm.Lon = req.Night, site.Lat, site.Lon
+	prm.Night, prm.StartAt, prm.Lat, prm.Lon = req.Night, req.Start, site.Lat, site.Lon
 	prm.Zone = time.FixedZone(tzName(tz), int(math.Round(tz*3600)))
 	targets := req.State.Targets
 	active := 0
@@ -313,6 +314,9 @@ func (s *Server) handleUIPlan(w http.ResponseWriter, r *http.Request) {
 	} else {
 		plan = &planner.Plan{Targets: targets, Sky: req.State.Sky, Params: prm}
 		plan.Dusk, plan.Dawn, err = planner.Night(prm.Night, prm.Lat, prm.Lon, prm.SunAlt)
+		if err == nil {
+			plan.Start, err = planner.Start(prm.Night, prm.StartAt, prm.Zone, plan.Dusk, plan.Dawn)
+		}
 		plan.Frames, plan.Seconds = make([]int, len(targets)), make([]float64, len(targets))
 	}
 	if err != nil {
@@ -376,7 +380,7 @@ func planResponse(ctx context.Context, p *planner.Plan, planned bool) map[string
 	}
 	_, off := p.Dusk.In(p.Params.Zone).Zone()
 	out := map[string]any{
-		"dusk": p.Dusk.UnixMilli(), "dawn": p.Dawn.UnixMilli(), "tz": off, "every": sampleEvery.Milliseconds(),
+		"dusk": p.Dusk.UnixMilli(), "dawn": p.Dawn.UnixMilli(), "start": p.Start.UnixMilli(), "tz": off, "every": sampleEvery.Milliseconds(),
 		"sun": sun, "moon": mn, "illum": illum, "tracks": tracks, "steps": steps, "totals": totals,
 		"park": [2]float64{p.Park().Az, p.Park().Alt}, "planned": planned,
 	}

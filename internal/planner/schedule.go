@@ -28,7 +28,10 @@ type Target struct {
 // Params are the night and what the work costs. Durations in minutes
 // unless said otherwise.
 type Params struct {
-	Night    string         `json:"-"` // the evening, YYYY-MM-DD (local date of the site)
+	Night string `json:"-"` // the evening, YYYY-MM-DD (local date of the site)
+	// StartAt: begin later than the dusk, "ЧЧ:ММ" on the clock of the
+	// observatory (clouds waited out, a late start); empty = at the dusk
+	StartAt  string         `json:"-"`
 	Zone     *time.Location `json:"-"` // the clock of the observatory; nil = this computer's
 	Lat, Lon float64        `json:"-"`
 
@@ -90,6 +93,7 @@ type Plan struct {
 	Sky        Sky
 	Params     Params
 	Dusk, Dawn time.Time // UTC
+	Start      time.Time // when the work begins: the dusk or Params.StartAt
 	Steps      []Step
 	Frames     []int     // per target
 	Seconds    []float64 // exposure per target
@@ -155,6 +159,36 @@ func Night(night string, lat, lon, sunAlt float64) (dusk, dawn time.Time, err er
 		return dusk, dawn, ErrNoNight
 	}
 	return dusk, noon.Add(24 * time.Hour), nil
+}
+
+// Start is when the night's work begins: the dusk, or the time asked for
+// on the clock of the observatory (startAt, "ЧЧ:ММ") when it falls in the
+// night. A time before the dusk is read as the next day's, so that 01:30
+// means after midnight.
+func Start(night, startAt string, zone *time.Location, dusk, dawn time.Time) (time.Time, error) {
+	startAt = strings.TrimSpace(strings.ReplaceAll(startAt, ".", ":"))
+	if startAt == "" {
+		return dusk, nil
+	}
+	hm, err := time.Parse("15:04", startAt)
+	if err != nil {
+		return dusk, fmt.Errorf("время начала %q: нужно вида 23:30", startAt)
+	}
+	d, err := time.Parse("2006-01-02", night)
+	if err != nil {
+		return dusk, fmt.Errorf("дата ночи %q: нужна вида 2026-10-01", night)
+	}
+	if zone == nil {
+		zone = time.Local
+	}
+	t := time.Date(d.Year(), d.Month(), d.Day(), hm.Hour(), hm.Minute(), 0, 0, zone)
+	for t.Before(dusk) {
+		t = t.AddDate(0, 0, 1)
+	}
+	if !t.Before(dawn) {
+		return dusk, fmt.Errorf("начало %s вне ночи %s – %s", startAt, dusk.In(zone).Format("15:04"), dawn.In(zone).Format("15:04"))
+	}
+	return t, nil
 }
 
 // Where is the target i at t.
@@ -268,6 +302,9 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 	if p.Dusk, p.Dawn, err = Night(prm.Night, prm.Lat, prm.Lon, prm.SunAlt); err != nil {
 		return p, err
 	}
+	if p.Start, err = Start(prm.Night, prm.StartAt, prm.Zone, p.Dusk, p.Dawn); err != nil {
+		return p, err
+	}
 	// by priority, the order of the list among equals
 	order := make([]int, len(targets))
 	for i := range order {
@@ -331,7 +368,7 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 
 	cur, sinceFocus, inBatch := -1, time.Duration(0), 0
 	west := false // after the flip
-	t := p.Dusk
+	t := p.Start
 	add := func(s Step) {
 		if n := len(p.Steps); n > 0 {
 			last := &p.Steps[n-1]
@@ -531,7 +568,11 @@ func (p *Plan) Text() string {
 	var b strings.Builder
 	hm := func(t time.Time) string { return p.Local(t).Format("15:04") }
 	fmt.Fprintf(&b, "План на ночь %s (время обсерватории %s)\n", p.Params.Night, p.Params.Zone)
-	fmt.Fprintf(&b, "Ночь (Солнце ниже %g°): %s – %s\n\n", p.Params.SunAlt, hm(p.Dusk), hm(p.Dawn))
+	fmt.Fprintf(&b, "Ночь (Солнце ниже %g°): %s – %s\n", p.Params.SunAlt, hm(p.Dusk), hm(p.Dawn))
+	if p.Start.After(p.Dusk) {
+		fmt.Fprintf(&b, "Начало съёмки: %s\n", hm(p.Start))
+	}
+	b.WriteString("\n")
 	for _, s := range p.Steps {
 		name := ""
 		if s.Target >= 0 {

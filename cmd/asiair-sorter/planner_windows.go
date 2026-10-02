@@ -55,6 +55,7 @@ type plannerUI struct {
 	focusSwitchBox, flipBox, pointsBox          *walk.CheckBox
 	onceBox, onlyShootBox                       *walk.CheckBox
 
+	startEdit                             *walk.LineEdit
 	nameEdit, raEdit, decEdit, filterEdit *walk.LineEdit
 	foundBox                              *walk.ComboBox
 	expEdit, wantEdit                     *walk.NumberEdit
@@ -155,6 +156,11 @@ func (p *plannerUI) page() TabPage {
 				OnValueChanged: changed, ToolTipText: "Часовой пояс, в котором показан план (по кадрам: разница времени в имени файла и DATE-OBS)"},
 			Label{Text: "Ночь с:"},
 			DateEdit{AssignTo: &p.dateEdit, Date: defaultNight(), OnDateChanged: changed, ToolTipText: "Вечер, с которого начинается ночь"},
+			Label{Text: "Начать в:"},
+			LineEdit{AssignTo: &p.startEdit, CueBanner: "ЧЧ:ММ", MaxSize: Size{Width: 55}, MinSize: Size{Width: 55}, OnEditingFinished: changed,
+				ToolTipText: "Во сколько начать съёмку по часам обсерватории: пусто — с начала ночи.\nПригодится, когда начали позже плана — например пережидали облака"},
+			PushButton{Text: "сейчас", MaxSize: Size{Width: 60}, OnClicked: p.startNow,
+				ToolTipText: "Поставить текущее время обсерватории: план с этого момента"},
 			Label{Text: "Сумерки:"},
 			ComboBox{AssignTo: &p.twilightBox, Model: tws, CurrentIndex: tw, OnCurrentIndexChanged: changed,
 				ToolTipText: "Ночь — пока Солнце ниже этой высоты"},
@@ -273,6 +279,11 @@ func (p *plannerUI) page() TabPage {
 	}}
 }
 
+// startNow puts the clock of the observatory into «Начать в».
+func (p *plannerUI) startNow() {
+	p.startEdit.SetText(time.Now().In(p.params().Zone).Format("15:04"))
+}
+
 // defaultNight: this evening, or last evening before noon.
 func defaultNight() time.Time {
 	t := time.Now()
@@ -300,8 +311,9 @@ func offsetOf(t time.Time) int {
 // params are the fields of the planner.
 func (p *plannerUI) params() planner.Params {
 	prm := planner.Params{
-		Night: p.dateEdit.Date().Format("2006-01-02"),
-		Lat:   p.latEdit.Value(), Lon: p.lonEdit.Value(),
+		Night:   p.dateEdit.Date().Format("2006-01-02"),
+		StartAt: strings.TrimSpace(p.startEdit.Text()),
+		Lat:     p.latEdit.Value(), Lon: p.lonEdit.Value(),
 		Zone:               time.FixedZone(tzName(p.tzEdit.Value()), int(math.Round(p.tzEdit.Value()*3600))),
 		SunAlt:             twilights[max(p.twilightBox.CurrentIndex(), 0)].alt,
 		SwitchMin:          p.switchEdit.Value(),
@@ -662,7 +674,7 @@ func (p *plannerUI) makePlan() {
 	}
 	setLong(p.planInfo, "План: "+strings.Join(parts, ", "))
 	if p.animT.Before(plan.Dusk) || p.animT.After(plan.Dawn) {
-		p.setTime(plan.Dusk)
+		p.setTime(plan.Start)
 	}
 	p.sky.invalidate()
 }

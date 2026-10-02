@@ -549,3 +549,89 @@ func TestMeridianHold(t *testing.T) {
 		}
 	}
 }
+
+func TestStart(t *testing.T) {
+	zone := time.FixedZone("UTC+5", 5*3600)
+	dusk, dawn, err := Night("2026-10-15", lat, lon, -18)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hm := func(x time.Time) string { return x.In(zone).Format("15:04") }
+	cases := []struct {
+		at, want string
+		bad      bool
+	}{
+		{at: "", want: hm(dusk)},
+		{at: "  ", want: hm(dusk)},
+		{at: "23:30", want: "23:30"},
+		{at: "23.30", want: "23:30"}, // a dot for a colon
+		{at: "01:30", want: "01:30"}, // after midnight, the next day
+		{at: "4:00", want: "04:00"},  // one digit for the hour
+		{at: "25:00", bad: true},     // not a time
+		{at: "вечером", bad: true},   // not a time
+		{at: "19:00", bad: true},     // before the dusk, so outside the night
+		{at: "08:00", bad: true},     // after the dawn
+	}
+	for _, c := range cases {
+		got, err := Start("2026-10-15", c.at, zone, dusk, dawn)
+		if c.bad {
+			if err == nil {
+				t.Errorf("Start(%q) = %s, want an error", c.at, hm(got))
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("Start(%q): %v", c.at, err)
+			continue
+		}
+		if hm(got) != c.want {
+			t.Errorf("Start(%q) = %s, want %s", c.at, hm(got), c.want)
+		}
+		if got.Before(dusk) || !got.Before(dawn) {
+			t.Errorf("Start(%q) = %v, outside the night %v – %v", c.at, got, dusk, dawn)
+		}
+	}
+}
+
+// Begun late (clouds waited out): nothing is planned before the time asked.
+func TestScheduleStart(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	prm.Zone = time.UTC
+	full, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late := full.Dusk.Add(3 * time.Hour).Truncate(time.Minute)
+	prm.StartAt = late.In(prm.Zone).Format("15:04")
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Start.Equal(late) {
+		t.Errorf("start %v, want %v", p.Start, late)
+	}
+	if len(p.Steps) == 0 {
+		t.Fatalf("no steps\n%s", p.Text())
+	}
+	if p.Steps[0].Start.Before(p.Start) {
+		t.Errorf("the first step at %v, before the start %v", p.Steps[0].Start, late)
+	}
+	// the telescope is parked until then, and the night itself is unchanged
+	if st := p.At(late.Add(-time.Minute)); st.Step != -1 || st.Point != p.Park() {
+		t.Errorf("before the start: %+v", st)
+	}
+	if !p.Dusk.Equal(full.Dusk) || !p.Dawn.Equal(full.Dawn) {
+		t.Errorf("the night moved: %v – %v", p.Dusk, p.Dawn)
+	}
+	if sum(p.Seconds) >= sum(full.Seconds) {
+		t.Errorf("a late start gathered %v, the whole night %v", sum(p.Seconds), sum(full.Seconds))
+	}
+	if !strings.Contains(p.Text(), "Начало съёмки: "+prm.StartAt) {
+		t.Errorf("the start is not in the text:\n%s", p.Text())
+	}
+	// a start outside the night is an error, not a silent full night
+	prm.StartAt = "12:00"
+	if _, err := Schedule(targets, sky, prm); err == nil {
+		t.Errorf("a start at noon was taken")
+	}
+}
