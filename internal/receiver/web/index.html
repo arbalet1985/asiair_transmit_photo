@@ -299,6 +299,7 @@
   #plTargets tr.off td { color: var(--muted); }
   #plSteps tr.now td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
   #plSteps tr.minor td { color: var(--muted); }
+  #plSteps tr.plhead td { background: var(--bg); font-weight: 600; border-top: 1px solid var(--border); }
   .plsw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
   #plTargets button { padding: 1px 7px; }
 </style>
@@ -486,6 +487,7 @@
         </div>
         <div class="toolbar">
           <label title="Объект, который будет виден меньше, не берётся: переход не окупится">не идти на объект меньше чем на <input type="number" id="plBlock" min="0" max="240" step="5" class="pln"> мин</label>
+          <label title="Каждый объект снимается один раз: план выбирает для него время, когда он виден дольше всего, и после перехода на другой объект назад не возвращается"><input type="checkbox" id="plOnce"> не повторять объект</label>
           <label title="0 — Луна не мешает">до Луны не ближе <input type="number" id="plMoonSep" min="0" max="180" step="5" class="pln">°</label>
         </div>
       </details>
@@ -527,6 +529,7 @@
         <button class="primary" id="plMake">Составить план</button>
         <button id="plCopy" title="Текст плана — для ввода в план ASIAIR">Копировать план</button>
         <button id="plCSV">Скачать CSV</button>
+        <label title="Скрыть переходы, фокусировки, перекладки и ожидания"><input type="checkbox" id="plOnlyShoot"> только съёмка</label>
         <span class="muted" id="plSummary"></span>
       </div>
       <div class="tablewrap"><table id="plStepsTable">
@@ -2783,6 +2786,7 @@ const plParams = [ // field, key of the parameters, kind
   ["plSwitch", "switch_min"], ["plFocus", "refocus_min"], ["plFocusEvery", "refocus_every"], ["plFocusSwitch", "refocus_switch", "bool"],
   ["plDither", "dither_sec"], ["plDitherEvery", "dither_every", "int"], ["plDownload", "download_sec"], ["plFlip", "flip", "bool"],
   ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
+  ["plOnce", "repeat", "notbool"], // checked = do not come back to a target
 ];
 const plColors = ["#5ac8ff", "#ffaa3c", "#78e678", "#f06ec8", "#fae65a", "#aa8cff", "#ff6e64", "#64e6d2"];
 const plColor = i => i < 0 ? "#a0a0a0" : plColors[i % plColors.length];
@@ -2832,7 +2836,9 @@ async function plLoad() {
     $("plMinAlt").value = PL.st.sky.min_alt;
     $("plTZ").value = PL.st.tz != null ? PL.st.tz : PL.tzGuess;
     for (const [id, key, kind] of plParams) {
-      if (kind === "bool") $(id).checked = !!p[key]; else $(id).value = p[key];
+      if (kind === "bool") $(id).checked = !!p[key];
+      else if (kind === "notbool") $(id).checked = !p[key];
+      else $(id).value = p[key];
     }
     plRenderTargets();
     await plMakePlan();
@@ -2849,6 +2855,7 @@ function plRead() {
   p.sun_alt = parseFloat($("plTwilight").value);
   for (const [id, key, kind] of plParams) {
     if (kind === "bool") p[key] = $(id).checked;
+    else if (kind === "notbool") p[key] = !$(id).checked;
     else { const v = parseFloat($(id).value); p[key] = isNaN(v) ? 0 : kind === "int" ? Math.round(v) : v; }
   }
   const m = parseFloat($("plMinAlt").value);
@@ -2957,19 +2964,48 @@ function plRenderSteps() {
   }
   $("plCopy").disabled = $("plCSV").disabled = false;
   $("plSummary").textContent = PL.st.targets.map((t, i) => t.off ? "" : `${t.name} ${pl.totals[i].time}`).filter(Boolean).join(", ");
+  const only = $("plOnlyShoot").checked;
+  for (const b of plBlocks(pl)) {
+    if (only && !b.frames) continue;
+    const name = b.target >= 0 ? PL.st.targets[b.target]?.name || "" : "без объекта";
+    const head = el("tr", { className: "plhead" });
+    head.append(el("td", { className: "mono", colSpan: 2, textContent: `${plHM(b.start)} – ${plHM(b.end)}` }), el("td", {}),
+      el("td", { className: "name" }, b.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(b.target) }) : "", name),
+      el("td", { className: "num", textContent: b.frames || "" }),
+      el("td", { colSpan: 3, textContent: b.seconds ? fmtHours(b.seconds) : "" }));
+    head.onclick = () => { plSetPlay(false); plSetTime(b.start); };
+    tb.append(head);
+    for (let k = b.first; k < b.last; k++) {
+      const s = pl.steps[k];
+      if (only && s.kind !== "shoot") continue;
+      const tr = el("tr", { className: s.kind === "shoot" ? "" : "minor" });
+      tr.dataset.k = k;
+      tr.append(el("td", { className: "mono", textContent: plHM(s.start) }), el("td", { className: "mono", textContent: plHM(s.end) }),
+        el("td", { textContent: s.label }),
+        el("td", { className: "name" }, s.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(s.target) }) : "", s.target >= 0 ? PL.st.targets[s.target]?.name || "" : ""),
+        el("td", { className: "num", textContent: s.kind === "shoot" ? s.frames : "" }),
+        el("td", { className: "num", textContent: s.target >= 0 ? `${Math.round(s.alt1)}° → ${Math.round(s.alt2)}°` : "" }),
+        el("td", { className: "num", textContent: s.target >= 0 ? s.moon + "°" : "" }), el("td", { className: "muted", textContent: s.note || "" }));
+      tr.onclick = () => { plSetPlay(false); plSetTime(s.start); };
+      tb.append(tr);
+    }
+  }
+}
+
+// plBlocks: the steps grouped by the visit to a target (planner.Plan.Blocks),
+// each with how much was shot in it.
+function plBlocks(pl) {
+  const out = [];
   pl.steps.forEach((s, k) => {
-    const name = s.target >= 0 ? PL.st.targets[s.target]?.name || "" : "";
-    const tr = el("tr", { className: s.kind === "shoot" ? "" : "minor" });
-    tr.dataset.k = k;
-    tr.append(el("td", { className: "mono", textContent: plHM(s.start) }), el("td", { className: "mono", textContent: plHM(s.end) }),
-      el("td", { textContent: s.label }),
-      el("td", { className: "name" }, s.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(s.target) }) : "", name),
-      el("td", { className: "num", textContent: s.kind === "shoot" ? s.frames : "" }),
-      el("td", { className: "num", textContent: s.target >= 0 ? `${Math.round(s.alt1)}° → ${Math.round(s.alt2)}°` : "" }),
-      el("td", { className: "num", textContent: s.target >= 0 ? s.moon + "°" : "" }), el("td", { className: "muted", textContent: s.note || "" }));
-    tr.onclick = () => { plSetPlay(false); plSetTime(s.start); };
-    tb.append(tr);
+    const shot = s.kind === "shoot" && s.target >= 0 ? s.frames * (PL.st.targets[s.target]?.exposure || 0) : 0;
+    const b = out[out.length - 1];
+    if (b && b.target === s.target) {
+      b.end = s.end; b.last = k + 1; b.frames += s.frames || 0; b.seconds += shot;
+    } else {
+      out.push({ target: s.target, start: s.start, end: s.end, first: k, last: k + 1, frames: s.frames || 0, seconds: shot });
+    }
   });
+  return out;
 }
 
 // ---- the time and the animation
@@ -3330,6 +3366,7 @@ function plDragEnd() {
 $("plSky").addEventListener("pointerup", plDragEnd);
 $("plSky").addEventListener("pointercancel", plDragEnd);
 $("plSky").addEventListener("contextmenu", e => { if ($("plEdit").checked) e.preventDefault(); });
+$("plOnlyShoot").onchange = plRenderSteps;
 $("plEdit").onchange = () => {
   const on = $("plEdit").checked;
   $("plSky").classList.toggle("editing", on);
