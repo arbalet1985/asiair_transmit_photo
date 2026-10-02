@@ -116,7 +116,7 @@ func TestSorterFromReceiver(t *testing.T) {
 	if len(res.Errors) > 0 || res.Placed != 4 || res.Calibration != 2 || last.Bytes != last.TotalBytes || last.TotalBytes == 0 {
 		t.Fatalf("%+v %+v", res, last)
 	}
-	sess := filepath.Join(out, "Objects", "M 31", "2026-09-26_Ha_300s_gain100")
+	sess := filepath.Join(out, "Objects", "M 31", "2026-09-26_Ha_300s_gain100_SESSION_1")
 	name := "Light_M 31_300.0s_Bin1_Ha_gain100_20260926-221001_-10.0C_0001.fit"
 	want, _ := os.ReadFile(filepath.Join(root, "Plan", "Light", "M 31", name))
 	got, err := os.ReadFile(filepath.Join(sess, "lights", name))

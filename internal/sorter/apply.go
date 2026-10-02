@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -113,7 +114,7 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 	for _, g := range l.Groups {
 		dirs := []string{g.Dir}
 		if g.Kind == Light {
-			dirs = nil
+			dirs = []string{PIFilterDir(path.Dir(g.Dir), g.Filter)}
 			for _, d := range SessionDirs {
 				dirs = append(dirs, g.Dir+"/"+d)
 			}
