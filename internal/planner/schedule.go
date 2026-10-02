@@ -41,10 +41,15 @@ type Params struct {
 	DitherSec          float64 `json:"dither_sec"`     // settling after a dither, seconds
 	DownloadSec        float64 `json:"download_sec"`   // between frames, seconds
 	Flip               bool    `json:"flip"`           // equatorial mount: meridian flip
+	FlipBeforeMin      float64 `json:"flip_before"`    // stop shooting this long before the meridian (0 = at it)
 	FlipAfterMin       float64 `json:"flip_after"`     // the flip, this long after the meridian
 	FlipMin            float64 `json:"flip_min"`       // how long the flip takes (with re-centering and guiding)
 	MinBlockMin        float64 `json:"min_block"`      // do not go to a target seen for less than this
 	MoonSep            float64 `json:"moon_sep"`       // degrees from the Moon at least (0 = no matter)
+	// Repeat: a target may be gone back to later in the night. Off by
+	// default (and in what was saved before this was asked): a target is
+	// shot once, at the time it is seen the longest.
+	Repeat bool `json:"repeat,omitempty"`
 }
 
 // DefaultParams are what is asked for at first.
@@ -85,6 +90,41 @@ type Plan struct {
 	Seconds    []float64 // exposure per target
 }
 
+// Block is one visit to a target: the steps from the slew to it until the
+// telescope goes to another, with what was shot in them. The plan is shown
+// by blocks, each headed by its total.
+type Block struct {
+	Target      int       // index in Plan.Targets, -1 = none
+	Start, End  time.Time // UTC
+	First, Last int       // its steps: Plan.Steps[First:Last]
+	Frames      int
+	Seconds     float64 // exposure in the block
+}
+
+// Blocks are the steps of the plan grouped by the visit to a target.
+func (p *Plan) Blocks() []Block {
+	var out []Block
+	for k, s := range p.Steps {
+		if n := len(out); n > 0 && out[n-1].Target == s.Target {
+			b := &out[n-1]
+			b.End, b.Last, b.Frames = s.End, k+1, b.Frames+s.Frames
+			b.Seconds += p.shot(s)
+			continue
+		}
+		out = append(out, Block{Target: s.Target, Start: s.Start, End: s.End, First: k, Last: k + 1,
+			Frames: s.Frames, Seconds: p.shot(s)})
+	}
+	return out
+}
+
+// shot is the exposure of a step, seconds.
+func (p *Plan) shot(s Step) float64 {
+	if s.Kind != Shoot || s.Target < 0 {
+		return 0
+	}
+	return float64(s.Frames) * p.Targets[s.Target].Exposure
+}
+
 // ErrNoNight: the Sun does not go low enough.
 var ErrNoNight = errors.New("в эту ночь Солнце не опускается достаточно низко")
 
@@ -116,7 +156,7 @@ func Night(night string, lat, lon, sunAlt float64) (dusk, dawn time.Time, err er
 func (p *Plan) Where(i int, t time.Time) Point {
 	tg := p.Targets[i]
 	q := moon.Object(t, p.Params.Lat, p.Params.Lon, tg.RA, tg.Dec)
-	return Point{q.Az, q.Alt}
+	return Point{Az: q.Az, Alt: q.Alt}
 }
 
 // open: the target can be shot at t.
@@ -160,13 +200,60 @@ func (p *Plan) opensWithin(i int, t time.Time, max, frame time.Duration) (time.T
 	return time.Time{}, false
 }
 
+// bestSlackMin: a target shot once is begun when its best stretch is this
+// near, so that the plan does not wait on the minute.
+const bestSlackMin = 3
+
 func minutes(m float64) time.Duration { return time.Duration(m * float64(time.Minute)) }
 func seconds(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
+
+// seen tells, for every minute of the night from the dusk, whether the
+// target is open. Shooting a target once needs the whole night at hand,
+// not only the moment.
+func (p *Plan) seen(i int) []bool {
+	n := int(p.Dawn.Sub(p.Dusk).Minutes()) + 1
+	if n < 1 {
+		n = 1
+	}
+	out := make([]bool, n)
+	for k := range out {
+		out[k] = p.open(i, p.Dusk.Add(time.Duration(k)*time.Minute))
+	}
+	return out
+}
+
+// bestStart is the minute to begin shooting a target that is shot once:
+// the first run long enough for what is still wanted, or else the longest
+// run, looked for from the minute from. ok is false when it is never open
+// again.
+func bestStart(seen []bool, from, want int) (int, bool) {
+	best, bestLen := -1, 0
+	for i := max(from, 0); i < len(seen); {
+		if !seen[i] {
+			i++
+			continue
+		}
+		j := i
+		for j < len(seen) && seen[j] {
+			j++
+		}
+		if want > 0 && j-i >= want {
+			return i, true // early enough and long enough: no need to look further
+		}
+		if j-i > bestLen {
+			best, bestLen = i, j-i
+		}
+		i = j
+	}
+	return best, best >= 0
+}
 
 // Schedule plans the night: at every moment the most important target
 // that can be shot and still lacks exposure. A target is gone to only if
 // it stays open for MinBlockMin; a target hidden for a short time (less
-// than going away and back) is waited for.
+// than going away and back) is waited for. Unless Params.Repeat, a target
+// is shot once: it is begun when it is seen the longest, and once left it
+// is not gone back to.
 func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 	if prm.Zone == nil {
 		prm.Zone = time.Local
@@ -182,10 +269,22 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 		order[i] = i
 	}
 	sort.SliceStable(order, func(a, b int) bool { return targets[order[a]].Priority < targets[order[b]].Priority })
+	once := !prm.Repeat
+	shown := map[int]bool{} // shot and left: with once, not gone back to
 	left := func(i int) bool {
 		tg := targets[i]
-		return !tg.Off && tg.Exposure > 0 && (tg.WantSec <= 0 || p.Seconds[i]+tg.Exposure/2 < tg.WantSec)
+		return !tg.Off && tg.Exposure > 0 && !shown[i] && (tg.WantSec <= 0 || p.Seconds[i]+tg.Exposure/2 < tg.WantSec)
 	}
+	// with once: when each target is open, to begin it at its best time
+	seen := make([][]bool, len(targets))
+	if once {
+		for i := range targets {
+			if !targets[i].Off && targets[i].Exposure > 0 {
+				seen[i] = p.seen(i)
+			}
+		}
+	}
+	minute := func(t time.Time) int { return int(math.Round(t.Sub(p.Dusk).Minutes())) }
 	frameDur := func(i int) time.Duration { return seconds(targets[i].Exposure + prm.DownloadSec) }
 	switchDur := minutes(prm.SwitchMin)
 	block := minutes(prm.MinBlockMin)
@@ -206,9 +305,21 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 			if w := targets[i].WantSec - p.Seconds[i]; targets[i].WantSec > 0 && seconds(w) < need {
 				need = seconds(w) + frameDur(i)
 			}
-			if p.openFor(i, t.Add(switchDur), need) {
-				return i
+			if !p.openFor(i, t.Add(switchDur), need) {
+				continue
 			}
+			// shot once: wait for the stretch where it is seen the longest
+			if once {
+				from := minute(t.Add(switchDur))
+				want := 0
+				if targets[i].WantSec > 0 {
+					want = int(math.Ceil((targets[i].WantSec - p.Seconds[i]) / 60))
+				}
+				if at, ok := bestStart(seen[i], from, want); !ok || at > from+bestSlackMin {
+					continue
+				}
+			}
+			return i
 		}
 		return -1
 	}
@@ -247,6 +358,9 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 			continue
 		}
 		if next != cur {
+			if once && cur >= 0 && p.Frames[cur] > 0 {
+				shown[cur] = true
+			}
 			add(Step{Kind: Slew, Start: t, End: t.Add(switchDur), Target: next})
 			t, cur, inBatch = t.Add(switchDur), next, 0
 			west = prm.Flip && moon.HourAngle(t, prm.Lon, targets[cur].RA) >= prm.FlipAfterMin/60
@@ -257,7 +371,21 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 			continue
 		}
 		ha := moon.HourAngle(t, prm.Lon, targets[cur].RA)
-		if prm.Flip && !west && ha >= prm.FlipAfterMin/60 && ha < 6 {
+		// the mount stops before the meridian and waits for the flip: no
+		// frame is taken between the two
+		stopAt, flipAt := -prm.FlipBeforeMin/60, prm.FlipAfterMin/60
+		if prm.Flip && !west && flipAt > stopAt && ha < flipAt {
+			if haEnd := moon.HourAngle(t.Add(frameDur(cur)), prm.Lon, targets[cur].RA); haEnd >= stopAt && haEnd < 6 {
+				at := t
+				for at.Before(p.Dawn) && moon.HourAngle(at, prm.Lon, targets[cur].RA) < flipAt {
+					at = at.Add(time.Minute)
+				}
+				add(Step{Kind: Wait, Start: t, End: at, Target: cur, Note: "до перекладки"})
+				t = at
+				continue
+			}
+		}
+		if prm.Flip && !west && ha >= flipAt && ha < 6 {
 			add(Step{Kind: Flip, Start: t, End: t.Add(minutes(prm.FlipMin)), Target: cur})
 			t, west, inBatch = t.Add(minutes(prm.FlipMin)), true, 0
 			continue
@@ -308,9 +436,9 @@ type State struct {
 // Park is where the telescope waits before the night: at the pole.
 func (p *Plan) Park() Point {
 	if p.Params.Lat < 0 {
-		return Point{180, -p.Params.Lat}
+		return Point{Az: 180, Alt: -p.Params.Lat}
 	}
-	return Point{0, p.Params.Lat}
+	return Point{Az: 0, Alt: p.Params.Lat}
 }
 
 // At is the telescope at t: on its target, on the way between two during
@@ -334,7 +462,7 @@ func (p *Plan) At(t time.Time) State {
 				}
 				to := p.Where(st.Target, st.End)
 				f := float64(t.Sub(st.Start)) / float64(st.End.Sub(st.Start))
-				s.Point = Point{normAz(from.Az + wrap180(to.Az-from.Az)*f), from.Alt + (to.Alt-from.Alt)*f}
+				s.Point = Point{Az: normAz(from.Az + wrap180(to.Az-from.Az)*f), Alt: from.Alt + (to.Alt-from.Alt)*f}
 			} else if st.Target >= 0 {
 				s.Point = p.Where(st.Target, t)
 			} else if prev >= 0 {

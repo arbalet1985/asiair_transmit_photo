@@ -510,7 +510,7 @@ func (v *skyView) mouseDown(x, y int, b walk.MouseButton) {
 	}
 	if i := zoneAt(p.guess.Maybe, pt); i >= 0 {
 		z := p.guess.Maybe[i]
-		z.Auto = true
+		z.Auto = false // accepted by hand
 		sky.Zones = append(sky.Zones, z)
 		p.guess.Maybe = append(p.guess.Maybe[:i], p.guess.Maybe[i+1:]...)
 		p.state.SkySet = true
@@ -518,7 +518,7 @@ func (v *skyView) mouseDown(x, y int, b walk.MouseButton) {
 		return
 	}
 	// a new point of the horizon, dragged at once
-	sky.Horizon = append(sky.Horizon, planner.Point{Az: pt.Az, Alt: math.Max(pt.Alt, 0)})
+	sky.Horizon = append(sky.Horizon, planner.Point{Az: pt.Az, Alt: math.Max(pt.Alt, 0), Manual: true})
 	v.drag, v.node = dragNode, len(sky.Horizon)-1
 	v.invalidate()
 }
@@ -543,6 +543,7 @@ func (v *skyView) mouseMove(x, y int, b walk.MouseButton) {
 	sky := &v.p.state.Sky
 	pt := v.azAlt(x, y)
 	pt.Alt = math.Max(pt.Alt, 0)
+	pt.Manual = true
 	switch v.drag {
 	case dragNode:
 		if v.node < len(sky.Horizon) {

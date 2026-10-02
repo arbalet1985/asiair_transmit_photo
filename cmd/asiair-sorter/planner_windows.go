@@ -50,8 +50,10 @@ type plannerUI struct {
 	minAltEdit, switchEdit, focusEdit           *walk.NumberEdit
 	focusEveryEdit, ditherEdit, ditherEveryEdit *walk.NumberEdit
 	downloadEdit, flipAfterEdit, flipEdit       *walk.NumberEdit
+	flipBeforeEdit                              *walk.NumberEdit
 	blockEdit, moonSepEdit                      *walk.NumberEdit
 	focusSwitchBox, flipBox, pointsBox          *walk.CheckBox
+	onceBox, onlyShootBox                       *walk.CheckBox
 
 	nameEdit, raEdit, decEdit, filterEdit *walk.LineEdit
 	foundBox                              *walk.ComboBox
@@ -179,13 +181,18 @@ func (p *plannerUI) page() TabPage {
 		Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
 			CheckBox{AssignTo: &p.flipBox, Text: "Перекладка через меридиан:", Checked: prm.Flip, OnCheckedChanged: changed,
 				ToolTipText: "Экваториальная монтировка: после меридиана телескоп перекладывается на другую сторону"},
-			num(&p.flipAfterEdit, prm.FlipAfterMin, 0, -60, 120, " мин", "Через сколько минут после меридиана (как в настройках ASIAIR)"),
+			Label{Text: "стоп за"},
+			num(&p.flipBeforeEdit, prm.FlipBeforeMin, 0, 0, 120, " мин", "За сколько минут до меридиана прекратить съёмку: монтировка останавливается и ждёт перекладки (0 — снимать до самого меридиана)"),
+			Label{Text: "до меридиана, перекладка через"},
+			num(&p.flipAfterEdit, prm.FlipAfterMin, 0, -60, 120, " мин", "Через сколько минут после меридиана переложиться (как в настройках ASIAIR)"),
 			Label{Text: "после меридиана, занимает"},
 			num(&p.flipEdit, prm.FlipMin, 1, 0, 60, " мин", "Перекладка, повторное наведение и запуск гида"),
 			Label{Text: "Не идти на объект меньше чем на"},
 			num(&p.blockEdit, prm.MinBlockMin, 0, 0, 240, " мин", "Объект, который будет виден меньше, не берётся: переход не окупится"),
 			Label{Text: "До Луны не ближе"},
 			num(&p.moonSepEdit, prm.MoonSep, 0, 0, 180, "°", "0 — Луна не мешает"),
+			CheckBox{AssignTo: &p.onceBox, Text: "Не повторять объект", Checked: !prm.Repeat, OnCheckedChanged: changed,
+				ToolTipText: "Каждый объект снимается один раз: план выбирает для него время, когда он виден дольше всего,\nи после перехода на другой объект назад не возвращается"},
 			HSpacer{},
 		}},
 		VSplitter{StretchFactor: 1, Children: []Widget{
@@ -243,7 +250,7 @@ func (p *plannerUI) page() TabPage {
 						CheckBox{AssignTo: &p.pointsBox, Text: "кадры", Checked: true, OnCheckedChanged: p.sky.invalidate,
 							ToolTipText: "Показать, где были снятые кадры (цвет — объект)"},
 						PushButton{Text: "Горизонт по кадрам", OnClicked: p.skyFromFrames,
-							ToolTipText: "Заменить горизонт и закрытые зоны угаданными по кадрам последнего «Просмотреть кадры»"},
+							ToolTipText: "Угадать горизонт и закрытые зоны заново по кадрам последнего «Просмотреть кадры»;\nточки и зоны, поставленные или поправленные руками, остаются"},
 						PushButton{Text: "Сбросить", OnClicked: p.resetSky, ToolTipText: "Ровный горизонт на высоте «Не ниже», без зон"},
 					}},
 					Label{AssignTo: &p.skyInfo, EllipsisMode: EllipsisEnd, TextColor: gray},
@@ -254,6 +261,8 @@ func (p *plannerUI) page() TabPage {
 					PushButton{Text: "Составить план", OnClicked: p.makePlan},
 					PushButton{Text: "Копировать план", OnClicked: p.copyPlan, ToolTipText: "Текст плана — для ввода в план ASIAIR"},
 					PushButton{Text: "Сохранить CSV…", OnClicked: p.saveCSV},
+					CheckBox{AssignTo: &p.onlyShootBox, Text: "только съёмка", OnCheckedChanged: p.stepsChanged,
+						ToolTipText: "Скрыть переходы, фокусировки, перекладки и ожидания"},
 					Label{AssignTo: &p.planInfo, EllipsisMode: EllipsisEnd},
 					HSpacer{},
 				}},
@@ -303,10 +312,12 @@ func (p *plannerUI) params() planner.Params {
 		DitherSec:          p.ditherEdit.Value(),
 		DownloadSec:        p.downloadEdit.Value(),
 		Flip:               p.flipBox.Checked(),
+		FlipBeforeMin:      p.flipBeforeEdit.Value(),
 		FlipAfterMin:       p.flipAfterEdit.Value(),
 		FlipMin:            p.flipEdit.Value(),
 		MinBlockMin:        p.blockEdit.Value(),
 		MoonSep:            p.moonSepEdit.Value(),
+		Repeat:             !p.onceBox.Checked(),
 	}
 	return prm
 }
@@ -429,8 +440,8 @@ func (p *plannerUI) skyFromFrames() {
 		return
 	}
 	p.guess = planner.Infer(p.guess.Points, p.minAltEdit.Value())
-	p.useGuess()
-	p.state.SkySet = false
+	p.state.Sky = p.state.Sky.Reguess(p.guess, p.state.SkySet)
+	p.state.SkySet = p.state.Sky.Manual()
 	p.skyChanged()
 }
 
@@ -693,11 +704,19 @@ func (p *plannerUI) saveCSV() {
 
 func (p *plannerUI) stepChosen() {
 	i := p.stepTable.CurrentIndex()
-	if p.plan == nil || i < 0 || i >= len(p.plan.Steps) {
+	if i < 0 || i >= len(p.steps.rows) {
 		return
 	}
 	p.setPlay(false)
-	p.setTime(p.plan.Steps[i].Start)
+	p.setTime(p.steps.rows[i].start)
+}
+
+// stepsChanged: the table is filled again (the «только съёмка» box).
+func (p *plannerUI) stepsChanged() {
+	if !p.ready {
+		return
+	}
+	p.steps.PublishRowsReset()
 }
 
 // the animation
@@ -841,21 +860,77 @@ var stepColumns = []struct {
 	{"Кадров", 55, true}, {"Высота", 80, true}, {"До Луны", 60, true}, {"", 160, false},
 }
 
-type stepModel struct {
-	walk.TableModelBase
-	p *plannerUI
+// stepRow is a row of the table: the head of a block (the visit to a
+// target, with its total) or a step of it.
+type stepRow struct {
+	head  bool
+	block planner.Block
+	step  int // index in Plan.Steps, head: the first of the block
+	start time.Time
 }
 
-func (m *stepModel) RowCount() int {
-	if m.p.plan == nil {
-		return 0
-	}
-	return len(m.p.plan.Steps)
+type stepModel struct {
+	walk.TableModelBase
+	p    *plannerUI
+	rows []stepRow
 }
+
+// rebuild fills the rows from the plan.
+func (m *stepModel) rebuild() {
+	m.rows = nil
+	pl := m.p.plan
+	if pl == nil {
+		return
+	}
+	only := m.p.onlyShootBox != nil && m.p.onlyShootBox.Checked()
+	for _, b := range pl.Blocks() {
+		if only && b.Frames == 0 {
+			continue
+		}
+		m.rows = append(m.rows, stepRow{head: true, block: b, step: b.First, start: b.Start})
+		for k := b.First; k < b.Last; k++ {
+			if only && pl.Steps[k].Kind != planner.Shoot {
+				continue
+			}
+			m.rows = append(m.rows, stepRow{block: b, step: k, start: pl.Steps[k].Start})
+		}
+	}
+}
+
+func (m *stepModel) PublishRowsReset() {
+	m.rebuild()
+	m.TableModelBase.PublishRowsReset()
+}
+
+func (m *stepModel) RowCount() int { return len(m.rows) }
 
 func (m *stepModel) Value(i, col int) interface{} {
 	pl := m.p.plan
-	s := pl.Steps[i]
+	r := m.rows[i]
+	if r.head {
+		b := r.block
+		switch col {
+		case 0:
+			return pl.Local(b.Start).Format("15:04")
+		case 1:
+			return pl.Local(b.End).Format("15:04")
+		case 3:
+			if b.Target >= 0 {
+				return pl.Targets[b.Target].Name
+			}
+			return "без объекта"
+		case 4:
+			if b.Frames > 0 {
+				return fmt.Sprint(b.Frames)
+			}
+		case 7:
+			if b.Seconds > 0 {
+				return "всего " + planner.Hours(b.Seconds)
+			}
+		}
+		return ""
+	}
+	s := pl.Steps[r.step]
 	switch col {
 	case 0:
 		return pl.Local(s.Start).Format("15:04")
@@ -891,10 +966,19 @@ func (m *stepModel) Value(i, col int) interface{} {
 
 func (m *stepModel) style(c *walk.CellStyle) {
 	pl := m.p.plan
-	if pl == nil || c.Row() < 0 || c.Row() >= len(pl.Steps) {
+	if pl == nil || c.Row() < 0 || c.Row() >= len(m.rows) {
 		return
 	}
-	s := pl.Steps[c.Row()]
+	r := m.rows[c.Row()]
+	if r.head {
+		c.BackgroundColor = walk.RGB(232, 234, 238)
+		if r.block.Target >= 0 {
+			col := targetColor(r.block.Target)
+			c.BackgroundColor = walk.RGB(255-(255-col.R())/2, 255-(255-col.G())/2, 255-(255-col.B())/2)
+		}
+		return
+	}
+	s := pl.Steps[r.step]
 	switch {
 	case s.Kind == planner.Shoot:
 		col := targetColor(s.Target)

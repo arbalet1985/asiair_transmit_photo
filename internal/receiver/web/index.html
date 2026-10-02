@@ -299,6 +299,7 @@
   #plTargets tr.off td { color: var(--muted); }
   #plSteps tr.now td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
   #plSteps tr.minor td { color: var(--muted); }
+  #plSteps tr.plhead td { background: var(--bg); font-weight: 600; border-top: 1px solid var(--border); }
   .plsw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
   #plTargets button { padding: 1px 7px; }
 </style>
@@ -481,11 +482,13 @@
         </div>
         <div class="toolbar">
           <label title="Экваториальная монтировка: после меридиана телескоп перекладывается"><input type="checkbox" id="plFlip"> перекладка через меридиан</label>
-          <label>через <input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"> мин после меридиана,</label>
+          <label title="За сколько минут до меридиана прекратить съёмку: монтировка останавливается и ждёт перекладки (0 — снимать до самого меридиана)">стоп за <input type="number" id="plFlipBefore" min="0" max="120" step="1" class="pln"> мин до меридиана,</label>
+          <label title="Когда переложиться: столько минут после меридиана (как в настройках ASIAIR)">перекладка через <input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"> мин после меридиана,</label>
           <label>занимает <input type="number" id="plFlipMin" min="0" max="60" step="0.5" class="pln"> мин</label>
         </div>
         <div class="toolbar">
           <label title="Объект, который будет виден меньше, не берётся: переход не окупится">не идти на объект меньше чем на <input type="number" id="plBlock" min="0" max="240" step="5" class="pln"> мин</label>
+          <label title="Каждый объект снимается один раз: план выбирает для него время, когда он виден дольше всего, и после перехода на другой объект назад не возвращается"><input type="checkbox" id="plOnce"> не повторять объект</label>
           <label title="0 — Луна не мешает">до Луны не ближе <input type="number" id="plMoonSep" min="0" max="180" step="5" class="pln">°</label>
         </div>
       </details>
@@ -498,7 +501,7 @@
         <label title="Где снимались полученные кадры (цвет — объект)"><input type="checkbox" id="plPoints" checked> кадры</label>
         <label title="Править горизонт и закрытые зоны на рисунке"><input type="checkbox" id="plEdit"> правка неба</label>
         <select id="plMode" hidden aria-label="Что делает касание"><option value="h">точки горизонта</option><option value="z">новая зона</option><option value="d">удалить</option></select>
-        <button id="plGuess" title="Заменить горизонт и зоны угаданными по полученным кадрам">Горизонт по кадрам</button>
+        <button id="plGuess" title="Угадать горизонт и зоны заново по полученным кадрам; точки и зоны, поставленные или поправленные руками, остаются">Горизонт по кадрам</button>
         <button id="plReset" title="Ровный горизонт на высоте «не ниже», без зон">Сбросить</button>
       </div>
       <div class="line muted" id="plInfo"></div>
@@ -527,6 +530,7 @@
         <button class="primary" id="plMake">Составить план</button>
         <button id="plCopy" title="Текст плана — для ввода в план ASIAIR">Копировать план</button>
         <button id="plCSV">Скачать CSV</button>
+        <label title="Скрыть переходы, фокусировки, перекладки и ожидания"><input type="checkbox" id="plOnlyShoot"> только съёмка</label>
         <span class="muted" id="plSummary"></span>
       </div>
       <div class="tablewrap"><table id="plStepsTable">
@@ -2782,7 +2786,8 @@ const PL = { st: null, guess: null, objects: [], tzGuess: 0, plan: null, t: 0, p
 const plParams = [ // field, key of the parameters, kind
   ["plSwitch", "switch_min"], ["plFocus", "refocus_min"], ["plFocusEvery", "refocus_every"], ["plFocusSwitch", "refocus_switch", "bool"],
   ["plDither", "dither_sec"], ["plDitherEvery", "dither_every", "int"], ["plDownload", "download_sec"], ["plFlip", "flip", "bool"],
-  ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
+  ["plFlipBefore", "flip_before"], ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
+  ["plOnce", "repeat", "notbool"], // checked = do not come back to a target
 ];
 const plColors = ["#5ac8ff", "#ffaa3c", "#78e678", "#f06ec8", "#fae65a", "#aa8cff", "#ff6e64", "#64e6d2"];
 const plColor = i => i < 0 ? "#a0a0a0" : plColors[i % plColors.length];
@@ -2832,7 +2837,9 @@ async function plLoad() {
     $("plMinAlt").value = PL.st.sky.min_alt;
     $("plTZ").value = PL.st.tz != null ? PL.st.tz : PL.tzGuess;
     for (const [id, key, kind] of plParams) {
-      if (kind === "bool") $(id).checked = !!p[key]; else $(id).value = p[key];
+      if (kind === "bool") $(id).checked = !!p[key];
+      else if (kind === "notbool") $(id).checked = !p[key];
+      else $(id).value = p[key];
     }
     plRenderTargets();
     await plMakePlan();
@@ -2849,6 +2856,7 @@ function plRead() {
   p.sun_alt = parseFloat($("plTwilight").value);
   for (const [id, key, kind] of plParams) {
     if (kind === "bool") p[key] = $(id).checked;
+    else if (kind === "notbool") p[key] = !$(id).checked;
     else { const v = parseFloat($(id).value); p[key] = isNaN(v) ? 0 : kind === "int" ? Math.round(v) : v; }
   }
   const m = parseFloat($("plMinAlt").value);
@@ -2957,19 +2965,48 @@ function plRenderSteps() {
   }
   $("plCopy").disabled = $("plCSV").disabled = false;
   $("plSummary").textContent = PL.st.targets.map((t, i) => t.off ? "" : `${t.name} ${pl.totals[i].time}`).filter(Boolean).join(", ");
+  const only = $("plOnlyShoot").checked;
+  for (const b of plBlocks(pl)) {
+    if (only && !b.frames) continue;
+    const name = b.target >= 0 ? PL.st.targets[b.target]?.name || "" : "без объекта";
+    const head = el("tr", { className: "plhead" });
+    head.append(el("td", { className: "mono", colSpan: 2, textContent: `${plHM(b.start)} – ${plHM(b.end)}` }), el("td", {}),
+      el("td", { className: "name" }, b.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(b.target) }) : "", name),
+      el("td", { className: "num", textContent: b.frames || "" }),
+      el("td", { colSpan: 3, textContent: b.seconds ? fmtHours(b.seconds) : "" }));
+    head.onclick = () => { plSetPlay(false); plSetTime(b.start); };
+    tb.append(head);
+    for (let k = b.first; k < b.last; k++) {
+      const s = pl.steps[k];
+      if (only && s.kind !== "shoot") continue;
+      const tr = el("tr", { className: s.kind === "shoot" ? "" : "minor" });
+      tr.dataset.k = k;
+      tr.append(el("td", { className: "mono", textContent: plHM(s.start) }), el("td", { className: "mono", textContent: plHM(s.end) }),
+        el("td", { textContent: s.label }),
+        el("td", { className: "name" }, s.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(s.target) }) : "", s.target >= 0 ? PL.st.targets[s.target]?.name || "" : ""),
+        el("td", { className: "num", textContent: s.kind === "shoot" ? s.frames : "" }),
+        el("td", { className: "num", textContent: s.target >= 0 ? `${Math.round(s.alt1)}° → ${Math.round(s.alt2)}°` : "" }),
+        el("td", { className: "num", textContent: s.target >= 0 ? s.moon + "°" : "" }), el("td", { className: "muted", textContent: s.note || "" }));
+      tr.onclick = () => { plSetPlay(false); plSetTime(s.start); };
+      tb.append(tr);
+    }
+  }
+}
+
+// plBlocks: the steps grouped by the visit to a target (planner.Plan.Blocks),
+// each with how much was shot in it.
+function plBlocks(pl) {
+  const out = [];
   pl.steps.forEach((s, k) => {
-    const name = s.target >= 0 ? PL.st.targets[s.target]?.name || "" : "";
-    const tr = el("tr", { className: s.kind === "shoot" ? "" : "minor" });
-    tr.dataset.k = k;
-    tr.append(el("td", { className: "mono", textContent: plHM(s.start) }), el("td", { className: "mono", textContent: plHM(s.end) }),
-      el("td", { textContent: s.label }),
-      el("td", { className: "name" }, s.target >= 0 ? el("span", { className: "plsw", style: "background:" + plColor(s.target) }) : "", name),
-      el("td", { className: "num", textContent: s.kind === "shoot" ? s.frames : "" }),
-      el("td", { className: "num", textContent: s.target >= 0 ? `${Math.round(s.alt1)}° → ${Math.round(s.alt2)}°` : "" }),
-      el("td", { className: "num", textContent: s.target >= 0 ? s.moon + "°" : "" }), el("td", { className: "muted", textContent: s.note || "" }));
-    tr.onclick = () => { plSetPlay(false); plSetTime(s.start); };
-    tb.append(tr);
+    const shot = s.kind === "shoot" && s.target >= 0 ? s.frames * (PL.st.targets[s.target]?.exposure || 0) : 0;
+    const b = out[out.length - 1];
+    if (b && b.target === s.target) {
+      b.end = s.end; b.last = k + 1; b.frames += s.frames || 0; b.seconds += shot;
+    } else {
+      out.push({ target: s.target, start: s.start, end: s.end, first: k, last: k + 1, frames: s.frames || 0, seconds: shot });
+    }
   });
+  return out;
 }
 
 // ---- the time and the animation
@@ -3285,12 +3322,12 @@ $("plSky").addEventListener("pointerdown", e => {
   if (i >= 0) { PL.drag = { kind: "zone", i, start: pt, orig: { ...sky.zones[i] } }; return; }
   i = zoneAt(PL.guess.maybe || []);
   if (i >= 0) {
-    sky.zones.push(Object.assign({}, PL.guess.maybe[i], { auto: true }));
+    sky.zones.push(Object.assign({}, PL.guess.maybe[i], { auto: false })); // accepted by hand
     PL.guess.maybe.splice(i, 1);
     plSkyEdited();
     return;
   }
-  sky.horizon.push({ az: pt.az, alt: Math.max(pt.alt, 0) });
+  sky.horizon.push({ az: pt.az, alt: Math.max(pt.alt, 0), manual: true });
   PL.drag = { kind: "node", i: sky.horizon.length - 1 };
   plDraw();
 });
@@ -3300,7 +3337,7 @@ $("plSky").addEventListener("pointermove", e => {
   const g = plGeom(), [x, y] = plPointer(e), pt = plAzAlt(g, x, y), sky = PL.st.sky;
   pt.alt = Math.max(pt.alt, 0);
   const z = sky.zones[dr.i];
-  if (dr.kind === "node") sky.horizon[dr.i] = pt;
+  if (dr.kind === "node") sky.horizon[dr.i] = { ...pt, manual: true };
   else if (dr.kind === "new") Object.assign(z, { az1: Math.min(dr.start.az, pt.az), az2: Math.max(dr.start.az, pt.az),
     alt1: Math.min(dr.start.alt, pt.alt), alt2: Math.max(dr.start.alt, pt.alt) });
   else if (dr.kind === "corner") {
@@ -3330,6 +3367,7 @@ function plDragEnd() {
 $("plSky").addEventListener("pointerup", plDragEnd);
 $("plSky").addEventListener("pointercancel", plDragEnd);
 $("plSky").addEventListener("contextmenu", e => { if ($("plEdit").checked) e.preventDefault(); });
+$("plOnlyShoot").onchange = plRenderSteps;
 $("plEdit").onchange = () => {
   const on = $("plEdit").checked;
   $("plSky").classList.toggle("editing", on);
@@ -3338,11 +3376,28 @@ $("plEdit").onchange = () => {
 };
 $("plGuess").onclick = () => {
   if (!PL.guess || !PL.guess.points.length) return alert("Нет полученных Light-кадров с координатами объекта и обсерватории (RA, DEC, SITELAT, SITELONG в заголовке).");
-  PL.st.sky.horizon = JSON.parse(JSON.stringify(PL.guess.horizon || []));
-  PL.st.sky.zones = JSON.parse(JSON.stringify(PL.guess.zones || []));
-  PL.st.sky_set = false;
+  PL.st.sky = plReguess(PL.st.sky, PL.guess, !!PL.st.sky_set);
+  PL.st.sky_set = PL.st.sky.horizon.some(p => p.manual) || PL.st.sky.zones.some(z => !z.auto);
   plChanged();
 };
+// plReguess: the sky guessed from the frames again keeping what was put by
+// hand, as planner.Sky.Reguess: the points added or moved (the guessed
+// points near them give way), the zones drawn, changed or accepted (the
+// guessed zones over them give way). Points saved before they were marked
+// count as put by hand in an edited sky when the guess lacks them.
+function plReguess(sky, guess, edited) {
+  const d180 = a => { a = ((a % 360) + 360) % 360; return a > 180 ? a - 360 : a; };
+  const gh = guess.horizon || [], marked = sky.horizon.some(p => p.manual);
+  const inGuess = p => gh.some(q => Math.abs(d180(p.az - q.az)) <= 0.5 && Math.abs(p.alt - q.alt) <= 0.5);
+  const hand = sky.horizon.filter(p => p.manual || edited && !marked && !inGuess(p)).map(p => ({ ...p, manual: true }));
+  const horizon = hand.concat(gh.filter(p => !hand.some(q => Math.abs(d180(p.az - q.az)) < 5)).map(p => ({ ...p })))
+    .sort((a, b) => a.az - b.az);
+  const kept = sky.zones.filter(z => !z.auto);
+  const over = (a, b) => Math.max(a.alt1, b.alt1) <= Math.min(a.alt2, b.alt2) &&
+    (plInZone(a, b.az1, a.alt1) || plInZone(a, b.az2, a.alt1) || plInZone(b, a.az1, b.alt1));
+  const zones = kept.concat((guess.zones || []).filter(z => !kept.some(m => over(z, m) || over(m, z))).map(z => ({ ...z })));
+  return { ...sky, horizon, zones };
+}
 $("plReset").onclick = () => {
   if (!confirm("Убрать горизонт и закрытые зоны? Останется ровный горизонт на высоте «не ниже».")) return;
   PL.st.sky.horizon = []; PL.st.sky.zones = [];

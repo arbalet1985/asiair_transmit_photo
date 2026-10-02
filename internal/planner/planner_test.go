@@ -3,6 +3,7 @@ package planner
 import (
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 const lat, lon = 55.75, 37.62 // Moscow
 
 func TestHorizon(t *testing.T) {
-	h := Horizon{{350, 10}, {10, 20}, {180, 30}}
+	h := Horizon{{Az: 350, Alt: 10}, {Az: 10, Alt: 20}, {Az: 180, Alt: 30}}
 	for az, want := range map[float64]float64{0: 15, 10: 20, 95: 25, 180: 30, 265: 20, 355: 12.5} {
 		if got := h.At(az); math.Abs(got-want) > 1e-9 {
 			t.Errorf("At(%v) = %v, want %v", az, got, want)
@@ -46,12 +47,12 @@ func TestNight(t *testing.T) {
 // track of the target at t
 func at(tg Target, tm time.Time) Point {
 	p := moon.Object(tm, lat, lon, tg.RA, tg.Dec)
-	return Point{p.Az, p.Alt}
+	return Point{Az: p.Az, Alt: p.Alt}
 }
 
-// M 31 first; the wires hide it for an hour, then a spare target is shot;
-// M 31 again; the Medusa, the most wanted, as soon as it is over the
-// trees in the east.
+// Allowed to come back: M 31 first; the wires hide it for an hour, then a
+// spare target is shot; M 31 again; the Medusa, the most wanted, as soon
+// as it is over the trees in the east.
 func TestSchedule(t *testing.T) {
 	medusa := Target{Name: "Medusa", RA: 112.26, Dec: 13.25, Exposure: 300, Priority: 1}
 	m31 := Target{Name: "M 31", RA: 10.68, Dec: 41.27, Exposure: 180, Priority: 2}
@@ -59,11 +60,12 @@ func TestSchedule(t *testing.T) {
 	targets := []Target{spare, m31, medusa}
 	prm := DefaultParams()
 	prm.Night, prm.Lat, prm.Lon, prm.Zone = "2026-10-15", lat, lon, time.UTC
+	prm.Repeat = true
 	dusk, _, _ := Night(prm.Night, lat, lon, prm.SunAlt)
 	// the wires: over the path of M 31 from 18:30 to 19:30 UTC
 	w1, w2 := at(m31, dusk.Add(105*time.Minute)), at(m31, dusk.Add(165*time.Minute))
 	wires := Zone{Az1: math.Min(w1.Az, w2.Az), Az2: math.Max(w1.Az, w2.Az), Alt1: math.Min(w1.Alt, w2.Alt) - 1, Alt2: math.Max(w1.Alt, w2.Alt) + 1}
-	sky := Sky{Horizon: Horizon{{0, 15}, {45, 30}, {135, 30}, {180, 15}}, Zones: []Zone{wires}, MinAlt: 15}
+	sky := Sky{Horizon: Horizon{{Az: 0, Alt: 15}, {Az: 45, Alt: 30}, {Az: 135, Alt: 30}, {Az: 180, Alt: 15}}, Zones: []Zone{wires}, MinAlt: 15}
 	p, err := Schedule(targets, sky, prm)
 	if err != nil {
 		t.Fatal(err)
@@ -219,4 +221,272 @@ func TestInferLoneSample(t *testing.T) {
 	if h := g.Horizon.At(first.Az + 120); h != 15 {
 		t.Errorf("far from the sample: %v", h)
 	}
+}
+
+// A rising object begun right after another one: the switch was the plan,
+// the horizon is not there.
+func TestInferSwitch(t *testing.T) {
+	m31 := Obs{Object: "M 31", Night: "2026-10-15", Exposure: 300, RA: 10.68, Dec: 41.27, Lat: lat, Lon: lon}
+	ic443 := Obs{Object: "IC 443", Night: "2026-10-15", Exposure: 300, RA: 94.25, Dec: 22.53, Lat: lat, Lon: lon}
+	_, dawn, _ := Night("2026-10-15", lat, lon, -18)
+	switchAt := dawn.Add(-3 * time.Hour)
+	var obs []Obs
+	for tm := switchAt.Add(-2 * time.Hour); tm.Before(dawn); tm = tm.Add(5 * time.Minute) {
+		o := m31
+		if !tm.Before(switchAt) {
+			o = ic443
+		}
+		o.UTC = tm
+		obs = append(obs, o)
+	}
+	first := at(Target{RA: ic443.RA, Dec: ic443.Dec}, switchAt)
+	if first.Alt < 25 {
+		t.Fatalf("IC 443 too low at the switch: %+v", first)
+	}
+	g := Infer(obs, 10)
+	if h := g.Horizon.At(first.Az); h > 10 {
+		t.Errorf("horizon %v at the switch to IC 443 %+v", h, first)
+	}
+}
+
+func TestReguess(t *testing.T) {
+	g := Guess{
+		Horizon: Horizon{{Az: 0, Alt: 20}, {Az: 90, Alt: 30}, {Az: 95, Alt: 31}, {Az: 180, Alt: 20}},
+		Zones:   []Zone{{Az1: 100, Az2: 110, Alt1: 40, Alt2: 50, Auto: true}, {Az1: 200, Az2: 210, Alt1: 40, Alt2: 50, Auto: true}},
+	}
+	sky := Sky{MinAlt: 12,
+		Horizon: Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12, Manual: true}, {Az: 180, Alt: 25}},
+		Zones:   []Zone{{Az1: 105, Az2: 115, Alt1: 45, Alt2: 55}, {Az1: 300, Az2: 310, Alt1: 40, Alt2: 50, Auto: true}}}
+	got := sky.Reguess(g, true)
+	want := Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12, Manual: true}, {Az: 180, Alt: 20}}
+	if !reflect.DeepEqual(got.Horizon, want) {
+		t.Errorf("horizon %+v, want %+v", got.Horizon, want)
+	}
+	// the zone moved by hand stays and the guessed one under it gives way;
+	// the old guessed zone goes
+	wantZ := []Zone{sky.Zones[0], g.Zones[1]}
+	if !reflect.DeepEqual(got.Zones, wantZ) || got.MinAlt != 12 || !got.Manual() {
+		t.Errorf("zones %+v, want %+v", got.Zones, wantZ)
+	}
+
+	// saved before the points were marked: what the guess lacks was edited
+	old := Sky{Horizon: Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12}, {Az: 180, Alt: 20}}}
+	got = old.Reguess(g, true)
+	want = Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12, Manual: true}, {Az: 180, Alt: 20}}
+	if !reflect.DeepEqual(got.Horizon, want) {
+		t.Errorf("old sky: %+v, want %+v", got.Horizon, want)
+	}
+	// never edited: all from the guess
+	if got = old.Reguess(g, false); !reflect.DeepEqual(got.Horizon, g.Horizon) || got.Manual() {
+		t.Errorf("not edited: %+v", got.Horizon)
+	}
+}
+
+// sky and targets of TestSchedule, to plan them other ways.
+func wiredSky(t *testing.T) ([]Target, Sky, Params) {
+	t.Helper()
+	medusa := Target{Name: "Medusa", RA: 112.26, Dec: 13.25, Exposure: 300, Priority: 1}
+	m31 := Target{Name: "M 31", RA: 10.68, Dec: 41.27, Exposure: 180, Priority: 2}
+	spare := Target{Name: "NGC 7000", RA: 314.82, Dec: 44.53, Exposure: 300, Priority: 3}
+	prm := DefaultParams()
+	prm.Night, prm.Lat, prm.Lon, prm.Zone = "2026-10-15", lat, lon, time.UTC
+	dusk, _, _ := Night(prm.Night, lat, lon, prm.SunAlt)
+	w1, w2 := at(m31, dusk.Add(105*time.Minute)), at(m31, dusk.Add(165*time.Minute))
+	wires := Zone{Az1: math.Min(w1.Az, w2.Az), Az2: math.Max(w1.Az, w2.Az), Alt1: math.Min(w1.Alt, w2.Alt) - 1, Alt2: math.Max(w1.Alt, w2.Alt) + 1}
+	sky := Sky{Horizon: Horizon{{Az: 0, Alt: 15}, {Az: 45, Alt: 30}, {Az: 135, Alt: 30}, {Az: 180, Alt: 15}}, Zones: []Zone{wires}, MinAlt: 15}
+	return []Target{spare, m31, medusa}, sky, prm
+}
+
+// Shot once (the default): no target is gone back to, and M 31 is begun
+// after the wires, where it is seen the longest.
+func TestScheduleOnce(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slews []string
+	seen := map[string]int{}
+	for _, s := range p.Steps {
+		if s.Kind == Slew {
+			slews = append(slews, targets[s.Target].Name)
+			seen[targets[s.Target].Name]++
+		}
+	}
+	for name, n := range seen {
+		if n > 1 {
+			t.Errorf("%s gone to %d times: %s\n%s", name, n, strings.Join(slews, ", "), p.Text())
+		}
+	}
+	for i := range targets {
+		if p.Frames[i] == 0 {
+			t.Errorf("%s not shot\n%s", targets[i].Name, p.Text())
+		}
+	}
+	// M 31 is not begun before the wires, which would end it after an hour
+	for _, s := range p.Steps {
+		if s.Kind != Shoot || targets[s.Target].Name != "M 31" {
+			continue
+		}
+		if w := p.Where(s.Target, s.Start); !sky.Visible(w.Az, w.Alt) {
+			t.Errorf("M 31 shot while hidden")
+		}
+		break
+	}
+	// allowed to come back, it gets more of the night
+	prm.Repeat = true
+	q, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum(q.Seconds) <= sum(p.Seconds) {
+		t.Errorf("coming back gave %v, once %v", sum(q.Seconds), sum(p.Seconds))
+	}
+}
+
+func sum(v []float64) float64 {
+	var s float64
+	for _, x := range v {
+		s += x
+	}
+	return s
+}
+
+// The mount stops at the meridian and waits for the flip.
+func TestMeridianPause(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	prm.FlipAfterMin, prm.FlipMin = 20, 5
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flips := 0
+	for k, s := range p.Steps {
+		if s.Kind != Flip {
+			continue
+		}
+		flips++
+		if ha := moon.HourAngle(s.Start, lon, targets[s.Target].RA); math.Abs(ha-prm.FlipAfterMin/60) > 0.03 {
+			t.Errorf("flip at hour angle %v, want %v", ha, prm.FlipAfterMin/60)
+		}
+		if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != "до перекладки" {
+			t.Errorf("no wait before the flip: %+v", p.Steps[max(k-1, 0)])
+		}
+	}
+	if flips == 0 {
+		t.Fatalf("no flip\n%s", p.Text())
+	}
+	// no frame runs through the meridian before the flip
+	for _, s := range p.Steps {
+		if s.Kind != Shoot {
+			continue
+		}
+		ha1, ha2 := moon.HourAngle(s.Start, lon, targets[s.Target].RA), moon.HourAngle(s.End, lon, targets[s.Target].RA)
+		if ha1 < 0 && ha2 > 0 {
+			t.Errorf("%s shot through the meridian: %v – %v", targets[s.Target].Name, ha1, ha2)
+		}
+	}
+}
+
+func TestBlocks(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	prm.Repeat = true
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs := p.Blocks()
+	if len(bs) < 4 {
+		t.Fatalf("blocks: %d\n%s", len(bs), p.Text())
+	}
+	frames, secs := make([]int, len(targets)), make([]float64, len(targets))
+	for k, b := range bs {
+		if b.First >= b.Last || b.Last > len(p.Steps) {
+			t.Fatalf("block %d: steps %d..%d of %d", k, b.First, b.Last, len(p.Steps))
+		}
+		if !b.Start.Equal(p.Steps[b.First].Start) || !b.End.Equal(p.Steps[b.Last-1].End) {
+			t.Errorf("block %d: %v – %v", k, b.Start, b.End)
+		}
+		if k > 0 && bs[k-1].Last != b.First {
+			t.Errorf("block %d does not follow %d", k, k-1)
+		}
+		for _, s := range p.Steps[b.First:b.Last] {
+			if s.Target != b.Target {
+				t.Errorf("block %d of target %d has a step of %d", k, b.Target, s.Target)
+			}
+		}
+		if b.Target >= 0 {
+			frames[b.Target] += b.Frames
+			secs[b.Target] += b.Seconds
+		}
+	}
+	if !reflect.DeepEqual(frames, p.Frames) || !reflect.DeepEqual(secs, p.Seconds) {
+		t.Errorf("by blocks %v %v, by plan %v %v", frames, secs, p.Frames, p.Seconds)
+	}
+}
+
+// Stopped early: nothing is shot in the minutes before the meridian either.
+func TestMeridianStopBefore(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	prm.FlipBeforeMin, prm.FlipAfterMin, prm.FlipMin = 20, 10, 5
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, flip := -prm.FlipBeforeMin/60, prm.FlipAfterMin/60
+	flips := 0
+	for k, s := range p.Steps {
+		switch s.Kind {
+		case Flip:
+			flips++
+			if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != "до перекладки" {
+				t.Errorf("no wait before the flip of %s", targets[s.Target].Name)
+			}
+			if ha := moon.HourAngle(s.Start, lon, targets[s.Target].RA); math.Abs(ha-flip) > 0.03 {
+				t.Errorf("flip at hour angle %v, want %v", ha, flip)
+			}
+		case Shoot:
+			// before its flip a target is shot only up to the stop line
+			if afterFlip(p, k) {
+				continue
+			}
+			ha := moon.HourAngle(s.End, lon, targets[s.Target].RA)
+			if ha > stop && ha < 6 {
+				t.Errorf("%s shot to hour angle %v, stopped at %v\n%s", targets[s.Target].Name, ha, stop, p.Text())
+			}
+		}
+	}
+	if flips == 0 {
+		t.Fatalf("no flip\n%s", p.Text())
+	}
+	// without the early stop the frames go up to the meridian itself
+	prm.FlipBeforeMin = 0
+	q, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late := false
+	for k, s := range q.Steps {
+		if s.Kind == Shoot && !afterFlip(q, k) {
+			if ha := moon.HourAngle(s.End, lon, targets[s.Target].RA); ha > stop && ha <= 0 {
+				late = true
+			}
+		}
+	}
+	if !late {
+		t.Errorf("without the early stop nothing was shot in the last minutes before the meridian")
+	}
+}
+
+// afterFlip tells the step k comes after the flip of its block.
+func afterFlip(p *Plan, k int) bool {
+	for i := k; i >= 0; i-- {
+		if p.Steps[i].Kind == Slew {
+			return false
+		}
+		if p.Steps[i].Kind == Flip {
+			return true
+		}
+	}
+	return false
 }
