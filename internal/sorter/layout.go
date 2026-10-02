@@ -14,6 +14,11 @@ import (
 const (
 	ObjectsDir = "Objects"
 	LibraryDir = "Library"
+	// PIDir is made in the folder of every object, next to its sessions,
+	// with a folder for each filter: for PixInsight's results.
+	PIDir = "PI"
+	// NoFilter names the PI folder of the lights without a filter.
+	NoFilter = "NoFilter"
 )
 
 // Siril's folders inside a session (its standard scripts use these names).
@@ -27,7 +32,11 @@ type Group struct {
 	Object, Filter, Camera, Night string
 	Exposure, Temp                float64
 	Gain, Bin                     int
-	Items                         []*Item
+	// lights only: the number of the session's night among the nights of
+	// its object, from 1; it ends the folder name as _SESSION_N, a grouping
+	// keyword for PixInsight's WBPP
+	Session int
+	Items   []*Item
 
 	// lights only: the library folders that fit this session
 	Darks, Flats, Biases *Group
@@ -137,7 +146,8 @@ func join(parts ...string) string {
 
 // GroupDir is the folder a frame belongs to, relative to the output:
 //
-//	Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM Pro  (lights: object/night/filter/exposure/gain/camera)
+//	Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM Pro  (lights: object/night/filter/exposure/gain/camera;
+//	                                                        Plan adds the session: _SESSION_1)
 //	Library/Flats/ZWO ASI2600MM Pro/2026-09-26_Ha_gain100_1.5s  (night/filter/gain/exposure)
 //	Library/Darks/ZWO ASI2600MM Pro/gain100_300s_-10C
 //	Library/DarkFlats/ZWO ASI2600MM Pro/gain100_1.5s
@@ -169,6 +179,47 @@ func GroupDir(f *Frame) string {
 	return ""
 }
 
+// SessionSuffix ends the folder of a session: _SESSION_1, _SESSION_2, …
+func SessionSuffix(n int) string {
+	return "_SESSION_" + strconv.Itoa(n)
+}
+
+// PIFilterDir is the folder of a filter in the PI folder of an object.
+func PIFilterDir(object, filter string) string {
+	f := NoFilter
+	if strings.TrimSpace(filter) != "" {
+		f = SafeName(filter)
+	}
+	return object + "/" + PIDir + "/" + f
+}
+
+// sessionNumbers numbers the nights of every object from 1, the earliest
+// first: all the sessions of a night (filters, exposures) share a number.
+func sessionNumbers(frames []Frame) map[string]map[string]int {
+	nights := map[string][]string{}
+	seen := map[string]bool{}
+	for i := range frames {
+		f := &frames[i]
+		if f.Kind != Light {
+			continue
+		}
+		obj := path.Dir(GroupDir(f))
+		if k := obj + "\x00" + f.Night; !seen[k] {
+			seen[k] = true
+			nights[obj] = append(nights[obj], f.Night)
+		}
+	}
+	out := map[string]map[string]int{}
+	for obj, ns := range nights {
+		sort.Strings(ns)
+		out[obj] = map[string]int{}
+		for i, n := range ns {
+			out[obj][n] = i + 1
+		}
+	}
+	return out
+}
+
 // ShortCamera is the camera in the name of a session: without the maker
 // "ZWO " in front, which every ASIAIR camera has.
 func ShortCamera(c string) string {
@@ -186,6 +237,7 @@ func Plan(frames []Frame) *Layout {
 	l := &Layout{}
 	byDir := map[string]*Group{}
 	placed := map[string]*Item{} // lower-case destination → first item
+	sessions := sessionNumbers(frames)
 	for i := range frames {
 		f := &frames[i]
 		dir := GroupDir(f)
@@ -193,10 +245,15 @@ func Plan(frames []Frame) *Layout {
 			l.Unknown = append(l.Unknown, f)
 			continue
 		}
+		session := 0
+		if f.Kind == Light {
+			session = sessions[path.Dir(dir)][f.Night]
+			dir += SessionSuffix(session)
+		}
 		g := byDir[dir]
 		if g == nil {
 			g = &Group{Kind: f.Kind, Dir: dir, Object: f.Object, Filter: f.Filter, Camera: f.Camera,
-				Night: f.Night, Exposure: f.Exposure, Temp: f.Temp, Gain: f.Gain, Bin: f.Bin}
+				Night: f.Night, Exposure: f.Exposure, Temp: f.Temp, Gain: f.Gain, Bin: f.Bin, Session: session}
 			byDir[dir] = g
 			l.Groups = append(l.Groups, g)
 		}

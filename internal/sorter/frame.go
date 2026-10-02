@@ -398,11 +398,20 @@ func ScanLibrary(out string, progress func(n int)) ([]Frame, []error) {
 		}
 		skip := func(string) bool { return false }
 		if top == ObjectsDir {
-			// only <object>/<session>/lights: not the calibration copies
-			// nor Siril's results in process
+			// only <object>/<session>/lights: not the calibration copies,
+			// Siril's results in process nor PixInsight's in <object>/PI
 			skip = func(d string) bool {
 				rel, err := filepath.Rel(dir, d)
-				return err == nil && strings.Count(filepath.ToSlash(rel), "/") == 2 && filepath.Base(d) != "lights"
+				if err != nil {
+					return false
+				}
+				switch strings.Count(filepath.ToSlash(rel), "/") {
+				case 1:
+					return strings.EqualFold(filepath.Base(d), PIDir)
+				case 2:
+					return filepath.Base(d) != "lights"
+				}
+				return false
 			}
 		}
 		base := len(frames)

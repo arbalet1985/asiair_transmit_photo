@@ -121,7 +121,7 @@ func TestPlanAndMatch(t *testing.T) {
 		t.Fatalf("sessions %d unknown %d", len(l.Sessions), len(l.Unknown))
 	}
 	s := l.Sessions[0]
-	if s.Dir != "Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM" {
+	if s.Dir != "Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM_SESSION_1" {
 		t.Fatal(s.Dir)
 	}
 	if s.Items[0].Dest != s.Dir+"/lights/"+frames[0].Rel {
@@ -178,8 +178,9 @@ func TestScanAndApply(t *testing.T) {
 	if len(r.Errors) > 0 || r.Placed != 5 || r.Calibration != 3 {
 		t.Fatalf("%+v", r)
 	}
-	sess := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100")
+	sess := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_SESSION_1")
 	for _, p := range []string{
+		filepath.Join(out, "Objects", "M 31", PIDir, "L"),
 		filepath.Join(sess, "lights", "Light_M 31_300.0s_Bin1_L_gain100_20260926-221001_-10.0C_0001.fit"),
 		filepath.Join(sess, "darks", "Dark_300.0s_Bin1_gain100_20260801-120000_-10.0C_0001.fit"),
 		filepath.Join(sess, "flats", "Flat_2.0s_Bin1_L_gain100_20260927-063000_-10.0C_0001.fit"),
@@ -319,6 +320,33 @@ func TestLibraryMovesToNewLayout(t *testing.T) {
 	}
 }
 
+// Sessions are numbered by the nights of their object; every filter of a
+// night has the night's number.
+func TestSessionNumbers(t *testing.T) {
+	frames := []Frame{
+		frame(Light, "M 31", "OIII", "2026-09-27", 300, 100, -10),
+		frame(Light, "M 31", "Ha", "2026-09-26", 300, 100, -10),
+		frame(Light, "M 31", "OIII", "2026-09-26", 300, 100, -10),
+		frame(Light, "M 33", "", "2026-09-27", 300, 100, -10),
+	}
+	var got []string
+	for _, s := range Plan(frames).Sessions {
+		got = append(got, s.Dir)
+	}
+	want := []string{
+		"Objects/M 31/2026-09-26_Ha_300s_gain100_ASI2600MM_SESSION_1",
+		"Objects/M 31/2026-09-26_OIII_300s_gain100_ASI2600MM_SESSION_1",
+		"Objects/M 31/2026-09-27_OIII_300s_gain100_ASI2600MM_SESSION_2",
+		"Objects/M 33/2026-09-27_300s_gain100_ASI2600MM_SESSION_1",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatal(got)
+	}
+	if PIFilterDir("Objects/M 33", "") != "Objects/M 33/PI/NoFilter" {
+		t.Fatal(PIFilterDir("Objects/M 33", ""))
+	}
+}
+
 func TestShortCamera(t *testing.T) {
 	for in, want := range map[string]string{"ZWO ASI2600MM Pro": "ASI2600MM Pro", "zwo ASI533MC": "ASI533MC", "QHY268M": "QHY268M", "": ""} {
 		if got := ShortCamera(in); got != want {
@@ -351,7 +379,7 @@ func TestSessionMovesToNewName(t *testing.T) {
 	if len(r.Errors) > 0 || r.Sessions != 1 || r.Placed != 0 {
 		t.Fatalf("%+v", r)
 	}
-	nu := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_ASI2600MM Pro")
+	nu := filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_ASI2600MM Pro_SESSION_1")
 	for _, p := range []string{"lights/" + n1, "lights/" + n2, "darks/Dark_0001.fit", "process/result.fit", CalibrationFile} {
 		if _, err := os.Stat(filepath.Join(nu, filepath.FromSlash(p))); err != nil {
 			t.Error(err)
@@ -383,7 +411,7 @@ func TestMixedSessionSplits(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	for i, cam := range []string{"ASI2600MM Pro", "ASI294MM Pro"} {
-		if _, err := os.Stat(filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_"+cam, "lights", fmt.Sprintf("Light_M 31_300.0s_gain100_20260926-2210%02d_%04d.fit", i, i))); err != nil {
+		if _, err := os.Stat(filepath.Join(out, "Objects", "M 31", "2026-09-26_L_300s_gain100_"+cam+"_SESSION_1", "lights", fmt.Sprintf("Light_M 31_300.0s_gain100_20260926-2210%02d_%04d.fit", i, i))); err != nil {
 			t.Error(err)
 		}
 	}
