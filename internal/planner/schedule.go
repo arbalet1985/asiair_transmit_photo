@@ -41,6 +41,7 @@ type Params struct {
 	DitherSec          float64 `json:"dither_sec"`     // settling after a dither, seconds
 	DownloadSec        float64 `json:"download_sec"`   // between frames, seconds
 	Flip               bool    `json:"flip"`           // equatorial mount: meridian flip
+	FlipBeforeMin      float64 `json:"flip_before"`    // stop shooting this long before the meridian (0 = at it)
 	FlipAfterMin       float64 `json:"flip_after"`     // the flip, this long after the meridian
 	FlipMin            float64 `json:"flip_min"`       // how long the flip takes (with re-centering and guiding)
 	MinBlockMin        float64 `json:"min_block"`      // do not go to a target seen for less than this
@@ -370,10 +371,11 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 			continue
 		}
 		ha := moon.HourAngle(t, prm.Lon, targets[cur].RA)
-		// the mount stops at the meridian and waits for the flip: no frame
-		// is taken between the two
-		if flipAt := prm.FlipAfterMin / 60; prm.Flip && !west && prm.FlipAfterMin > 0 && ha < flipAt {
-			if haEnd := moon.HourAngle(t.Add(frameDur(cur)), prm.Lon, targets[cur].RA); haEnd >= 0 && haEnd < 6 {
+		// the mount stops before the meridian and waits for the flip: no
+		// frame is taken between the two
+		stopAt, flipAt := -prm.FlipBeforeMin/60, prm.FlipAfterMin/60
+		if prm.Flip && !west && flipAt > stopAt && ha < flipAt {
+			if haEnd := moon.HourAngle(t.Add(frameDur(cur)), prm.Lon, targets[cur].RA); haEnd >= stopAt && haEnd < 6 {
 				at := t
 				for at.Before(p.Dawn) && moon.HourAngle(at, prm.Lon, targets[cur].RA) < flipAt {
 					at = at.Add(time.Minute)
@@ -383,7 +385,7 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 				continue
 			}
 		}
-		if prm.Flip && !west && ha >= prm.FlipAfterMin/60 && ha < 6 {
+		if prm.Flip && !west && ha >= flipAt && ha < 6 {
 			add(Step{Kind: Flip, Start: t, End: t.Add(minutes(prm.FlipMin)), Target: cur})
 			t, west, inBatch = t.Add(minutes(prm.FlipMin)), true, 0
 			continue

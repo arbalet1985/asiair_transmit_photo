@@ -424,3 +424,69 @@ func TestBlocks(t *testing.T) {
 		t.Errorf("by blocks %v %v, by plan %v %v", frames, secs, p.Frames, p.Seconds)
 	}
 }
+
+// Stopped early: nothing is shot in the minutes before the meridian either.
+func TestMeridianStopBefore(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	prm.FlipBeforeMin, prm.FlipAfterMin, prm.FlipMin = 20, 10, 5
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, flip := -prm.FlipBeforeMin/60, prm.FlipAfterMin/60
+	flips := 0
+	for k, s := range p.Steps {
+		switch s.Kind {
+		case Flip:
+			flips++
+			if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != "до перекладки" {
+				t.Errorf("no wait before the flip of %s", targets[s.Target].Name)
+			}
+			if ha := moon.HourAngle(s.Start, lon, targets[s.Target].RA); math.Abs(ha-flip) > 0.03 {
+				t.Errorf("flip at hour angle %v, want %v", ha, flip)
+			}
+		case Shoot:
+			// before its flip a target is shot only up to the stop line
+			if afterFlip(p, k) {
+				continue
+			}
+			ha := moon.HourAngle(s.End, lon, targets[s.Target].RA)
+			if ha > stop && ha < 6 {
+				t.Errorf("%s shot to hour angle %v, stopped at %v\n%s", targets[s.Target].Name, ha, stop, p.Text())
+			}
+		}
+	}
+	if flips == 0 {
+		t.Fatalf("no flip\n%s", p.Text())
+	}
+	// without the early stop the frames go up to the meridian itself
+	prm.FlipBeforeMin = 0
+	q, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late := false
+	for k, s := range q.Steps {
+		if s.Kind == Shoot && !afterFlip(q, k) {
+			if ha := moon.HourAngle(s.End, lon, targets[s.Target].RA); ha > stop && ha <= 0 {
+				late = true
+			}
+		}
+	}
+	if !late {
+		t.Errorf("without the early stop nothing was shot in the last minutes before the meridian")
+	}
+}
+
+// afterFlip tells the step k comes after the flip of its block.
+func afterFlip(p *Plan, k int) bool {
+	for i := k; i >= 0; i-- {
+		if p.Steps[i].Kind == Slew {
+			return false
+		}
+		if p.Steps[i].Kind == Flip {
+			return true
+		}
+	}
+	return false
+}

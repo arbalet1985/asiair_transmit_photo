@@ -482,7 +482,8 @@
         </div>
         <div class="toolbar">
           <label title="Экваториальная монтировка: после меридиана телескоп перекладывается"><input type="checkbox" id="plFlip"> перекладка через меридиан</label>
-          <label>через <input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"> мин после меридиана,</label>
+          <label title="За сколько минут до меридиана прекратить съёмку: монтировка останавливается и ждёт перекладки (0 — снимать до самого меридиана)">стоп за <input type="number" id="plFlipBefore" min="0" max="120" step="1" class="pln"> мин до меридиана,</label>
+          <label title="Когда переложиться: столько минут после меридиана (как в настройках ASIAIR)">перекладка через <input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"> мин после меридиана,</label>
           <label>занимает <input type="number" id="plFlipMin" min="0" max="60" step="0.5" class="pln"> мин</label>
         </div>
         <div class="toolbar">
@@ -2785,7 +2786,7 @@ const PL = { st: null, guess: null, objects: [], tzGuess: 0, plan: null, t: 0, p
 const plParams = [ // field, key of the parameters, kind
   ["plSwitch", "switch_min"], ["plFocus", "refocus_min"], ["plFocusEvery", "refocus_every"], ["plFocusSwitch", "refocus_switch", "bool"],
   ["plDither", "dither_sec"], ["plDitherEvery", "dither_every", "int"], ["plDownload", "download_sec"], ["plFlip", "flip", "bool"],
-  ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
+  ["plFlipBefore", "flip_before"], ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
   ["plOnce", "repeat", "notbool"], // checked = do not come back to a target
 ];
 const plColors = ["#5ac8ff", "#ffaa3c", "#78e678", "#f06ec8", "#fae65a", "#aa8cff", "#ff6e64", "#64e6d2"];

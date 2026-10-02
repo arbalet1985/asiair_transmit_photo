@@ -50,6 +50,7 @@ type plannerUI struct {
 	minAltEdit, switchEdit, focusEdit           *walk.NumberEdit
 	focusEveryEdit, ditherEdit, ditherEveryEdit *walk.NumberEdit
 	downloadEdit, flipAfterEdit, flipEdit       *walk.NumberEdit
+	flipBeforeEdit                              *walk.NumberEdit
 	blockEdit, moonSepEdit                      *walk.NumberEdit
 	focusSwitchBox, flipBox, pointsBox          *walk.CheckBox
 	onceBox, onlyShootBox                       *walk.CheckBox
@@ -180,7 +181,10 @@ func (p *plannerUI) page() TabPage {
 		Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
 			CheckBox{AssignTo: &p.flipBox, Text: "Перекладка через меридиан:", Checked: prm.Flip, OnCheckedChanged: changed,
 				ToolTipText: "Экваториальная монтировка: после меридиана телескоп перекладывается на другую сторону"},
-			num(&p.flipAfterEdit, prm.FlipAfterMin, 0, -60, 120, " мин", "Через сколько минут после меридиана (как в настройках ASIAIR)"),
+			Label{Text: "стоп за"},
+			num(&p.flipBeforeEdit, prm.FlipBeforeMin, 0, 0, 120, " мин", "За сколько минут до меридиана прекратить съёмку: монтировка останавливается и ждёт перекладки (0 — снимать до самого меридиана)"),
+			Label{Text: "до меридиана, перекладка через"},
+			num(&p.flipAfterEdit, prm.FlipAfterMin, 0, -60, 120, " мин", "Через сколько минут после меридиана переложиться (как в настройках ASIAIR)"),
 			Label{Text: "после меридиана, занимает"},
 			num(&p.flipEdit, prm.FlipMin, 1, 0, 60, " мин", "Перекладка, повторное наведение и запуск гида"),
 			Label{Text: "Не идти на объект меньше чем на"},
@@ -308,6 +312,7 @@ func (p *plannerUI) params() planner.Params {
 		DitherSec:          p.ditherEdit.Value(),
 		DownloadSec:        p.downloadEdit.Value(),
 		Flip:               p.flipBox.Checked(),
+		FlipBeforeMin:      p.flipBeforeEdit.Value(),
 		FlipAfterMin:       p.flipAfterEdit.Value(),
 		FlipMin:            p.flipEdit.Value(),
 		MinBlockMin:        p.blockEdit.Value(),
