@@ -498,7 +498,7 @@
         <label title="Где снимались полученные кадры (цвет — объект)"><input type="checkbox" id="plPoints" checked> кадры</label>
         <label title="Править горизонт и закрытые зоны на рисунке"><input type="checkbox" id="plEdit"> правка неба</label>
         <select id="plMode" hidden aria-label="Что делает касание"><option value="h">точки горизонта</option><option value="z">новая зона</option><option value="d">удалить</option></select>
-        <button id="plGuess" title="Заменить горизонт и зоны угаданными по полученным кадрам">Горизонт по кадрам</button>
+        <button id="plGuess" title="Угадать горизонт и зоны заново по полученным кадрам; точки и зоны, поставленные или поправленные руками, остаются">Горизонт по кадрам</button>
         <button id="plReset" title="Ровный горизонт на высоте «не ниже», без зон">Сбросить</button>
       </div>
       <div class="line muted" id="plInfo"></div>
@@ -3285,12 +3285,12 @@ $("plSky").addEventListener("pointerdown", e => {
   if (i >= 0) { PL.drag = { kind: "zone", i, start: pt, orig: { ...sky.zones[i] } }; return; }
   i = zoneAt(PL.guess.maybe || []);
   if (i >= 0) {
-    sky.zones.push(Object.assign({}, PL.guess.maybe[i], { auto: true }));
+    sky.zones.push(Object.assign({}, PL.guess.maybe[i], { auto: false })); // accepted by hand
     PL.guess.maybe.splice(i, 1);
     plSkyEdited();
     return;
   }
-  sky.horizon.push({ az: pt.az, alt: Math.max(pt.alt, 0) });
+  sky.horizon.push({ az: pt.az, alt: Math.max(pt.alt, 0), manual: true });
   PL.drag = { kind: "node", i: sky.horizon.length - 1 };
   plDraw();
 });
@@ -3300,7 +3300,7 @@ $("plSky").addEventListener("pointermove", e => {
   const g = plGeom(), [x, y] = plPointer(e), pt = plAzAlt(g, x, y), sky = PL.st.sky;
   pt.alt = Math.max(pt.alt, 0);
   const z = sky.zones[dr.i];
-  if (dr.kind === "node") sky.horizon[dr.i] = pt;
+  if (dr.kind === "node") sky.horizon[dr.i] = { ...pt, manual: true };
   else if (dr.kind === "new") Object.assign(z, { az1: Math.min(dr.start.az, pt.az), az2: Math.max(dr.start.az, pt.az),
     alt1: Math.min(dr.start.alt, pt.alt), alt2: Math.max(dr.start.alt, pt.alt) });
   else if (dr.kind === "corner") {
@@ -3338,11 +3338,28 @@ $("plEdit").onchange = () => {
 };
 $("plGuess").onclick = () => {
   if (!PL.guess || !PL.guess.points.length) return alert("Нет полученных Light-кадров с координатами объекта и обсерватории (RA, DEC, SITELAT, SITELONG в заголовке).");
-  PL.st.sky.horizon = JSON.parse(JSON.stringify(PL.guess.horizon || []));
-  PL.st.sky.zones = JSON.parse(JSON.stringify(PL.guess.zones || []));
-  PL.st.sky_set = false;
+  PL.st.sky = plReguess(PL.st.sky, PL.guess, !!PL.st.sky_set);
+  PL.st.sky_set = PL.st.sky.horizon.some(p => p.manual) || PL.st.sky.zones.some(z => !z.auto);
   plChanged();
 };
+// plReguess: the sky guessed from the frames again keeping what was put by
+// hand, as planner.Sky.Reguess: the points added or moved (the guessed
+// points near them give way), the zones drawn, changed or accepted (the
+// guessed zones over them give way). Points saved before they were marked
+// count as put by hand in an edited sky when the guess lacks them.
+function plReguess(sky, guess, edited) {
+  const d180 = a => { a = ((a % 360) + 360) % 360; return a > 180 ? a - 360 : a; };
+  const gh = guess.horizon || [], marked = sky.horizon.some(p => p.manual);
+  const inGuess = p => gh.some(q => Math.abs(d180(p.az - q.az)) <= 0.5 && Math.abs(p.alt - q.alt) <= 0.5);
+  const hand = sky.horizon.filter(p => p.manual || edited && !marked && !inGuess(p)).map(p => ({ ...p, manual: true }));
+  const horizon = hand.concat(gh.filter(p => !hand.some(q => Math.abs(d180(p.az - q.az)) < 5)).map(p => ({ ...p })))
+    .sort((a, b) => a.az - b.az);
+  const kept = sky.zones.filter(z => !z.auto);
+  const over = (a, b) => Math.max(a.alt1, b.alt1) <= Math.min(a.alt2, b.alt2) &&
+    (plInZone(a, b.az1, a.alt1) || plInZone(a, b.az2, a.alt1) || plInZone(b, a.az1, b.alt1));
+  const zones = kept.concat((guess.zones || []).filter(z => !kept.some(m => over(z, m) || over(m, z))).map(z => ({ ...z })));
+  return { ...sky, horizon, zones };
+}
 $("plReset").onclick = () => {
   if (!confirm("Убрать горизонт и закрытые зоны? Останется ровный горизонт на высоте «не ниже».")) return;
   PL.st.sky.horizon = []; PL.st.sky.zones = [];

@@ -116,7 +116,7 @@ func Night(night string, lat, lon, sunAlt float64) (dusk, dawn time.Time, err er
 func (p *Plan) Where(i int, t time.Time) Point {
 	tg := p.Targets[i]
 	q := moon.Object(t, p.Params.Lat, p.Params.Lon, tg.RA, tg.Dec)
-	return Point{q.Az, q.Alt}
+	return Point{Az: q.Az, Alt: q.Alt}
 }
 
 // open: the target can be shot at t.
@@ -308,9 +308,9 @@ type State struct {
 // Park is where the telescope waits before the night: at the pole.
 func (p *Plan) Park() Point {
 	if p.Params.Lat < 0 {
-		return Point{180, -p.Params.Lat}
+		return Point{Az: 180, Alt: -p.Params.Lat}
 	}
-	return Point{0, p.Params.Lat}
+	return Point{Az: 0, Alt: p.Params.Lat}
 }
 
 // At is the telescope at t: on its target, on the way between two during
@@ -334,7 +334,7 @@ func (p *Plan) At(t time.Time) State {
 				}
 				to := p.Where(st.Target, st.End)
 				f := float64(t.Sub(st.Start)) / float64(st.End.Sub(st.Start))
-				s.Point = Point{normAz(from.Az + wrap180(to.Az-from.Az)*f), from.Alt + (to.Alt-from.Alt)*f}
+				s.Point = Point{Az: normAz(from.Az + wrap180(to.Az-from.Az)*f), Alt: from.Alt + (to.Alt-from.Alt)*f}
 			} else if st.Target >= 0 {
 				s.Point = p.Where(st.Target, t)
 			} else if prev >= 0 {

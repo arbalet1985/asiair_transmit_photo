@@ -40,7 +40,8 @@ const (
 //   - a frame shows the sky was open where it was: the horizon is lower;
 //   - the first frame of a rising object (the night had begun before) and
 //     the last of a setting one (the night went on) show about where the
-//     horizon is;
+//     horizon is — unless another object was shot just then: the switch
+//     was the plan, not the horizon;
 //   - a gap in the series of one object, longer than three frames and ten
 //     minutes and not a meridian flip, shows a closed part of the sky
 //     along the path of the object during the gap.
@@ -85,11 +86,11 @@ func Infer(obs []Obs, minAlt float64) Guess {
 		s := series[k]
 		first, last := s[0], s[len(s)-1]
 		before, after := first.UTC.Add(-10*time.Minute), last.UTC.Add(time.Duration(last.Exposure*float64(time.Second))+10*time.Minute)
-		if p := pos(before, first); p.Alt < first.Alt && dark(before, first) {
+		if p := pos(before, first); p.Alt < first.Alt && dark(before, first) && !g.busy(before, first.UTC, first.Object) {
 			b := bin(first.Az)
 			sample[b] = math.Min(sample[b], first.Alt)
 		}
-		if p := pos(after, last); p.Alt < last.Alt && dark(after, last) {
+		if p := pos(after, last); p.Alt < last.Alt && dark(after, last) && !g.busy(last.UTC, after, last.Object) {
 			b := bin(last.Az)
 			sample[b] = math.Min(sample[b], last.Alt)
 		}
@@ -153,9 +154,20 @@ func Infer(obs []Obs, minAlt float64) Guess {
 		if i > 0 && prev == v[i] && next == v[i] {
 			continue // inside a flat run
 		}
-		g.Horizon = append(g.Horizon, Point{float64(i * binDeg), v[i]})
+		g.Horizon = append(g.Horizon, Point{Az: float64(i * binDeg), Alt: v[i]})
 	}
 	return g
+}
+
+// busy tells another object than obj was shot between from and to.
+func (g *Guess) busy(from, to time.Time, obj string) bool {
+	i := sort.Search(len(g.Points), func(i int) bool { return !g.Points[i].UTC.Before(from) })
+	for ; i < len(g.Points) && g.Points[i].UTC.Before(to); i++ {
+		if g.Points[i].Object != obj {
+			return true
+		}
+	}
+	return false
 }
 
 // gaps finds the gaps in the series s of one object in one night.
@@ -238,7 +250,7 @@ func union(a, b Zone) Zone {
 
 func pos(t time.Time, o Obs) Point {
 	p := moon.Object(t, o.Lat, o.Lon, o.RA, o.Dec)
-	return Point{p.Az, p.Alt}
+	return Point{Az: p.Az, Alt: p.Alt}
 }
 
 // dark: the Sun was below -12° (the session was not begun or ended by the

@@ -243,7 +243,7 @@ func (p *plannerUI) page() TabPage {
 						CheckBox{AssignTo: &p.pointsBox, Text: "кадры", Checked: true, OnCheckedChanged: p.sky.invalidate,
 							ToolTipText: "Показать, где были снятые кадры (цвет — объект)"},
 						PushButton{Text: "Горизонт по кадрам", OnClicked: p.skyFromFrames,
-							ToolTipText: "Заменить горизонт и закрытые зоны угаданными по кадрам последнего «Просмотреть кадры»"},
+							ToolTipText: "Угадать горизонт и закрытые зоны заново по кадрам последнего «Просмотреть кадры»;\nточки и зоны, поставленные или поправленные руками, остаются"},
 						PushButton{Text: "Сбросить", OnClicked: p.resetSky, ToolTipText: "Ровный горизонт на высоте «Не ниже», без зон"},
 					}},
 					Label{AssignTo: &p.skyInfo, EllipsisMode: EllipsisEnd, TextColor: gray},
@@ -429,8 +429,8 @@ func (p *plannerUI) skyFromFrames() {
 		return
 	}
 	p.guess = planner.Infer(p.guess.Points, p.minAltEdit.Value())
-	p.useGuess()
-	p.state.SkySet = false
+	p.state.Sky = p.state.Sky.Reguess(p.guess, p.state.SkySet)
+	p.state.SkySet = p.state.Sky.Manual()
 	p.skyChanged()
 }
 

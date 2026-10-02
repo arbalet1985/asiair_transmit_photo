@@ -3,6 +3,7 @@ package planner
 import (
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 const lat, lon = 55.75, 37.62 // Moscow
 
 func TestHorizon(t *testing.T) {
-	h := Horizon{{350, 10}, {10, 20}, {180, 30}}
+	h := Horizon{{Az: 350, Alt: 10}, {Az: 10, Alt: 20}, {Az: 180, Alt: 30}}
 	for az, want := range map[float64]float64{0: 15, 10: 20, 95: 25, 180: 30, 265: 20, 355: 12.5} {
 		if got := h.At(az); math.Abs(got-want) > 1e-9 {
 			t.Errorf("At(%v) = %v, want %v", az, got, want)
@@ -46,7 +47,7 @@ func TestNight(t *testing.T) {
 // track of the target at t
 func at(tg Target, tm time.Time) Point {
 	p := moon.Object(tm, lat, lon, tg.RA, tg.Dec)
-	return Point{p.Az, p.Alt}
+	return Point{Az: p.Az, Alt: p.Alt}
 }
 
 // M 31 first; the wires hide it for an hour, then a spare target is shot;
@@ -63,7 +64,7 @@ func TestSchedule(t *testing.T) {
 	// the wires: over the path of M 31 from 18:30 to 19:30 UTC
 	w1, w2 := at(m31, dusk.Add(105*time.Minute)), at(m31, dusk.Add(165*time.Minute))
 	wires := Zone{Az1: math.Min(w1.Az, w2.Az), Az2: math.Max(w1.Az, w2.Az), Alt1: math.Min(w1.Alt, w2.Alt) - 1, Alt2: math.Max(w1.Alt, w2.Alt) + 1}
-	sky := Sky{Horizon: Horizon{{0, 15}, {45, 30}, {135, 30}, {180, 15}}, Zones: []Zone{wires}, MinAlt: 15}
+	sky := Sky{Horizon: Horizon{{Az: 0, Alt: 15}, {Az: 45, Alt: 30}, {Az: 135, Alt: 30}, {Az: 180, Alt: 15}}, Zones: []Zone{wires}, MinAlt: 15}
 	p, err := Schedule(targets, sky, prm)
 	if err != nil {
 		t.Fatal(err)
@@ -218,5 +219,64 @@ func TestInferLoneSample(t *testing.T) {
 	}
 	if h := g.Horizon.At(first.Az + 120); h != 15 {
 		t.Errorf("far from the sample: %v", h)
+	}
+}
+
+// A rising object begun right after another one: the switch was the plan,
+// the horizon is not there.
+func TestInferSwitch(t *testing.T) {
+	m31 := Obs{Object: "M 31", Night: "2026-10-15", Exposure: 300, RA: 10.68, Dec: 41.27, Lat: lat, Lon: lon}
+	ic443 := Obs{Object: "IC 443", Night: "2026-10-15", Exposure: 300, RA: 94.25, Dec: 22.53, Lat: lat, Lon: lon}
+	_, dawn, _ := Night("2026-10-15", lat, lon, -18)
+	switchAt := dawn.Add(-3 * time.Hour)
+	var obs []Obs
+	for tm := switchAt.Add(-2 * time.Hour); tm.Before(dawn); tm = tm.Add(5 * time.Minute) {
+		o := m31
+		if !tm.Before(switchAt) {
+			o = ic443
+		}
+		o.UTC = tm
+		obs = append(obs, o)
+	}
+	first := at(Target{RA: ic443.RA, Dec: ic443.Dec}, switchAt)
+	if first.Alt < 25 {
+		t.Fatalf("IC 443 too low at the switch: %+v", first)
+	}
+	g := Infer(obs, 10)
+	if h := g.Horizon.At(first.Az); h > 10 {
+		t.Errorf("horizon %v at the switch to IC 443 %+v", h, first)
+	}
+}
+
+func TestReguess(t *testing.T) {
+	g := Guess{
+		Horizon: Horizon{{Az: 0, Alt: 20}, {Az: 90, Alt: 30}, {Az: 95, Alt: 31}, {Az: 180, Alt: 20}},
+		Zones:   []Zone{{Az1: 100, Az2: 110, Alt1: 40, Alt2: 50, Auto: true}, {Az1: 200, Az2: 210, Alt1: 40, Alt2: 50, Auto: true}},
+	}
+	sky := Sky{MinAlt: 12,
+		Horizon: Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12, Manual: true}, {Az: 180, Alt: 25}},
+		Zones:   []Zone{{Az1: 105, Az2: 115, Alt1: 45, Alt2: 55}, {Az1: 300, Az2: 310, Alt1: 40, Alt2: 50, Auto: true}}}
+	got := sky.Reguess(g, true)
+	want := Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12, Manual: true}, {Az: 180, Alt: 20}}
+	if !reflect.DeepEqual(got.Horizon, want) {
+		t.Errorf("horizon %+v, want %+v", got.Horizon, want)
+	}
+	// the zone moved by hand stays and the guessed one under it gives way;
+	// the old guessed zone goes
+	wantZ := []Zone{sky.Zones[0], g.Zones[1]}
+	if !reflect.DeepEqual(got.Zones, wantZ) || got.MinAlt != 12 || !got.Manual() {
+		t.Errorf("zones %+v, want %+v", got.Zones, wantZ)
+	}
+
+	// saved before the points were marked: what the guess lacks was edited
+	old := Sky{Horizon: Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12}, {Az: 180, Alt: 20}}}
+	got = old.Reguess(g, true)
+	want = Horizon{{Az: 0, Alt: 20}, {Az: 92, Alt: 12, Manual: true}, {Az: 180, Alt: 20}}
+	if !reflect.DeepEqual(got.Horizon, want) {
+		t.Errorf("old sky: %+v, want %+v", got.Horizon, want)
+	}
+	// never edited: all from the guess
+	if got = old.Reguess(g, false); !reflect.DeepEqual(got.Horizon, g.Horizon) || got.Manual() {
+		t.Errorf("not edited: %+v", got.Horizon)
 	}
 }
