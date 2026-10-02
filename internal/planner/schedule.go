@@ -67,6 +67,11 @@ const (
 	Wait    = "wait"
 )
 
+// NoteMeridian marks the wait while the mount stands still at the
+// meridian: it cannot follow the object past it without the tube meeting
+// the tripod, so it holds the sky point where it stopped.
+const NoteMeridian = "до перекладки"
+
 // KindLabel is how a step is named.
 var KindLabel = map[string]string{Shoot: "съёмка", Slew: "переход", Flip: "перекладка", Refocus: "фокусировка", Wait: "ожидание"}
 
@@ -380,7 +385,7 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 				for at.Before(p.Dawn) && moon.HourAngle(at, prm.Lon, targets[cur].RA) < flipAt {
 					at = at.Add(time.Minute)
 				}
-				add(Step{Kind: Wait, Start: t, End: at, Target: cur, Note: "до перекладки"})
+				add(Step{Kind: Wait, Start: t, End: at, Target: cur, Note: NoteMeridian})
 				t = at
 				continue
 			}
@@ -442,7 +447,8 @@ func (p *Plan) Park() Point {
 }
 
 // At is the telescope at t: on its target, on the way between two during
-// a slew (straight in azimuth and altitude), parked before and after.
+// a slew (straight in azimuth and altitude), standing still while stopped
+// at the meridian, parked before and after the night.
 func (p *Plan) At(t time.Time) State {
 	s := State{Step: -1, Point: p.Park(), Target: -1}
 	prev := -1
@@ -455,17 +461,27 @@ func (p *Plan) At(t time.Time) State {
 		}
 		if t.Before(st.End) {
 			s.Step, s.Target = k, st.Target
-			if st.Kind == Slew {
+			switch {
+			case st.Kind == Slew:
 				from := p.Park()
 				if prev >= 0 {
 					from = p.Where(prev, st.Start)
 				}
-				to := p.Where(st.Target, st.End)
-				f := float64(t.Sub(st.Start)) / float64(st.End.Sub(st.Start))
-				s.Point = Point{Az: normAz(from.Az + wrap180(to.Az-from.Az)*f), Alt: from.Alt + (to.Alt-from.Alt)*f}
-			} else if st.Target >= 0 {
+				s.Point = between(from, p.Where(st.Target, st.End), frac(t, st.Start, st.End))
+			case st.Kind == Wait && st.Note == NoteMeridian && st.Target >= 0:
+				// stopped at the tripod: the mount holds where it stopped
+				s.Point = p.Where(st.Target, st.Start)
+			case st.Kind == Flip && st.Target >= 0:
+				// over to the other side and onto the object again, from
+				// where the mount stood while it waited
+				from := p.Where(st.Target, st.Start)
+				if k > 0 && p.Steps[k-1].Kind == Wait && p.Steps[k-1].Note == NoteMeridian && p.Steps[k-1].Target == st.Target {
+					from = p.Where(st.Target, p.Steps[k-1].Start)
+				}
+				s.Point = between(from, p.Where(st.Target, st.End), frac(t, st.Start, st.End))
+			case st.Target >= 0:
 				s.Point = p.Where(st.Target, t)
-			} else if prev >= 0 {
+			case prev >= 0:
 				s.Point = p.Where(prev, t)
 			}
 			break
@@ -492,6 +508,19 @@ func (p *Plan) At(t time.Time) State {
 		}
 	}
 	return s
+}
+
+// frac is how far t is from start to end, 0..1; 1 when they are the same.
+func frac(t, start, end time.Time) float64 {
+	if !end.After(start) {
+		return 1
+	}
+	return float64(t.Sub(start)) / float64(end.Sub(start))
+}
+
+// between is the point f of the way from a to b, the azimuth the short way.
+func between(a, b Point, f float64) Point {
+	return Point{Az: normAz(a.Az + wrap180(b.Az-a.Az)*f), Alt: a.Alt + (b.Alt-a.Alt)*f}
 }
 
 // Local is t on the clock of the observatory.

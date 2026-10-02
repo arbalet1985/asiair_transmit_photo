@@ -369,7 +369,7 @@ func TestMeridianPause(t *testing.T) {
 		if ha := moon.HourAngle(s.Start, lon, targets[s.Target].RA); math.Abs(ha-prm.FlipAfterMin/60) > 0.03 {
 			t.Errorf("flip at hour angle %v, want %v", ha, prm.FlipAfterMin/60)
 		}
-		if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != "до перекладки" {
+		if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != NoteMeridian {
 			t.Errorf("no wait before the flip: %+v", p.Steps[max(k-1, 0)])
 		}
 	}
@@ -439,7 +439,7 @@ func TestMeridianStopBefore(t *testing.T) {
 		switch s.Kind {
 		case Flip:
 			flips++
-			if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != "до перекладки" {
+			if k == 0 || p.Steps[k-1].Kind != Wait || p.Steps[k-1].Note != NoteMeridian {
 				t.Errorf("no wait before the flip of %s", targets[s.Target].Name)
 			}
 			if ha := moon.HourAngle(s.Start, lon, targets[s.Target].RA); math.Abs(ha-flip) > 0.03 {
@@ -489,4 +489,63 @@ func afterFlip(p *Plan, k int) bool {
 		}
 	}
 	return false
+}
+
+// Stopped at the meridian the mount stands still: it cannot follow the
+// object past it without the tube meeting the tripod.
+func TestMeridianHold(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	prm.FlipBeforeMin, prm.FlipAfterMin, prm.FlipMin = 20, 10, 5
+	p, err := Schedule(targets, sky, prm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	for k, s := range p.Steps {
+		if s.Kind != Wait || s.Note != NoteMeridian {
+			continue
+		}
+		waits++
+		held := p.Where(s.Target, s.Start)
+		moved := false
+		for u := s.Start; u.Before(s.End); u = u.Add(time.Minute) {
+			st := p.At(u)
+			if st.Point != held {
+				t.Fatalf("the mount moved while stopped: %+v, held %+v", st.Point, held)
+			}
+			if w := p.Where(s.Target, u); math.Abs(wrap180(w.Az-held.Az)) > 1 {
+				moved = true // the object has gone on without it
+			}
+		}
+		// the flip brings it back onto the object
+		if k+1 < len(p.Steps) && p.Steps[k+1].Kind == Flip {
+			f := p.Steps[k+1]
+			if st := p.At(f.Start); st.Point != held {
+				t.Errorf("the flip does not begin where the mount stood: %+v, held %+v", st.Point, held)
+			}
+			end := p.At(f.End.Add(-time.Second))
+			if w := p.Where(f.Target, f.End); math.Abs(wrap180(end.Point.Az-w.Az)) > 1 || math.Abs(end.Point.Alt-w.Alt) > 1 {
+				t.Errorf("after the flip the mount is at %+v, the object at %+v", end.Point, w)
+			}
+			if !p.At(f.End).West {
+				t.Errorf("not west once the flip is done")
+			}
+		}
+		if !moved {
+			t.Errorf("the object did not go on during the stop: nothing is proven")
+		}
+	}
+	if waits == 0 {
+		t.Fatalf("no stop at the meridian\n%s", p.Text())
+	}
+	// the other waits do follow the object
+	for _, s := range p.Steps {
+		if s.Kind != Wait || s.Note == NoteMeridian || s.Target < 0 {
+			continue
+		}
+		mid := s.Start.Add(s.End.Sub(s.Start) / 2)
+		if st, w := p.At(mid), p.Where(s.Target, mid); st.Point != w {
+			t.Errorf("wait %q: the mount at %+v, the object at %+v", s.Note, st.Point, w)
+		}
+	}
 }
