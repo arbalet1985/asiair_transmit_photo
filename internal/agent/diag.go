@@ -22,6 +22,7 @@ import (
 // all streams.
 type diag struct {
 	bytes, readNs, limitNs, netNs atomic.Int64
+	raw                           atomic.Int64 // bytes read from the ASIAIR (more than bytes when compressed)
 
 	mu     sync.Mutex
 	shares map[string]*shareTime // reading per ASIAIR storage in the window
@@ -66,7 +67,7 @@ func (d *diag) result(streams int) *protocol.Diag {
 	}
 	if now.Sub(d.start) >= diagWindow {
 		read, limit, net := d.readNs.Swap(0), d.limitNs.Swap(0), d.netNs.Swap(0)
-		n := d.bytes.Swap(0)
+		n, raw := d.bytes.Swap(0), d.raw.Swap(0)
 		d.start = now
 		defer func() { d.shares = nil }() // a new window
 		if total := read + limit + net; total > int64(100*time.Millisecond) && n > 0 {
@@ -75,7 +76,7 @@ func (d *diag) result(streams int) *protocol.Diag {
 				Network: float64(net) / float64(total),
 			}
 			if read > total/5 { // too little reading to tell its speed otherwise
-				d.last.ReadSpeed = float64(n) / (float64(read) / 1e9)
+				d.last.ReadSpeed = float64(raw) / (float64(read) / 1e9)
 			}
 			names := make([]string, 0, len(d.shares))
 			for name, st := range d.shares {
@@ -181,9 +182,14 @@ func (s *timedSource) Read(p []byte) (int, error) {
 	ns := int64(time.Since(start))
 	s.d.readNs.Add(ns)
 	s.d.limitNs.Add(-ns) // it is inside the timedBody read
+	s.d.raw.Add(int64(n))
 	s.d.addShare(s.share, n, ns)
 	return n, err
 }
+
+// busy takes out of the limit the time spent compressing (inside the
+// timedBody read, like the reading of the source).
+func (d *diag) busy(t time.Duration) { d.limitNs.Add(-int64(t)) }
 
 // watchPath keeps the Tailscale path to the receiver current.
 func (a *Agent) watchPath(ctx context.Context) {

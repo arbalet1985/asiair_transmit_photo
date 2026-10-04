@@ -33,6 +33,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/wire"
 )
 
 // sentInfo records a file version that the receiver has confirmed.
@@ -899,6 +900,7 @@ func (a *Agent) uploadOnce(u *upload) error {
 	if err != nil || offset < 0 || offset > f.Size {
 		return fmt.Errorf("неверный ответ приёмника: offset %q", resp.Header.Get(protocol.HeaderOffset))
 	}
+	compress := wire.Compressible(f.Path) && wire.Accepts(resp.Header.Get(protocol.HeaderEncodings))
 
 	src, err := a.source().Open(f.Path)
 	if err != nil {
@@ -929,10 +931,22 @@ func (a *Agent) uploadOnce(u *upload) error {
 
 	share, _, _ := strings.Cut(f.Path, "/")
 	read := &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, share: share}
-	body := &timedBody{d: &a.diag, r: a.lim.Reader(ctx, &progressReader{r: io.TeeReader(read, h), n: &u.done})}
+	var data io.Reader = &progressReader{r: io.TeeReader(read, h), n: &u.done}
+	size, encoding := f.Size-offset, ""
+	var enc *wire.Encoder
+	if compress {
+		// the rate limit and the network see the compressed bytes; the
+		// progress counts a block once it has gone out
+		enc = wire.NewEncoder(io.TeeReader(read, h))
+		defer enc.Close()
+		enc.Busy = a.diag.busy
+		enc.Done = func(raw int64) { u.done.Store(offset + raw) }
+		data, size, encoding = enc, -1, wire.Encoding
+	}
+	body := &timedBody{d: &a.diag, r: a.lim.Reader(ctx, data)}
 	q.Set("offset", strconv.FormatInt(offset, 10))
 	start := time.Now()
-	resp, err = a.cl.do(ctx, http.MethodPut, "/api/upload", q, io.NopCloser(body), f.Size-offset)
+	resp, err = a.cl.doEncoded(ctx, http.MethodPut, "/api/upload", q, io.NopCloser(body), size, encoding)
 	if err != nil {
 		return err
 	}
@@ -973,7 +987,13 @@ func (a *Agent) uploadOnce(u *upload) error {
 	}
 	sent := f.Size - offset
 	secs := time.Since(start).Seconds()
-	log.Printf("Агент: отправлен %s (%s за %.0f с, %s/s)", f.Path, config.FormatBytes(sent), secs, config.FormatBytes(int64(float64(sent)/max(secs, 0.001))))
+	packed := ""
+	if enc != nil {
+		if raw, z := enc.Sent(); z > 0 {
+			packed = fmt.Sprintf(", по сети %s, сжатие ×%.1f", config.FormatBytes(z), float64(raw)/float64(z))
+		}
+	}
+	log.Printf("Агент: отправлен %s (%s за %.0f с, %s/s%s)", f.Path, config.FormatBytes(sent), secs, config.FormatBytes(int64(float64(sent)/max(secs, 0.001))), packed)
 	a.mu.Lock()
 	a.status.SentFiles++
 	a.status.SentBytes += sent

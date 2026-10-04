@@ -4,6 +4,7 @@
 //
 //	HEAD /api/upload?path=P&size=S&mtime=T   -> header Upload-Offset, Upload-Complete
 //	PUT  /api/upload?path=P&size=S&mtime=T&offset=O  body: bytes [O, S)  -> UploadResult
+//	     (compressed when HEAD offered Upload-Encodings: Content-Encoding)
 //	POST /api/commit?path=P&size=S&mtime=T&sha256=H                      -> 200 or 409
 //	POST /api/sync      body: SyncRequest   -> SyncResponse
 //	POST /api/inventory body: Inventory     -> 204
@@ -39,6 +40,9 @@ func Fingerprint(der []byte) string {
 const (
 	HeaderOffset   = "Upload-Offset"
 	HeaderComplete = "Upload-Complete"
+	// HeaderEncodings: the compressions of a PUT body the receiver accepts
+	// (sent with Content-Encoding; see package wire).
+	HeaderEncodings = "Upload-Encodings"
 )
 
 // UploadResult is returned by PUT once the whole file has been received.
