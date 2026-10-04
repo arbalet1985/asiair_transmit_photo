@@ -435,3 +435,51 @@ func TestRemoveEmptyDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestFoldersHas(t *testing.T) {
+	only := Folders{"Plan/Light/M 31", `Autorun\Flat`}
+	for rel, want := range map[string]bool{
+		"Plan/Light/M 31/a.fit":     true,
+		`plan\light\m 31\sub\a.fit`: true,
+		"Plan/Light/M 31x/a.fit":    false,
+		"Plan/Light/a.fit":          false,
+		"Autorun/Flat/f.fit":        true,
+		"Autorun/Dark/d.fit":        false,
+	} {
+		if only.Has(rel) != want {
+			t.Errorf("%s: %v", rel, !want)
+		}
+	}
+	if !(Folders{}).Has("x/y.fit") {
+		t.Error("no choice: all")
+	}
+	if !only.below("Plan") || !only.below("Plan/Light/M 31/sub") || only.below("Autorun/Dark") {
+		t.Error("below")
+	}
+}
+
+func TestScanForOnly(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	light := map[string]string{"IMAGETYP": "'Light'", "EXPTIME": "60", "OBJECT": "'M 31'"}
+	writeFITS(t, filepath.Join(in, "Plan", "Light", "M 31", "Light_M 31_1.fit"), light)
+	writeFITS(t, filepath.Join(in, "Plan", "Light", "M 31", "Light_M 31_2.fit"), light)
+	writeFITS(t, filepath.Join(in, "Plan", "Light", "M 42", "Light_M 42_1.fit"), map[string]string{"IMAGETYP": "'Light'", "EXPTIME": "60", "OBJECT": "'M 42'"})
+	writeFITS(t, filepath.Join(in, "Autorun", "Flat", "Flat_1.fit"), map[string]string{"IMAGETYP": "'Flat'", "EXPTIME": "1"})
+
+	dirs, err := LocalFolders(in, out)
+	if err != nil || len(dirs) != 3 || dirs[0].Dir != "Autorun/Flat" || dirs[1].Dir != "Plan/Light/M 31" || dirs[1].Files != 2 || dirs[1].Bytes == 0 {
+		t.Fatalf("folders %+v %v", dirs, err)
+	}
+	frames, errs := ScanForOnly(in, out, Folders{"Plan/Light/M 31"}, nil)
+	if len(errs) > 0 || len(frames) != 2 {
+		t.Fatalf("%d frames, %v", len(frames), errs)
+	}
+	for _, f := range frames {
+		if f.Object != "M 31" {
+			t.Fatalf("frame of %s", f.Rel)
+		}
+	}
+	if frames, _ := ScanForOnly(in, out, nil, nil); len(frames) != 4 {
+		t.Fatalf("all: %d", len(frames))
+	}
+}

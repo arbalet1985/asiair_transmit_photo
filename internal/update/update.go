@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -322,22 +324,76 @@ func renameRetry(from, to string) error {
 
 // moveAside gets a file that cannot be deleted out of the way. Windows
 // refuses to delete a program that is running (e.g. a copy of an old
-// version left running) but lets it be renamed; Cleanup deletes it later.
-func moveAside(p string) {
-	if err := os.Remove(p); err == nil || errors.Is(err, fs.ErrNotExist) {
-		return
+// version left running, or the watchdog of the last update) but lets it be
+// renamed; an antivirus may hold the file for a moment, so both are tried
+// again for a while. Cleanup deletes the renamed copy later. It reports
+// whether p is gone.
+func moveAside(p string) bool {
+	for i := 0; i < renameTries; i++ {
+		if i > 0 {
+			time.Sleep(renameDelay)
+		}
+		os.Chmod(p, 0o666) // a read-only file cannot be deleted on Windows
+		if err := os.Remove(p); err == nil || errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		if err := renameAside(p, fmt.Sprintf("%s.%d%s", p, time.Now().UnixNano(), deletedSuffix)); err == nil {
+			return true
+		}
 	}
-	os.Rename(p, fmt.Sprintf("%s.%d%s", p, time.Now().UnixNano(), deletedSuffix))
+	_, err := os.Stat(p)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 const deletedSuffix = ".del"
 
+var renameAside = os.Rename // tests make it fail
+
+// spareBackup is the name of the previous program when Backup(exe) is held
+// by something and cannot be replaced: name.old.<n>.exe.
+func spareBackup(exe string) string {
+	b := Backup(exe)
+	ext := filepath.Ext(exe)
+	return fmt.Sprintf("%s.%d%s", strings.TrimSuffix(b, ext), time.Now().UnixNano(), ext)
+}
+
+// isSpareBackup tells a file name made by spareBackup for exe.
+func isSpareBackup(exe, name string) bool {
+	b := filepath.Base(Backup(exe))
+	ext := filepath.Ext(exe)
+	stem := strings.TrimSuffix(b, ext) + "."
+	if !strings.HasPrefix(name, stem) || !strings.HasSuffix(name, ext) {
+		return false
+	}
+	n := strings.TrimSuffix(strings.TrimPrefix(name, stem), ext)
+	if n == "" {
+		return false
+	}
+	for _, c := range n {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// installed: where Install of this process put the previous program, for
+// StartWatch.
+var (
+	installedMu sync.Mutex
+	installed   = map[string]string{}
+)
+
 // Install replaces the program exe with the file newFile. Windows cannot
 // overwrite a running program but can rename it: the old one is kept as
-// Backup(exe) and removed once the new version works (Cleanup).
+// Backup(exe) (or, when an earlier copy there cannot be moved, under a
+// spare name) and removed once the new version works (Cleanup).
 func Install(exe, newFile string) error {
 	old := Backup(exe)
-	moveAside(old)
+	if !moveAside(old) {
+		log.Printf("Обновление: старая копия %s занята и не удаляется — прежняя версия сохраняется под другим именем", old)
+		old = spareBackup(exe)
+	}
 	if err := renameRetry(exe, old); err != nil {
 		return fmt.Errorf("не удалось заменить %s: %w (файл занят другой программой — антивирусом или ещё одной копией приёмника или агента, — либо нет прав на запись в папку программы)", exe, err)
 	}
@@ -346,12 +402,16 @@ func Install(exe, newFile string) error {
 		return fmt.Errorf("не удалось заменить %s: %w", exe, err)
 	}
 	os.Chmod(exe, 0o755) // a downloaded file is not executable on Linux
+	installedMu.Lock()
+	installed[exe] = old
+	installedMu.Unlock()
 	return nil
 }
 
 // Cleanup removes what an earlier update left next to the program.
 func Cleanup(exe string) {
 	for _, p := range []string{exe + ".old", Backup(exe), exe + ".bad", exe + ".new", exe + ".new.part"} {
+		os.Chmod(p, 0o666)
 		os.Remove(p)
 	}
 	// copies moved aside by Install, once they are no longer running
@@ -362,6 +422,11 @@ func Cleanup(exe string) {
 			if strings.HasPrefix(n, base+".") && strings.HasSuffix(n, deletedSuffix) {
 				os.RemoveAll(filepath.Join(filepath.Dir(exe), n))
 			}
+		}
+		if isSpareBackup(exe, n) {
+			p := filepath.Join(filepath.Dir(exe), n)
+			os.Chmod(p, 0o666)
+			os.Remove(p)
 		}
 	}
 }

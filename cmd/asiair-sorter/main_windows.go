@@ -61,6 +61,8 @@ type settings struct {
 	ShowMoon        bool                     `json:"show_moon,omitempty"`
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
 	Planner         plannerSettings          `json:"planner"`
+	// Folders: for each input (receiverKey) the folders synchronised; none = all
+	Folders map[string][]string `json:"folders,omitempty"`
 }
 
 func configDir() string {
@@ -111,6 +113,8 @@ type window struct {
 	inEdit, outEdit            *walk.LineEdit
 	passEdit, codeEdit         *walk.LineEdit
 	btnForget, btnBrowseIn     *walk.PushButton
+	btnFolders                 *walk.PushButton
+	foldersInfo                *walk.Label
 	loginRow                   *walk.Composite
 	modeBox, kindBox           *walk.ComboBox
 	fillBox                    *walk.CheckBox
@@ -133,6 +137,7 @@ type window struct {
 	model                      *frameModel
 	layout                     *sorter.Layout
 	scannedIn, scannedOut      string // the input and output the layout was made for
+	scannedOnly                string // and the folders chosen then
 	readErrs                   int    // frames of the last scan whose header was not read
 	busy                       bool
 	cancel                     context.CancelFunc
@@ -219,6 +224,17 @@ func main() {
 								ToolTipText: "Одноразовый код из приложения-аутентификатора, если он включён на приёмнике."},
 							PushButton{AssignTo: &w.btnForget, Text: "Забыть вход и сертификат", OnClicked: w.forgetReceiver,
 								ToolTipText: "Выйти и забыть сертификат приёмника (например, после переустановки приёмника). При следующем подключении нужен пароль."},
+							HSpacer{},
+						},
+					},
+					Label{Text: "Папки:"},
+					Composite{
+						Layout:     HBox{MarginsZero: true},
+						ColumnSpan: 2,
+						Children: []Widget{
+							PushButton{AssignTo: &w.btnFolders, Text: "Выбрать папки…", OnClicked: w.chooseFolders,
+								ToolTipText: "Синхронизировать не всё, а только отмеченные папки входного каталога или приёмника (например, только нужные объекты)."},
+							Label{AssignTo: &w.foldersInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 							HSpacer{},
 						},
 					},
@@ -427,6 +443,7 @@ func (w *window) inputChanged() {
 	remote := sorter.IsURL(w.inEdit.Text())
 	w.loginRow.SetVisible(remote)
 	w.btnGone.SetVisible(remote)
+	w.showFolders()
 	w.foldersChanged()
 }
 
@@ -442,10 +459,11 @@ func (w *window) foldersChanged() {
 		return
 	}
 	in, out := strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
-	w.btnApply.SetEnabled(w.layout != nil && in == w.scannedIn && out == w.scannedOut)
+	same := w.layout != nil && in == w.scannedIn && out == w.scannedOut && strings.Join(w.chosenFolders(in), "\n") == w.scannedOnly
+	w.btnApply.SetEnabled(same)
 	// the frames deleted on the receiver: known after a scan of this receiver
 	// and output, and until the frames are laid out again
-	w.btnGone.SetEnabled(w.layout != nil && w.model.gone != nil && in == w.scannedIn && out == w.scannedOut || w.model.mark)
+	w.btnGone.SetEnabled(same && w.model.gone != nil || w.model.mark)
 }
 
 func (w *window) setBusy(b bool) {
@@ -458,6 +476,7 @@ func (w *window) setBusy(b bool) {
 	w.codeEdit.SetReadOnly(b)
 	w.btnForget.SetEnabled(!b)
 	w.btnBrowseIn.SetEnabled(!b)
+	w.btnFolders.SetEnabled(!b)
 	w.modeBox.SetEnabled(!b)
 	w.fillBox.SetEnabled(!b)
 	w.btnDelete.SetEnabled(!b)
@@ -528,6 +547,7 @@ func (w *window) scan() {
 		}
 	}
 	password, code := w.passEdit.Text(), w.codeEdit.Text()
+	only := w.chosenFolders(s.In)
 	s.save()
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
@@ -540,12 +560,14 @@ func (w *window) scan() {
 		var frames []sorter.Frame
 		var errs []error
 		var fatal error
+		var skipped []sorter.RemoteFile
 		if remote {
-			frames, errs, fatal = w.scanReceiver(ctx, s, password, code, say)
+			frames, skipped, errs, fatal = w.scanReceiver(ctx, s, only, password, code, say)
 		} else {
-			frames, errs = sorter.ScanFor(s.In, s.Out, func(n int) { say(fmt.Sprintf("Читаю заголовки FITS… %d", n)) })
+			frames, errs = sorter.ScanForOnly(s.In, s.Out, only, func(n int) { say(fmt.Sprintf("Читаю заголовки FITS… %d", n)) })
 		}
 		l := sorter.Plan(frames)
+		l.Elsewhere(skipped)
 		missing, missingBytes := l.Missing(s.Out)
 		nights := l.Nights(s.Out)
 		w.mw.Synchronize(func() {
@@ -563,6 +585,7 @@ func (w *window) scan() {
 			w.codeEdit.SetText("")
 			w.passEdit.SetText("")
 			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
+			w.scannedOnly = strings.Join(only, "\n")
 			w.model.set(l, remote)
 			w.btnGone.SetText(goneOn)
 			w.btnDelete.SetVisible(false)
@@ -572,6 +595,9 @@ func (w *window) scan() {
 			w.pl.setFrames(frames)
 			w.foldersChanged()
 			msg := fmt.Sprintf("Кадров: %d, сессий: %d, объём %s.", l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
+			if len(only) > 0 {
+				msg = fmt.Sprintf("Только выбранные папки (%d). ", len(only)) + msg
+			}
 			if remote {
 				msg += fmt.Sprintf(" Нет в выходном каталоге: %d (%s).", missing, sorter.FormatBytes(missingBytes))
 				if n := len(w.model.gone); n > 0 {
@@ -586,6 +612,9 @@ func (w *window) scan() {
 				if remote {
 					msg = "На приёмнике нет полученных кадров FITS."
 				}
+				if len(only) > 0 {
+					msg += " Выбраны не все папки — кнопка «Выбрать папки…»."
+				}
 			} else {
 				msg += " Проверьте список и вкладку «Структура», затем «Разложить»."
 			}
@@ -596,36 +625,36 @@ func (w *window) scan() {
 
 // scanReceiver reads the frames of the receiver in the input, plus the
 // library already in the output. fatal is set when nothing could be read.
-func (w *window) scanReceiver(ctx context.Context, s settings, password, code string, say func(string)) (frames []sorter.Frame, errs []error, fatal error) {
+func (w *window) scanReceiver(ctx context.Context, s settings, only sorter.Folders, password, code string, say func(string)) (frames []sorter.Frame, skipped []sorter.RemoteFile, errs []error, fatal error) {
 	say("Подключаюсь к приёмнику…")
 	r, err := w.connect(ctx, s.In, password, code)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cache := sorter.LoadHeaderCache(filepath.Join(configDir(), "headers.json"))
 	progress := func(done, total int) {
 		say(fmt.Sprintf("Читаю заголовки кадров на приёмнике… %d из %d", done, total))
 	}
-	frames, errs = sorter.ScanReceiver(ctx, r, cache, progress)
+	frames, skipped, errs = sorter.ScanReceiverOnly(ctx, r, cache, only, progress)
 	if len(errs) == 1 && errors.Is(errs[0], sorter.ErrLogin) && len(frames) == 0 {
 		// the login kept is over (or was never made)
 		w.setLogin(s.In, func(l *receiverLogin) { l.Session = "" })
 		if password == "" {
-			return nil, nil, sorter.ErrLogin
+			return nil, nil, nil, sorter.ErrLogin
 		}
 		if err := r.Login(ctx, password, code); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		w.setLogin(s.In, func(l *receiverLogin) { l.Session = r.Session() })
-		frames, errs = sorter.ScanReceiver(ctx, r, cache, progress)
+		frames, skipped, errs = sorter.ScanReceiverOnly(ctx, r, cache, only, progress)
 	}
 	if len(frames) == 0 && len(errs) > 0 {
-		return nil, nil, errs[0]
+		return nil, nil, nil, errs[0]
 	}
 	cache.Save(r.Base())
 	say("Читаю библиотеку в выходном каталоге…")
 	lib, e := sorter.ScanLibrary(s.Out, nil)
-	return append(frames, lib...), append(errs, e...), nil
+	return append(frames, lib...), skipped, append(errs, e...), nil
 }
 
 func (w *window) apply() {
@@ -640,6 +669,9 @@ func (w *window) apply() {
 		n, b := l.Missing(s.Out)
 		if n == 0 && !opt.FillCalibration {
 			q = "Все кадры приёмника уже есть в выходном каталоге. Обновить только файлы «калибровка.txt»?"
+			if len(w.chosenFolders(s.In)) > 0 {
+				q = "Все кадры выбранных папок приёмника уже есть в выходном каталоге. Обновить только файлы «калибровка.txt»?"
+			}
 		} else {
 			q = fmt.Sprintf("С приёмника будет скачано кадров: %d (%s), остальные уже на месте.\nКуда: %s\n\nПродолжить?", n, sorter.FormatBytes(b), s.Out)
 		}

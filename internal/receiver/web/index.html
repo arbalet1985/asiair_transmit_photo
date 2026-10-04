@@ -1483,15 +1483,16 @@ $("minFreeApply").onclick = async () => {
   } catch (e) { alert("Ошибка: " + e.message); }
 };
 
+// newer: version x is newer than y ("1.2.0" style)
+function newer(x, y) {
+  const p = v => (v || "").split("-")[0].split(".").map(Number);
+  const a = p(x), b = p(y);
+  if (a.length !== 3 || b.length !== 3 || a.some(isNaN) || b.some(isNaN)) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
 function renderUpdate(u, a) {
   const ver = v => v === "dev" ? "собран вручную" : v ? "v" + v : "—";
-  const newer = (x, y) => { // x newer than y ("1.2.0" style)
-    const p = v => (v || "").split("-")[0].split(".").map(Number);
-    const a = p(x), b = p(y);
-    if (a.length !== 3 || b.length !== 3 || a.some(isNaN) || b.some(isNaN)) return false;
-    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
-    return false;
-  };
   $("hdrVersion").textContent = "приёмник " + ver(u.version);
   $("upMine").textContent = ver(u.version) + (u.latest && newer(u.latest, u.version) ? " — есть новая версия" : u.latest && u.version === u.latest ? " — последняя" : "");
   const av = (a && a.version) || "";
@@ -1510,15 +1511,20 @@ function renderUpdate(u, a) {
   $("upStatus").textContent = u.status || (u.checking ? "Проверка обновлений…" : "");
   $("upErr").textContent = u.error || "";
   $("upCheck").disabled = u.checking;
-  $("upInstall").disabled = u.checking;
+  // something to install: a newer receiver it can put in itself, or a newer
+  // agent for the agent
+  const recvNew = !!u.latest && newer(u.latest, u.version);
+  const agentNew = !!av && (!!u.latest && newer(u.latest, av) || !!u.agent && newer(u.agent, av));
+  const canInstall = recvNew && u.can_self_update || agentNew;
+  $("upInstall").disabled = u.checking || !canInstall;
+  $("upInstall").title = canInstall ? "" : !u.latest ? "Сначала нажмите «Проверить»" : "Обновлений нет: установлены последние версии";
   if (document.activeElement !== $("upAuto")) $("upAuto").checked = u.auto;
   markSecret("upToken", u.token_set, "github_pat_…");
   $("upTokenHint").innerHTML = (u.token_set ? "Токен задан. Чтобы заменить — введите новый; чтобы удалить — сохраните пустое поле. " : "Токен не задан. ") +
     'Нужен, только если релизы берутся из приватного репозитория (параметр update_repo). Создайте на GitHub: <b>Settings → Developer settings → Fine-grained tokens → Generate new token</b>, доступ только к этому репозиторию, право <b>Contents: Read-only</b>. Токен хранится в receiver.yaml. Для публичного репозитория (как основной) токен не нужен.';
   if (u.token_set) $("upTokenBox").open = true;
-  const upd = u.latest && (newer(u.latest, u.version) || (av && newer(u.latest, av)));
-  $("hdrUpdate").hidden = !upd;
-  $("hdrUpdate").textContent = upd ? "доступна версия v" + u.latest : "";
+  $("hdrUpdate").hidden = !recvNew && !agentNew;
+  $("hdrUpdate").textContent = recvNew ? "доступна версия v" + u.latest : agentNew ? "агент: доступна версия v" + (u.agent && newer(u.agent, u.latest || "") ? u.agent : u.latest) : "";
   if (!u.can_self_update && u.latest && newer(u.latest, u.version))
     $("upStatus").textContent = (u.version === "dev" ? "Приёмник собран вручную и сам не обновляется. " : "") + ($("upStatus").textContent || "");
 }
@@ -2748,7 +2754,7 @@ function renderSetupSummary(firstRun) {
   if (state.dest_dir) parts.push("папка " + state.dest_dir);
   if (d.total) parts.push(`свободно ${fmtBytes(d.free)}` + (d.full ? " (мало!)" : ""));
   if (t.enabled) parts.push("Tailscale: " + (t.state === "running" ? "подключён" : t.state === "login" ? "нужно войти" : t.state));
-  if (u.version) parts.push("приёмник " + (u.version === "dev" ? "dev" : "v" + u.version) + (u.latest && u.latest !== u.version ? ", есть обновление" : ""));
+  if (u.version) parts.push("приёмник " + (u.version === "dev" ? "dev" : "v" + u.version) + (u.latest && newer(u.latest, u.version) ? ", есть обновление" : ""));
   $("setupSummary").textContent = $("setupWrap").classList.contains("folded") ? parts.join(" · ") : "";
 }
 $("setupToggle").onclick = () => {

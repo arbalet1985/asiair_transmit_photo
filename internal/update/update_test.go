@@ -159,3 +159,43 @@ func TestInstallStaleBackup(t *testing.T) {
 		t.Fatalf("left after cleanup: %v", names)
 	}
 }
+
+// A backup that can be neither deleted nor renamed (held by another
+// program) does not stop the update: the old version is kept under a spare
+// name, which the rollback uses.
+func TestInstallBusyBackup(t *testing.T) {
+	renameDelay = time.Millisecond
+	renameAside = func(string, string) error { return os.ErrPermission }
+	defer func() { renameDelay, renameAside = 2*time.Second, os.Rename }()
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "prog.exe")
+	os.WriteFile(exe, []byte("old"), 0o755)
+	os.MkdirAll(filepath.Join(Backup(exe), "busy"), 0o755)
+	nw := exe + ".new"
+	os.WriteFile(nw, []byte("new"), 0o755)
+	if err := Install(exe, nw); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "new" {
+		t.Fatal("not replaced")
+	}
+	spare := installed[exe]
+	if spare == Backup(exe) || !isSpareBackup(exe, filepath.Base(spare)) {
+		t.Fatalf("backup at %s", spare)
+	}
+	if b, _ := os.ReadFile(spare); string(b) != "old" {
+		t.Fatal("old copy missing")
+	}
+	// the restart failed: the old version comes back from the spare name
+	if err := Undo(exe); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "old" {
+		t.Fatal("old version not back")
+	}
+	os.WriteFile(spareBackup(exe), []byte("old"), 0o755)
+	Cleanup(exe)
+	if m, _ := filepath.Glob(filepath.Join(dir, "prog.old.*.exe")); len(m) != 0 {
+		t.Fatalf("left after cleanup: %v", m)
+	}
+}

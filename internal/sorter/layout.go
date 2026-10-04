@@ -64,6 +64,8 @@ type Layout struct {
 	Sessions   []*Group // the light groups
 	Unknown    []*Frame // frames of unknown kind: left where they are
 	TotalBytes int64
+	// elsewhere: name|size of frames of the input not read (Elsewhere)
+	elsewhere map[string]bool
 }
 
 // Seconds of light frames in a group.
@@ -103,7 +105,7 @@ func (l *Layout) Frames() int {
 func (l *Layout) Gone() []*Item {
 	var out []*Item
 	for _, it := range l.Items {
-		if it.Frame.InLibrary && !it.Dup {
+		if it.Frame.InLibrary && !it.Dup && !l.elsewhere[elsewhereKey(path.Base(it.Frame.Rel), it.Frame.Size)] {
 			out = append(out, it)
 		}
 	}

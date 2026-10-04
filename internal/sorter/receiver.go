@@ -462,6 +462,15 @@ func (c *HeaderCache) get(k string) ([]Card, bool) {
 	return v, ok
 }
 
+// keep marks an entry as still wanted without using it.
+func (c *HeaderCache) keep(k string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.m[k]; ok {
+		c.used[k] = true
+	}
+}
+
 func (c *HeaderCache) put(k string, v []Card) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -498,10 +507,34 @@ func (c *HeaderCache) Save(base string) error {
 // ScanReceiver lists the frames of a receiver and reads their headers
 // (several at a time; the cached ones are not read again).
 func ScanReceiver(ctx context.Context, r *Receiver, cache *HeaderCache, progress func(done, total int)) ([]Frame, []error) {
-	files, err := r.Files(ctx)
+	frames, _, errs := ScanReceiverOnly(ctx, r, cache, nil, progress)
+	return frames, errs
+}
+
+// ScanReceiverOnly is ScanReceiver with only the folders chosen read; the
+// files of the other folders are returned as skipped (for Layout.Elsewhere).
+func ScanReceiverOnly(ctx context.Context, r *Receiver, cache *HeaderCache, only Folders, progress func(done, total int)) ([]Frame, []RemoteFile, []error) {
+	all, err := r.Files(ctx)
 	if err != nil {
-		return nil, []error{err}
+		return nil, nil, []error{err}
 	}
+	if cache == nil {
+		cache = LoadHeaderCache("")
+	}
+	var files, skipped []RemoteFile
+	for _, f := range all {
+		if only.Has(f.Path) {
+			files = append(files, f)
+		} else {
+			skipped = append(skipped, f)
+			cache.keep(cacheKey(r.Base(), f)) // read again when chosen later
+		}
+	}
+	frames, errs := scanFiles(ctx, r, cache, files, progress)
+	return frames, skipped, errs
+}
+
+func scanFiles(ctx context.Context, r *Receiver, cache *HeaderCache, files []RemoteFile, progress func(done, total int)) ([]Frame, []error) {
 	if cache == nil {
 		cache = LoadHeaderCache("")
 	}

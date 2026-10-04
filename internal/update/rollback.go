@@ -34,6 +34,17 @@ type Pending struct {
 	Args     []string  `json:"args,omitempty"` // command line to start the old version again
 	PID      int       `json:"pid,omitempty"`  // the new version, once it runs
 	OK       bool      `json:"ok,omitempty"`   // the new version works
+	// Backup: the previous program, when not at Backup(exe) (filled in by
+	// StartWatch after Install).
+	Backup string `json:"backup,omitempty"`
+}
+
+// backupOf is where the previous program of the update p is kept.
+func backupOf(exe string, p *Pending) string {
+	if p != nil && p.Backup != "" {
+		return p.Backup
+	}
+	return Backup(exe)
 }
 
 // Rollback records a version that was put back.
@@ -53,7 +64,7 @@ func Backup(exe string) string {
 	return exe + ".old"
 }
 
-func pendingFile(exe string) string  { return exe + ".update.json" }
+func pendingFile(exe string) string { return exe + ".update.json" }
 
 // WatchLog is the log of the watchdog of the updates of exe.
 func WatchLog(exe string) string {
@@ -103,10 +114,17 @@ func ReadRollback(exe string) *Rollback {
 // StartWatch records the update and starts the watchdog from the backup of
 // the old program. Call it after Install and before the restart.
 func StartWatch(exe string, p Pending) error {
+	if p.Backup == "" {
+		installedMu.Lock()
+		if b := installed[exe]; b != Backup(exe) {
+			p.Backup = b
+		}
+		installedMu.Unlock()
+	}
 	if err := writeJSON(pendingFile(exe), p); err != nil {
 		return err
 	}
-	cmd := exec.Command(Backup(exe), WatchCommand, exe)
+	cmd := exec.Command(backupOf(exe, &p), WatchCommand, exe)
 	cmd.Dir = filepath.Dir(exe)
 	hideWindow(cmd)
 	if err := cmd.Start(); err != nil {
@@ -120,8 +138,16 @@ func StartWatch(exe string, p Pending) error {
 // Undo cancels an installed update that could not be started: the watchdog
 // stops, the old program goes back in place.
 func Undo(exe string) error {
+	p := ReadPending(exe)
 	os.Remove(pendingFile(exe))
-	return rollBack(exe, 0)
+	if p == nil {
+		installedMu.Lock()
+		if b := installed[exe]; b != "" {
+			p = &Pending{Backup: b}
+		}
+		installedMu.Unlock()
+	}
+	return rollBack(exe, backupOf(exe, p), 0)
 }
 
 // Started tells the watchdog that the new version runs. It reports whether
@@ -182,7 +208,7 @@ func Watch(exe string) error {
 		reason = "новая версия не вышла на связь с приёмником"
 	}
 	log.Printf("Обновление %s → %s: %s — возвращаю %s", p.From, p.To, reason, p.From)
-	if err := rollBack(exe, pid); err != nil {
+	if err := rollBack(exe, backupOf(exe, p), pid); err != nil {
 		log.Printf("Откат не удался: %v", err)
 		return err
 	}
@@ -216,7 +242,7 @@ var (
 )
 
 // rollBack stops the new version and puts the backup in its place.
-func rollBack(exe string, pid int) error {
+func rollBack(exe, backup string, pid int) error {
 	if pid != 0 && pid != os.Getpid() {
 		if pr, err := os.FindProcess(pid); err == nil {
 			pr.Kill()
@@ -234,7 +260,7 @@ func rollBack(exe string, pid int) error {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if err := os.Rename(Backup(exe), exe); err != nil {
+	if err := os.Rename(backup, exe); err != nil {
 		os.Rename(exe+".bad", exe)
 		return err
 	}
