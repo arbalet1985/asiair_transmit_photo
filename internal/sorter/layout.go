@@ -97,8 +97,9 @@ func (l *Layout) Frames() int {
 
 // Gone lists the frames of the output (its library and the lights of its
 // sessions) that no frame of the input matches — the same place and size.
-// For a receiver in the input these are the frames deleted there that are
-// still kept in the output.
+// For a receiver in the input these are the frames deleted there, or
+// marked to be deleted there with its copy (Receiver.Files leaves them
+// out), that are still kept in the output.
 func (l *Layout) Gone() []*Item {
 	var out []*Item
 	for _, it := range l.Items {

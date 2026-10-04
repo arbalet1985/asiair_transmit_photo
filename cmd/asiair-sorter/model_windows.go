@@ -58,7 +58,7 @@ type frameModel struct {
 }
 
 // goneText is the column «Куда» of a frame deleted on the receiver.
-const goneText = "— удалён на приёмнике, остался только в выходном каталоге"
+const goneText = "— удалён или помечен на удаление на приёмнике, остался в выходном каталоге"
 
 // marked: the row is highlighted as deleted on the receiver.
 func (m *frameModel) marked(i int) bool {
