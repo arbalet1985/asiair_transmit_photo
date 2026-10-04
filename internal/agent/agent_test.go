@@ -300,7 +300,9 @@ func TestPause(t *testing.T) {
 
 	// start, then pause in the middle of the file
 	startTransfer(t, rcfg.UIListen)
-	waitFor(t, "upload to start", 5*time.Second, func() bool { return a.Status().UploadDone > 100_000 })
+	// (compressed, the file goes out in blocks of 256 KB: wait for the
+	// second one, so the first has surely reached the receiver)
+	waitFor(t, "upload to start", 10*time.Second, func() bool { return a.Status().UploadDone > 300_000 })
 	a.SetPaused(true)
 	waitFor(t, "upload to stop", 5*time.Second, func() bool { return a.Status().Uploading == "" })
 	time.Sleep(500 * time.Millisecond)

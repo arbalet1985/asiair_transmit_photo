@@ -102,6 +102,12 @@ func normFP(s string) string {
 }
 
 func (c *client) do(ctx context.Context, method, path string, q url.Values, body io.Reader, size int64) (*http.Response, error) {
+	return c.doEncoded(ctx, method, path, q, body, size, "")
+}
+
+// doEncoded is do with a body compressed as encoding ("" = not
+// compressed); size -1 = not known in advance.
+func (c *client) doEncoded(ctx context.Context, method, path string, q url.Values, body io.Reader, size int64, encoding string) (*http.Response, error) {
 	u := c.base + path
 	if q != nil {
 		u += "?" + q.Encode()
@@ -112,6 +118,9 @@ func (c *client) do(ctx context.Context, method, path string, q url.Values, body
 	}
 	if size >= 0 {
 		req.ContentLength = size
+	}
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	return c.http.Do(req)

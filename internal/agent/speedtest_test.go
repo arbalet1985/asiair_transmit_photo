@@ -98,6 +98,7 @@ func TestDiagShares(t *testing.T) {
 	d.readNs.Add(int64(time.Second))
 	d.netNs.Add(int64(time.Second))
 	d.bytes.Add(2 << 20)
+	d.raw.Add(2 << 20)
 	d.addShare("TF Images", 1<<20, int64(time.Second)) // waited: 1 MB/s
 	d.addShare("EMMC Images", 1<<20, int64(time.Millisecond))
 	res := d.result(3)

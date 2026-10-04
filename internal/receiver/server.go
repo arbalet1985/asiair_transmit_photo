@@ -27,6 +27,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/wire"
 )
 
 //go:embed web/index.html web/login.html web/manifest.webmanifest web/sw.js web/*.png
@@ -271,6 +272,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	case http.MethodHead, http.MethodGet:
 		off, done := s.getStore().Offset(p, size, mtime)
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(off, 10))
+		w.Header().Set(protocol.HeaderEncodings, wire.Encoding)
 		if done {
 			w.Header().Set(protocol.HeaderComplete, "1")
 		} else if msg := s.checkSpace(size - off); msg != "" {
@@ -289,7 +291,22 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, msg, http.StatusInsufficientStorage)
 			return
 		}
-		got, sum, err := s.getStore().Write(p, size, mtime, off, r.Body)
+		body := io.Reader(r.Body)
+		switch enc := r.Header.Get("Content-Encoding"); enc {
+		case "", "identity":
+		case wire.Encoding:
+			dec, err := wire.NewDecoder(r.Body, size-off)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer dec.Close()
+			body = dec
+		default:
+			http.Error(w, "неизвестное сжатие "+enc, http.StatusUnsupportedMediaType)
+			return
+		}
+		got, sum, err := s.getStore().Write(p, size, mtime, off, body)
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(got, 10))
 		var eo *ErrOffset
 		switch {
