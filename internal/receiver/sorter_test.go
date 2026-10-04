@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
@@ -162,6 +163,21 @@ func TestSorterFromReceiver(t *testing.T) {
 	}
 	if _, err := os.Stat(dst + sorter.PartSuffix); err == nil {
 		t.Fatal("the part is left")
+	}
+
+	// frames marked to be deleted here too are not offered for download
+	flat := "EMMC Images/Autorun/Flat/Flat_1.5s_Bin1_Ha_gain100_20260927-063000_-10.0C_0001.fit"
+	if _, err := s.state.QueueDelete([]string{flat}, protocol.CmdDelete, false); err != nil {
+		t.Fatal(err)
+	}
+	if files, _ := r2.Files(ctx); len(files) != 3 {
+		t.Fatalf("deleted on the ASIAIR only: %d files", len(files))
+	}
+	if _, err := s.state.QueueDelete([]string{"EMMC Images/Plan/Light/M 31"}, protocol.CmdDeleteDir, true); err != nil {
+		t.Fatal(err)
+	}
+	if files, err := r2.Files(ctx); err != nil || len(files) != 1 || files[0].Path != flat {
+		t.Fatalf("marked to be deleted here: %d files, %v", len(files), err)
 	}
 
 	im, err := r2.Preview(ctx, frames[0].Path, 32)

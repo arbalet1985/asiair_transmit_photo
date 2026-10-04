@@ -239,8 +239,26 @@ type RemoteFile struct {
 	Local bool      `json:"local"` // received: can be downloaded
 }
 
-// Files lists the FITS frames the receiver has received (thumbnails and
-// frames still on the way left out).
+// deleteCmd is a delete request queued on the receiver's page.
+type deleteCmd struct {
+	Type      string `json:"type"`
+	Path      string `json:"path"`
+	AlsoLocal bool   `json:"also_local"`
+	Status    string `json:"status"`
+}
+
+// dropsLocal reports whether the command, still pending, deletes the
+// receiver's copy of the file p (the file itself or a folder it lies in).
+func (c deleteCmd) dropsLocal(p string) bool {
+	if !c.AlsoLocal || c.Status != "pending" {
+		return false
+	}
+	return p == c.Path || c.Type == protocol.CmdDeleteDir && strings.HasPrefix(p, c.Path+"/")
+}
+
+// Files lists the FITS frames the receiver has received (thumbnails,
+// frames still on the way and frames marked to be deleted on the receiver
+// too left out).
 func (r *Receiver) Files(ctx context.Context) ([]RemoteFile, error) {
 	resp, err := r.get(ctx, "/ui/api/state", nil, nil)
 	if err != nil {
@@ -248,16 +266,24 @@ func (r *Receiver) Files(ctx context.Context) ([]RemoteFile, error) {
 	}
 	defer resp.Body.Close()
 	var st struct {
-		Files []RemoteFile `json:"files"`
+		Files    []RemoteFile `json:"files"`
+		Commands []deleteCmd  `json:"commands"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		return nil, fmt.Errorf("ответ приёмника не прочитан: %w", err)
 	}
 	var out []RemoteFile
+files:
 	for _, f := range st.Files {
-		if f.Local && IsFITS(f.Path) {
-			out = append(out, f)
+		if !f.Local || !IsFITS(f.Path) {
+			continue
 		}
+		for _, c := range st.Commands {
+			if c.dropsLocal(f.Path) {
+				continue files
+			}
+		}
+		out = append(out, f)
 	}
 	return out, nil
 }
