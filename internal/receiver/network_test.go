@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 type fakeFirewall struct{ allowed, asked atomic.Bool }
@@ -97,4 +98,35 @@ func TestInternetToggleAndFirewall(t *testing.T) {
 	if c, _ := config.LoadReceiver(cfgPath); c.InternetOn() {
 		t.Fatal("setting not saved")
 	}
+}
+
+// After a restart a port still held by the previous copy is tried again.
+func TestListenWaitsForPortAfterRestart(t *testing.T) {
+	oldRetry, oldStart := listenRetry, processStart
+	listenRetry = 20 * time.Millisecond
+	t.Cleanup(func() { listenRetry, processStart = oldRetry, oldStart })
+	t.Setenv(update.RestartEnv, "")
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := busy.Addr().String()
+
+	// a normal start reports the busy port at once
+	if ln, err := listen(addr); err == nil {
+		ln.Close()
+		t.Fatal("busy port opened")
+	}
+
+	t.Setenv(update.RestartEnv, "1")
+	processStart = time.Now()
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		busy.Close() // the previous copy exits
+	}()
+	ln, err := listen(addr)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	ln.Close()
 }
