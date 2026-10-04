@@ -149,6 +149,21 @@ func TestSorterFromReceiver(t *testing.T) {
 		t.Fatalf("again: %+v", res)
 	}
 
+	// only some folders: the others are not read, and their frames already
+	// in the output are not taken for frames deleted on the receiver
+	frames, skipped, errs := sorter.ScanReceiverOnly(ctx, r2, sorter.LoadHeaderCache(cacheFile), sorter.Folders{"EMMC Images/Autorun/Flat"}, nil)
+	if len(errs) > 0 || len(frames) != 1 || frames[0].Kind != sorter.Flat || len(skipped) != 2 {
+		t.Fatalf("only flats: %d frames, %d skipped, %v", len(frames), len(skipped), errs)
+	}
+	lo := sorter.Plan(append(frames, lib...))
+	lo.Elsewhere(skipped)
+	if gone := lo.Gone(); len(gone) != 1 || gone[0].Frame.Kind != sorter.Dark {
+		t.Fatalf("gone with a choice of folders: %d", len(gone))
+	}
+	if dirs, err := sorter.ReceiverFolders(ctx, r2); err != nil || len(dirs) != 2 || dirs[1].Dir != "EMMC Images/Plan/Light/M 31" || dirs[1].Files != 2 {
+		t.Fatalf("folders %+v %v", dirs, err)
+	}
+
 	// a download that stopped halfway continues from there
 	dst := filepath.Join(sess, "lights", name)
 	os.Remove(dst)
