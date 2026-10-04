@@ -333,7 +333,7 @@ func moveAside(p string) bool {
 		if i > 0 {
 			time.Sleep(renameDelay)
 		}
-		os.Chmod(p, 0o666) // a read-only file cannot be deleted on Windows
+		makeWritable(p) // a read-only file cannot be deleted on Windows
 		if err := os.Remove(p); err == nil || errors.Is(err, fs.ErrNotExist) {
 			return true
 		}
@@ -346,6 +346,14 @@ func moveAside(p string) bool {
 }
 
 const deletedSuffix = ".del"
+
+// makeWritable clears the read-only attribute of a file (only of a file:
+// a folder keeps its rights).
+func makeWritable(p string) {
+	if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o200 == 0 {
+		os.Chmod(p, st.Mode().Perm()|0o200)
+	}
+}
 
 var renameAside = os.Rename // tests make it fail
 
@@ -411,7 +419,7 @@ func Install(exe, newFile string) error {
 // Cleanup removes what an earlier update left next to the program.
 func Cleanup(exe string) {
 	for _, p := range []string{exe + ".old", Backup(exe), exe + ".bad", exe + ".new", exe + ".new.part"} {
-		os.Chmod(p, 0o666)
+		makeWritable(p)
 		os.Remove(p)
 	}
 	// copies moved aside by Install, once they are no longer running
@@ -425,7 +433,7 @@ func Cleanup(exe string) {
 		}
 		if isSpareBackup(exe, n) {
 			p := filepath.Join(filepath.Dir(exe), n)
-			os.Chmod(p, 0o666)
+			makeWritable(p)
 			os.Remove(p)
 		}
 	}
