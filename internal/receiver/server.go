@@ -152,7 +152,7 @@ func (s *Server) getToken() string {
 // Run serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	s.api = &http.Server{Handler: s.agentPortHandler("internet"), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
-	uiLn, err := net.Listen("tcp", s.cfg.UIListen)
+	uiLn, err := listen(s.cfg.UIListen)
 	if err != nil {
 		return fmt.Errorf("веб-страница %s: %w", s.cfg.UIListen, err)
 	}

@@ -13,6 +13,12 @@ var (
 	procFreeConsole           = kernel32.NewProc("FreeConsole")
 )
 
+// freedStdio keeps the standard files of the freed console reachable. Their
+// handles are closed by FreeConsole and Windows hands the same numbers to
+// the next objects (the single-instance lock among them); if the files were
+// garbage collected, their finalizers would close those objects instead.
+var freedStdio []*os.File
+
 // DetachConsole closes the console window that Windows opens for a console
 // program started by double-click or at logon. When started from an existing
 // command prompt the console is shared with it and is left alone.
@@ -24,6 +30,7 @@ func DetachConsole() {
 		// the standard handles now point at the freed console: a program
 		// started from here (restart after an update) must not inherit them
 		if f, err := os.OpenFile(os.DevNull, os.O_RDWR, 0); err == nil {
+			freedStdio = []*os.File{os.Stdin, os.Stdout, os.Stderr}
 			os.Stdin, os.Stdout, os.Stderr = f, f, f
 		}
 	}

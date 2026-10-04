@@ -7,11 +7,36 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
+
+// processStart is when this program started.
+var processStart = time.Now()
+
+// timings of listen (tests shorten them)
+var (
+	listenGrace = 30 * time.Second
+	listenRetry = 500 * time.Millisecond
+)
+
+// listen opens a port. Right after a restart (update, rollback, the tray
+// command) the previous copy of the program may still hold it for a moment,
+// so a busy port is tried again until listenGrace after the start.
+func listen(addr string) (net.Listener, error) {
+	restarted := os.Getenv(update.RestartEnv) != ""
+	for {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil || !restarted || time.Since(processStart) > listenGrace {
+			return ln, err
+		}
+		time.Sleep(listenRetry)
+	}
+}
 
 // Firewall manages the Windows firewall rule of the receiver (set by the
 // program; nil elsewhere).
@@ -67,7 +92,7 @@ func (s *Server) startInternet() error {
 	if s.netLn != nil {
 		return nil
 	}
-	ln, err := net.Listen("tcp", s.cfg.Listen)
+	ln, err := listen(s.cfg.Listen)
 	if err != nil {
 		s.netErr = err.Error()
 		return fmt.Errorf("API %s: %w", s.cfg.Listen, err)
