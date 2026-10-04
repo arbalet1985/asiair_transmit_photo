@@ -4,7 +4,8 @@
 // open catalogs:
 //
 //   - OpenNGC (https://github.com/mattiaverga/OpenNGC, CC-BY-SA 4.0): NGC,
-//     IC, Messier, Caldwell and the addendum (Barnard 33 and others);
+//     IC, Messier, Caldwell and the addendum (Barnard 33 and others); the
+//     names of its duplicate entries (IC 11 is NGC 281) are kept as aliases;
 //   - the Sharpless catalog of HII regions, Sh2 (VizieR VII/20).
 //
 // Run it with `go generate ./internal/catalog`.
@@ -78,8 +79,10 @@ func sexa(s string) (float64, bool) {
 	return v, true
 }
 
-// openNGC reads NGC.csv or addendum.csv.
-func openNGC(b []byte) []row {
+// openNGC reads NGC.csv or addendum.csv. A duplicate entry (IC 11 is
+// NGC 281) is not an object of its own: its name goes into dups, to be
+// added to the object it repeats.
+func openNGC(b []byte, dups map[string][]string) []row {
 	var out []row
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
@@ -100,7 +103,20 @@ func openNGC(b []byte) []row {
 			return ""
 		}
 		kind := get("Type")
-		if kind == "Dup" || kind == "NonEx" {
+		if kind == "Dup" {
+			for _, c := range []string{"NGC", "IC", "M"} {
+				if n := get(c); n != "" {
+					to := pretty(c + n)
+					if c == "M" {
+						to = "M " + strings.TrimLeft(n, "0")
+					}
+					dups[to] = append(dups[to], pretty(get("Name")))
+					break
+				}
+			}
+			continue
+		}
+		if kind == "NonEx" {
 			continue
 		}
 		ra, ok1 := sexa(get("RA"))
@@ -162,9 +178,32 @@ func sharpless(b []byte) []row {
 }
 
 func main() {
-	rows := openNGC(fetch(ngcURL))
-	rows = append(rows, openNGC(fetch(addURL))...)
+	dups := map[string][]string{}
+	rows := openNGC(fetch(ngcURL), dups)
+	rows = append(rows, openNGC(fetch(addURL), dups)...)
 	rows = append(rows, sharpless(fetch(sh2URL))...)
+	// the names of duplicate entries become aliases of the object they repeat
+	byName := map[string]*row{}
+	for i := range rows {
+		byName[rows[i].name] = &rows[i]
+		for _, a := range rows[i].aliases {
+			if _, ok := byName[a]; !ok {
+				byName[a] = &rows[i]
+			}
+		}
+	}
+	lost := 0
+	for to, names := range dups {
+		r := byName[to]
+		if r == nil {
+			lost += len(names)
+			continue
+		}
+		r.aliases = append(r.aliases, names...)
+	}
+	if lost > 0 {
+		log.Printf("%d duplicate names point to no object", lost)
+	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
 	var buf bytes.Buffer
 	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)

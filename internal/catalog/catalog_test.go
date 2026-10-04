@@ -3,6 +3,7 @@ package catalog
 import (
 	"bufio"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,7 @@ func TestLookup(t *testing.T) {
 		{"M45", "Mel 22", 56.87, 24.11},
 		{"Сердце", "IC 1805", 38.17, 61.46},
 		{"C 20", "NGC 7000", 314.82, 44.53},
+		{"IC 11", "NGC 281", 13.25, 56.62}, // a duplicate entry of OpenNGC
 	} {
 		o, ok := Lookup(c.q)
 		if !ok || o.Name != c.name || math.Abs(o.RA-c.ra) > 0.05 || math.Abs(o.Dec-c.dec) > 0.05 {
@@ -65,5 +67,25 @@ func TestParseSesame(t *testing.T) {
 	}
 	if _, err := parseSesame("x", bufio.NewScanner(strings.NewReader("#! *** Nothing found ***\n"))); err == nil {
 		t.Error("nothing found: no error")
+	}
+}
+
+// Caldwell and Sharpless are complete; of IC only the entries OpenNGC
+// marks as not existing are missing.
+func TestCatalogsComplete(t *testing.T) {
+	for _, c := range []struct {
+		prefix string
+		n      int
+		absent map[int]bool
+	}{
+		{"C ", 109, nil},
+		{"Sh2-", 313, nil},
+		{"IC ", 5386, map[int]bool{67: true, 68: true, 1064: true, 1326: true, 1642: true, 2688: true, 2915: true, 3398: true, 5112: true}},
+	} {
+		for i := 1; i <= c.n; i++ {
+			if _, ok := Lookup(c.prefix + strconv.Itoa(i)); !ok && !c.absent[i] {
+				t.Errorf("%s%d not found", c.prefix, i)
+			}
+		}
 	}
 }
