@@ -256,10 +256,10 @@ func main() {
 					}},
 					PushButton{AssignTo: &w.btnOpen, Text: "Открыть выходной каталог", OnClicked: w.openOut},
 					PushButton{AssignTo: &w.btnGone, Text: goneOn, Enabled: false, OnClicked: w.toggleGone,
-						ToolTipText: "Подсветить кадры выходного каталога, которых на приёмнике больше нет (их там удалили), и показать только их.\n" +
+						ToolTipText: "Подсветить кадры выходного каталога, которых на приёмнике больше нет (их там удалили) или которые там помечены на удаление вместе с копией приёмника, и показать только их.\n" +
 							"Удалить их можно кнопкой «Удалить с диска…». Список — по последнему «Просмотреть кадры»."},
 					PushButton{AssignTo: &w.btnDelete, Text: "Удалить с диска…", Visible: false, OnClicked: w.deleteGone,
-						ToolTipText: "Удалить из выходного каталога показанные кадры, удалённые на приёмнике (в Корзину, если она есть на этом диске)."},
+						ToolTipText: "Удалить из выходного каталога показанные кадры, удалённые или помеченные на удаление на приёмнике (в Корзину, если она есть на этом диске)."},
 					HSpacer{},
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
@@ -801,7 +801,7 @@ func (w *window) toggleGone() {
 		return
 	}
 	if len(w.model.gone) == 0 {
-		w.setStatus("Все кадры выходного каталога есть на приёмнике: удалённых там нет.")
+		w.setStatus("Все кадры выходного каталога есть на приёмнике: удалённых или помеченных на удаление там нет.")
 		return
 	}
 	w.model.mark = true
@@ -815,7 +815,7 @@ func (w *window) toggleGone() {
 	for it := range w.model.gone {
 		bytes += it.Frame.Size
 	}
-	t := fmt.Sprintf("Удалены на приёмнике, остались в выходном каталоге: %d (%s)", len(w.model.gone), sorter.FormatBytes(bytes))
+	t := fmt.Sprintf("Удалены или помечены на удаление на приёмнике, остались в выходном каталоге: %d (%s)", len(w.model.gone), sorter.FormatBytes(bytes))
 	if w.readErrs > 0 {
 		t += fmt.Sprintf(". Заголовки %d кадров приёмника не прочитаны — их копии тоже могут оказаться здесь", w.readErrs)
 	}
@@ -849,8 +849,8 @@ func (w *window) deleteGone() {
 	if len(paths) == 0 {
 		return
 	}
-	q := fmt.Sprintf("Удалить из выходного каталога кадры, которых больше нет на приёмнике: %d (%s)?\n\n"+
-		"Файлы уйдут в Корзину, если она есть на этом диске (на сетевой папке — навсегда). На приёмнике их уже нет, скачать их снова будет неоткуда.",
+	q := fmt.Sprintf("Удалить из выходного каталога кадры, удалённые или помеченные на удаление на приёмнике: %d (%s)?\n\n"+
+		"Файлы уйдут в Корзину, если она есть на этом диске (на сетевой папке — навсегда). На приёмнике их нет или скоро не будет, скачать их снова будет неоткуда.",
 		len(paths), sorter.FormatBytes(bytes))
 	if len(paths) < len(w.model.gone) {
 		q += fmt.Sprintf("\n\nУдаляются только показанные (%d из %d): фильтр или выбор строки сводки сужают список.", len(paths), len(w.model.gone))
@@ -907,7 +907,7 @@ func (w *window) filterChanged() {
 		}
 		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
 		if w.model.mark {
-			t += " Красным — кадры, удалённые на приёмнике."
+			t += " Красным — кадры, удалённые или помеченные на удаление на приёмнике."
 		}
 	}
 	setLong(w.shownInfo, t)

@@ -179,6 +179,19 @@ func TestSorterFromReceiver(t *testing.T) {
 	if files, err := r2.Files(ctx); err != nil || len(files) != 1 || files[0].Path != flat {
 		t.Fatalf("marked to be deleted here: %d files, %v", len(files), err)
 	}
+	// and their copies in the output are listed with the frames deleted here
+	frames, errs = sorter.ScanReceiver(ctx, r2, sorter.LoadHeaderCache(cacheFile), nil)
+	lib, _ = sorter.ScanLibrary(out, nil)
+	gone := sorter.Plan(append(frames, lib...)).Gone()
+	lights := 0
+	for _, it := range gone {
+		if it.Frame.Kind == sorter.Light && it.Frame.Src == nil {
+			lights++
+		}
+	}
+	if len(errs) > 0 || len(gone) != 3 || lights != 2 {
+		t.Fatalf("marked to be deleted here: %d gone, %d lights, %v", len(gone), lights, errs)
+	}
 
 	im, err := r2.Preview(ctx, frames[0].Path, 32)
 	if err != nil || im.Width == 0 || im.Stretched() == nil {
