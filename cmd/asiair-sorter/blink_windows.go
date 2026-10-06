@@ -51,7 +51,8 @@ func (c *previewCache) clear() {
 }
 
 // get returns the preview of the frame, reading it if needed (blocks).
-func (c *previewCache) get(f *sorter.Frame, maxW int) *preview {
+// local: where a copy of a frame of a receiver may be on disk already.
+func (c *previewCache) get(f *sorter.Frame, local []string, maxW int) *preview {
 	key := fmt.Sprintf("%p|%s|%d", f.Src, f.Path, maxW)
 	c.mu.Lock()
 	if c.items == nil {
@@ -67,7 +68,7 @@ func (c *previewCache) get(f *sorter.Frame, maxW int) *preview {
 	c.order = append(c.order, key)
 	c.mu.Unlock()
 
-	e.p = readPreview(f, maxW)
+	e.p = readPreview(f, local, maxW)
 	c.mu.Lock()
 	if e.p.err != nil {
 		delete(c.items, key) // tried again next time
@@ -103,17 +104,48 @@ func (c *previewCache) trim(keep string) {
 	c.order = kept
 }
 
+// localPaths: where the frame of a receiver of the row may be on disk
+// already — its copy in the output found by the scan, or where it is
+// downloaded to. nil for a file on disk.
+func (w *window) localPaths(r row) []string {
+	if r.f.Src == nil || r.it == nil || w.scannedOut == "" {
+		return nil
+	}
+	var paths []string
+	if r.it.Existing != "" {
+		paths = append(paths, r.it.Existing)
+	}
+	return append(paths, filepath.Join(w.scannedOut, filepath.FromSlash(r.it.Dest)))
+}
+
+// onDisk is the first of the paths holding a file of the size.
+func onDisk(paths []string, size int64) string {
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() && st.Size() == size {
+			return p
+		}
+	}
+	return ""
+}
+
 // readPreview reads a frame: binned to at most maxW pixels wide and
-// auto-stretched, with its header. A frame of a receiver is binned there,
-// so only the small preview comes over the network.
-func readPreview(f *sorter.Frame, maxW int) *preview {
-	name := filepath.Base(filepath.FromSlash(f.Path))
+// auto-stretched, with its header. A frame of a receiver is read from its
+// copy on disk (local) when downloaded already, else binned on the
+// receiver, so only the small preview comes over the network.
+func readPreview(f *sorter.Frame, local []string, maxW int) *preview {
+	src, file := f.Src, f.Path
+	if src != nil {
+		if l := onDisk(local, f.Size); l != "" {
+			src, file = nil, l
+		}
+	}
+	name := filepath.Base(filepath.FromSlash(file))
 	var im *fits.Image
 	var err error
 	p := &preview{}
-	if f.Src != nil {
+	if src != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		im, err = f.Src.Preview(ctx, f.Path, maxW)
+		im, err = src.Preview(ctx, file, maxW)
 		cancel()
 		var b strings.Builder
 		for _, c := range f.Cards {
@@ -121,10 +153,10 @@ func readPreview(f *sorter.Frame, maxW int) *preview {
 		}
 		p.head = b.String()
 	} else {
-		var file *os.File
-		if file, err = os.Open(f.Path); err == nil {
-			im, err = fits.Preview(file, maxW)
-			file.Close()
+		var fh *os.File
+		if fh, err = os.Open(file); err == nil {
+			im, err = fits.Preview(fh, maxW)
+			fh.Close()
 		}
 		if err == nil {
 			var b strings.Builder
@@ -140,7 +172,7 @@ func readPreview(f *sorter.Frame, maxW int) *preview {
 		return p
 	}
 	get := im.Header.Get
-	if f.Src != nil {
+	if src != nil {
 		get = func(k string) string {
 			for _, c := range f.Cards {
 				if c.Key == k {
@@ -158,8 +190,11 @@ func readPreview(f *sorter.Frame, maxW int) *preview {
 	if im.Bayer != "" {
 		p.info += ", " + im.Bayer
 	}
-	if f.Src != nil {
+	switch {
+	case src != nil:
 		p.info += " (с приёмника)"
+	case f.Src != nil:
+		p.info += " (уже скачан, с диска)"
 	}
 	return p
 }
@@ -245,7 +280,8 @@ func (w *window) readAhead() {
 	if !w.playing || n < 2 {
 		return
 	}
-	f := w.model.rows[(w.table.CurrentIndex()+1)%n].f
+	r := w.model.rows[(w.table.CurrentIndex()+1)%n]
 	maxW := w.previewWidth()
-	go w.previews.get(f, maxW)
+	local := w.localPaths(r)
+	go w.previews.get(r.f, local, maxW)
 }
