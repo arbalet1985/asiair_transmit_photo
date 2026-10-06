@@ -139,6 +139,7 @@ type window struct {
 	scannedIn, scannedOut      string // the input and output the layout was made for
 	scannedOnly                string // and the folders chosen then
 	readErrs                   int    // frames of the last scan whose header was not read
+	offline                    bool   // the receiver was not reached: the output is shown, nothing laid out
 	busy                       bool
 	cancel                     context.CancelFunc
 	previewGen                 atomic.Int64
@@ -460,7 +461,7 @@ func (w *window) foldersChanged() {
 	}
 	in, out := strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	same := w.layout != nil && in == w.scannedIn && out == w.scannedOut && strings.Join(w.chosenFolders(in), "\n") == w.scannedOnly
-	w.btnApply.SetEnabled(same)
+	w.btnApply.SetEnabled(same && !w.offline)
 	// the frames deleted on the receiver: known after a scan of this receiver
 	// and output, and until the frames are laid out again
 	w.btnGone.SetEnabled(same && w.model.gone != nil || w.model.mark)
@@ -561,8 +562,19 @@ func (w *window) scan() {
 		var errs []error
 		var fatal error
 		var skipped []sorter.RemoteFile
+		offline := false
 		if remote {
 			frames, skipped, errs, fatal = w.scanReceiver(ctx, s, only, password, code, say)
+			if fatal != nil && ctx.Err() == nil && s.Out != "" {
+				// what was downloaded before can be looked at without the receiver
+				say("Приёмник недоступен, читаю уже скачанное в выходной каталог…")
+				lib, e := sorter.ScanLibrary(s.Out, func(n int) {
+					say(fmt.Sprintf("Приёмник недоступен, читаю выходной каталог… %d", n))
+				})
+				if len(lib) > 0 {
+					frames, errs, offline = lib, e, true
+				}
+			}
 		} else {
 			frames, errs = sorter.ScanForOnly(s.In, s.Out, only, func(n int) { say(fmt.Sprintf("Читаю заголовки FITS… %d", n)) })
 		}
@@ -574,7 +586,7 @@ func (w *window) scan() {
 			w.progress.SetMarqueeMode(false)
 			w.progress.SetValue(0)
 			w.setBusy(false)
-			if fatal != nil {
+			if fatal != nil && !offline {
 				w.setStatus(fatal.Error())
 				if errors.Is(fatal, sorter.ErrLogin) {
 					w.passEdit.SetFocus()
@@ -582,11 +594,14 @@ func (w *window) scan() {
 				w.warn(fatal.Error())
 				return
 			}
-			w.codeEdit.SetText("")
-			w.passEdit.SetText("")
+			if !offline {
+				w.codeEdit.SetText("")
+				w.passEdit.SetText("")
+			}
 			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
 			w.scannedOnly = strings.Join(only, "\n")
-			w.model.set(l, remote)
+			w.offline = offline
+			w.model.set(l, remote && !offline)
 			w.btnGone.SetText(goneOn)
 			w.btnDelete.SetVisible(false)
 			w.showAll()
@@ -595,6 +610,19 @@ func (w *window) scan() {
 			w.pl.setFrames(frames)
 			w.foldersChanged()
 			msg := fmt.Sprintf("Кадров: %d, сессий: %d, объём %s.", l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
+			if offline {
+				msg = fmt.Sprintf("Приёмник недоступен (%v). Показаны кадры, уже скачанные в выходной каталог: %d, сессий: %d, объём %s. "+
+					"Раскладка и скачивание — после подключения к приёмнику (снова «Просмотреть кадры»).",
+					fatal, l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
+				if errors.Is(fatal, sorter.ErrLogin) {
+					w.passEdit.SetFocus()
+				}
+				if len(errs) > 0 {
+					msg += fmt.Sprintf(" Не прочитано: %d (%v).", len(errs), errs[0])
+				}
+				w.setStatus(msg)
+				return
+			}
 			if len(only) > 0 {
 				msg = fmt.Sprintf("Только выбранные папки (%d). ", len(only)) + msg
 			}
@@ -660,7 +688,7 @@ func (w *window) scanReceiver(ctx context.Context, s settings, only sorter.Folde
 func (w *window) apply() {
 	s := w.settings()
 	l := w.layout
-	if l == nil || s.In != w.scannedIn || s.Out != w.scannedOut {
+	if l == nil || w.offline || s.In != w.scannedIn || s.Out != w.scannedOut {
 		return
 	}
 	opt := sorter.Options{Mode: sorter.Mode(s.Mode), FillCalibration: s.FillCalibration}
@@ -970,6 +998,7 @@ func (w *window) showPreview() {
 		return
 	}
 	f := w.model.rows[i].f
+	local := w.localPaths(w.model.rows[i])
 	gen := w.previewGen.Add(1)
 	maxW := w.previewWidth()
 	w.previewPending = true
@@ -977,7 +1006,7 @@ func (w *window) showPreview() {
 		setLong(w.previewInfo, "Читаю "+filepath.Base(filepath.FromSlash(f.Path))+"…")
 	}
 	go func() {
-		p := w.previews.get(f, maxW)
+		p := w.previews.get(f, local, maxW)
 		w.mw.Synchronize(func() {
 			if w.previewGen.Load() != gen {
 				return // another frame was selected meanwhile
