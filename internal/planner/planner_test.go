@@ -635,3 +635,26 @@ func TestScheduleStart(t *testing.T) {
 		t.Errorf("a start at noon was taken")
 	}
 }
+
+// Shot once must not leave the telescope idle while a target is open: when
+// the best stretch of every target is later, what is open now is shot.
+func TestOnceFillsIdle(t *testing.T) {
+	targets, sky, prm := wiredSky(t)
+	for _, startAt := range []string{"", "20:00", "21:30", "23:00"} {
+		prm.StartAt = startAt
+		p, err := Schedule(targets, sky, prm)
+		if err != nil {
+			continue
+		}
+		for _, s := range p.Steps {
+			if s.Kind != Wait || s.Note != "нечего снимать" {
+				continue
+			}
+			for i := range targets {
+				if p.Seconds[i] == 0 && p.openFor(i, s.Start, minutes(prm.MinBlockMin)) {
+					t.Errorf("start %q: idle at %s though %s is open\n%s", startAt, s.Start.Format("15:04"), targets[i].Name, p.Text())
+				}
+			}
+		}
+	}
+}

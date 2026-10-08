@@ -332,7 +332,16 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 	block := minutes(prm.MinBlockMin)
 
 	// pick: the target to shoot from t; cur is shot now
+	var pickBy func(t time.Time, cur int, bestOnly bool) int
 	pick := func(t time.Time, cur int) int {
+		if i := pickBy(t, cur, true); i >= 0 || !once {
+			return i
+		}
+		// nothing is at its best time: rather than stand idle, shoot what
+		// is open now, the most important first
+		return pickBy(t, cur, false)
+	}
+	pickBy = func(t time.Time, cur int, bestOnly bool) int {
 		for _, i := range order {
 			if !left(i) {
 				continue
@@ -351,7 +360,7 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 				continue
 			}
 			// shot once: wait for the stretch where it is seen the longest
-			if once {
+			if once && bestOnly {
 				from := minute(t.Add(switchDur))
 				want := 0
 				if targets[i].WantSec > 0 {

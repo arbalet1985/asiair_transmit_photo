@@ -3233,6 +3233,18 @@ function plDraw() {
           track(pts, Math.floor((s.start - pl.dusk) / pl.every), Math.ceil((s.end - pl.dusk) / pl.every));
         ctx.lineCap = "butt";
       }
+      // where it is now: a filled dot when the telescope could shoot it,
+      // a ring when it is under the horizon line or in a closed zone
+      const now = plSample(pts, t);
+      if (now && now[1] > plAltMin) {
+        const [x, y] = plXY(g, now[0], now[1]);
+        const open = now[1] >= Math.max(plHorizonAt(sky.horizon, now[0]), sky.min_alt) && !sky.zones.some(z => plInZone(z, now[0], now[1]));
+        ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = open ? plColor(i) : "rgba(16,20,28,.85)"; ctx.fill();
+        ctx.strokeStyle = plColor(i); ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = plColor(i); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(`${tg.name} ${Math.round(now[1])}°${open ? "" : " закрыт"}`, x + 9, y);
+      }
       let k = 0;
       pts.forEach((p, j) => { if (p[1] > pts[k][1]) k = j; });
       if (pts[k][1] > plAltMin) {
