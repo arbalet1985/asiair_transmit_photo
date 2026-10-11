@@ -1278,7 +1278,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.startSpeedTest(ctx, resp.SpeedTest)
 	a.startLogs(ctx, resp.Logs)
 	a.ackEvents(resp.EventsAck)
-	a.takeCommands(resp.Commands, resp.BatchResults)
+	a.takeCommands(resp.Commands, resp.BatchResults, resp.DeletePaused)
 	return held, nil
 }
 

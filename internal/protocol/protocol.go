@@ -219,6 +219,10 @@ type SyncResponse struct {
 	Order string `json:"order,omitempty"`
 	// Paused: the transfer is paused from the receiver page.
 	Paused bool `json:"paused,omitempty"`
+	// DeletePaused: deleting on the ASIAIR is paused from the receiver
+	// page. No commands are sent then, and the agent drops the commands it
+	// has queued but not started: they come again after the pause.
+	DeletePaused bool `json:"delete_paused,omitempty"`
 	// SpeedTest: run this speed test (once per ID).
 	SpeedTest *SpeedTest `json:"speed_test,omitempty"`
 	// Logs: send the logs to the receiver (once per ID).
