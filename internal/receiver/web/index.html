@@ -64,6 +64,10 @@
   th.sort:hover, th.sort.sorted { color: var(--text); }
   th.sort::after { content: attr(data-arrow); }
   tr.folder td { background: var(--row); font-weight: 600; cursor: pointer; }
+  tr.folder td:not(.name) { font-weight: 400; }
+  td.acts { text-align: right; }
+  td.acts .fetch { margin-left: 4px; }
+  tr.folder .fbar { display: block; margin: 3px 0 0; }
   tr.file:hover td { background: var(--row); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .muted { color: var(--muted); }
@@ -268,7 +272,7 @@
     #filesTable td.name { min-width: 190px; font-size: 13px; }
     #filesTable tr.file td { vertical-align: top; }
     #filesTable tr.folder td.name { font-size: 14px; }
-    #filesTable tr.folder td.name button { margin: 6px 6px 0 0; }
+    #filesTable tr.folder td.acts button { margin: 2px 0 2px 4px; }
     #filesTable th { font-size: 13px; padding: 8px; }
     #cmds td { white-space: normal; }
     dialog { width: calc(100vw - 16px); max-height: calc(100vh - 32px); overflow: auto; padding: 14px; }
@@ -727,7 +731,7 @@
   </div>
   </div>
 
-  <section class="panel">
+  <section class="panel" id="filesPanel">
     <h2>Файлы</h2>
     <div class="filesbar" id="filesBar">
     <div class="fbhead">
@@ -800,7 +804,7 @@
       <table id="filesTable">
         <thead><tr>
           <th><input type="checkbox" id="selAll" title="Выбрать все видимые"></th>
-          <th class="sort" data-key="name">Имя</th><th class="num sort" data-key="size">Размер</th><th class="sort" data-key="mtime">Дата</th><th class="sort" data-key="status">Статус</th><th class="sort" data-key="remote">ASIAIR</th>
+          <th class="sort" data-key="name">Имя</th><th title="Тип кадров и выдержка; у папки — сколько кадров каждого типа и их суммарная выдержка">Кадры</th><th class="num sort" data-key="size">Размер</th><th class="sort" data-key="mtime">Дата</th><th class="sort" data-key="status">Статус</th><th class="sort" data-key="remote">ASIAIR</th><th></th>
         </tr></thead>
         <tbody id="files"></tbody>
       </table>
@@ -815,6 +819,7 @@
       <h2 style="margin:0;cursor:pointer" id="cmdHead" title="Свернуть или развернуть"><span id="cmdArrow">▾</span> Команды удаления</h2>
       <span id="cmdSummary" class="muted"></span>
       <span class="spacer"></span>
+      <button id="cmdPause" title="Остановить все удаления на ASIAIR: команды остаются в очереди и выполнятся после снятия паузы">⏸ Пауза удалений</button>
     </div>
     <div id="cmdProgress" hidden style="margin-bottom:10px">
       <div id="cmdProgressText" class="muted"></div>
@@ -1285,25 +1290,37 @@ function renderFiles() {
       const db = xfer.reduce((a, x) => a + (x.status === "received" ? x.remote_size : (x.progress || 0) * x.remote_size), 0);
       const dn = xfer.filter(x => x.status === "received").length;
       const integ = integration(inFolder);
-      const info = (xfer.length
-        ? `получено ${dn} из ${xfer.length} · ${fmtBytes(db)} из ${fmtBytes(tb2)}`
-        : `${inFolder.length} файл(ов), ${fmtBytes(inFolder.reduce((a, x) => a + x.size, 0))}`) + (integ ? " · " + integ : "");
-      const head = el("td", { className: "name", colSpan: 5 },
-        (collapsed.has(folder) ? "▸ " : "▾ ") + folder + "  ", el("span", { className: "muted" }, info));
-      if (xfer.length) head.append(el("span", { className: "fbar" }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
+      const total = inFolder.reduce((a, x) => a + x.size, 0);
+      const newest = inFolder.reduce((a, x) => x.mtime > a ? x.mtime : a, "");
+      const onAsiair = inFolder.filter(x => x.remote).length;
+      const status = el("td", {});
+      if (xfer.length) {
+        status.append(`${dn} из ${xfer.length}`, el("span", { className: "muted" }, ` · ${fmtBytes(db)}`),
+          el("span", { className: "fbar", title: `Получено ${fmtBytes(db)} из ${fmtBytes(tb2)}` }, el("div", { style: `width:${tb2 ? (100 * db / tb2).toFixed(1) : 0}%` })));
+      } else {
+        status.append(el("span", { className: "muted", textContent: inFolder.some(x => x.local) ? "только у меня" : "не передаются" }));
+      }
+      const acts = el("td", { className: "acts" });
       const toFetch = inFolder.filter(x => canFetch(x) && !requested.has(x.path)).map(x => x.path);
-      if (paused && toFetch.length) head.append(miniButton(`⤓ Скачать папку (${toFetch.length})`, "Передать файлы папки, не снимая паузу", () => fetchFiles(toFetch)));
-      if (!isRemote() && inFolder.some(x => x.local)) head.append(miniButton("📂", "Открыть эту папку на этом компьютере", () => openFolder(fname)));
+      if (paused && toFetch.length) acts.append(miniButton(`⤓ Скачать (${toFetch.length})`, "Передать файлы папки, не снимая паузу", () => fetchFiles(toFetch)));
       const sd = syncDirOf(folder);
       if (sd) {
-        head.append(el("span", {}, " ", el("span", { className: "badge info", textContent: "⟳ синхронизируется на паузе",
-          title: sd === folder ? "Новые файлы этой папки передаются, даже когда передача на паузе" : "Входит в синхронизируемую папку " + sd })));
-        if (sd === folder) head.append(miniButton("✕", "Снять синхронизацию этой папки на паузе", () => setSyncDir(sd, false)));
+        acts.append(el("span", { className: "badge info", textContent: "⟳ синхр. на паузе",
+          title: sd === folder ? "Новые файлы этой папки передаются, даже когда передача на паузе" : "Входит в синхронизируемую папку " + sd }));
+        if (sd === folder) acts.append(miniButton("✕", "Снять синхронизацию этой папки на паузе", () => setSyncDir(sd, false)));
       } else if (inFolder.some(x => x.remote)) {
-        head.append(miniButton("⟳ Синхронизировать на паузе", "Передавать файлы этой папки (или папки выше) и новые файлы в ней, даже когда передача на паузе", () => openSyncDir(fname)));
+        acts.append(miniButton("⟳ Синхр.", "Синхронизировать на паузе: передавать файлы этой папки (или папки выше) и новые файлы в ней, даже когда передача на паузе", () => openSyncDir(fname)));
       }
-      if (selectable.length) head.append(miniButton("🗑 Удалить папку", "Удалить на ASIAIR эту папку (или папку выше) целиком, со всеми файлами и вложенными папками", () => openDelDir(fname)));
-      const tr = el("tr", { className: "folder" }, el("td", {}, cb), head);
+      if (!isRemote() && inFolder.some(x => x.local)) acts.append(miniButton("📂", "Открыть эту папку на этом компьютере", () => openFolder(fname)));
+      if (selectable.length) acts.append(miniButton("🗑", "Удалить на ASIAIR эту папку (или папку выше) целиком, со всеми файлами и вложенными папками", () => openDelDir(fname)));
+      const tr = el("tr", { className: "folder" }, el("td", {}, cb),
+        el("td", { className: "name" }, (collapsed.has(folder) ? "▸ " : "▾ ") + folder),
+        el("td", { className: "muted", textContent: integ }),
+        el("td", { className: "num", textContent: fmtBytes(xfer.length ? tb2 : total) }),
+        el("td", { textContent: newest ? fmtTime(newest) : "", title: "Самый новый файл папки" }),
+        status,
+        el("td", { textContent: onAsiair ? `есть: ${onAsiair}` : "нет", className: onAsiair ? "" : "muted" }),
+        acts);
       tr.onclick = () => { collapsed.has(fname) ? collapsed.delete(fname) : collapsed.add(fname); saveCollapsed(); renderFiles(); };
       tb.append(tr);
     }
@@ -1322,10 +1339,12 @@ function renderFiles() {
     tb.append(el("tr", { className: "file" + (f.local ? "" : " ghost") },
       el("td", {}, cb),
       el("td", { className: "name" }, name),
+      el("td", { className: "muted", textContent: frameText(f) }),
       el("td", { className: "num", textContent: fmtBytes(f.size) }),
       el("td", {}, fmtTime(f.mtime), moonTag(f), qualityTag(f)),
       el("td", {}, statusBadge(f), fetchControl(f)),
-      el("td", {}, remote)));
+      el("td", {}, remote),
+      el("td", {})));
   }
   const sel = [...selected];
   const selSize = state.files.filter(f => selected.has(f.path)).reduce((a, f) => a + f.size, 0);
@@ -1355,6 +1374,14 @@ function renderFiles() {
   $("filesInfo").textContent = `Показано ${files.length} из ${state.files.length} (${fmtBytes(files.reduce((a, f) => a + f.size, 0))})` +
     (integ ? `. Накопление показанных кадров: ${integ}` : "") + `. На ASIAIR: ${nr}, получено: ${nl}` +
     (nf ? `, непередаваемых: ${nf}` : "") + `. Список ASIAIR обновлён: ${ago(state.inventory_time)}.`;
+}
+
+// the kind and exposure of one frame, e.g. "Light · 120 с"
+function frameText(f) {
+  const fi = infoOf(f);
+  if (fi.kind === "other") return "";
+  const label = (kindGroups.find(([k]) => k === fi.kind) || [])[1] || "";
+  return fi.exp ? `${label} · ${fmtExp(fi.exp)}` : label;
 }
 
 // "Скачать" next to a file while the transfer is paused, "запрошен" after
@@ -1393,13 +1420,18 @@ function renderCmds() {
   $("cmdSummary").textContent = all.length
     ? [n.pending && `ожидают ${n.pending}`, n.done && `удалено ${n.done}`, n.failed && `ошибок ${n.failed}`].filter(Boolean).join(" · ")
     : "нет команд";
+  const dp = !!state.delete_paused;
+  if (dp) $("cmdSummary").prepend(el("span", { className: "badge pend", textContent: "на паузе" }), " ");
+  $("cmdPause").textContent = dp ? "▶ Продолжить удаления" : "⏸ Пауза удалений";
+  $("cmdPause").className = dp ? "primary" : "";
+  $("cmdPause").title = dp ? "Снова отдавать агенту команды удаления" : "Остановить все удаления на ASIAIR: команды остаются в очереди и выполнятся после снятия паузы. Начатое удаление папки агент доводит до конца";
   $("cmdArrow").textContent = cmdF.open ? "▾" : "▸";
   $("cmdBody").hidden = !cmdF.open;
   // the agent's progress (agents since 1.36)
   const d = state.agent && state.agent.deleting;
   $("cmdProgress").hidden = !(d && d.total);
   if (d && d.total) {
-    $("cmdProgressText").textContent = `Агент удаляет на ASIAIR: ${d.done} из ${d.total}` +
+    $("cmdProgressText").textContent = (dp ? "Пауза: агент заканчивает начатое" : "Агент удаляет на ASIAIR") + `: ${d.done} из ${d.total}` +
       (d.failed ? `, не удалось ${d.failed}` : "") + (d.current ? ` — ${d.current}` : "");
     $("cmdProgressBar").style.width = Math.round(100 * d.done / d.total) + "%";
   }
@@ -1454,6 +1486,10 @@ function renderCmds() {
   }
   $("cmdMore").hidden = list.length <= cmdLimit;
 }
+$("cmdPause").onclick = async () => {
+  try { await post("/ui/api/delpause", { paused: !state.delete_paused }); refresh(); }
+  catch (e) { alert("Ошибка: " + e.message); }
+};
 $("cmdHead").onclick = () => { cmdF.open = !cmdF.open; saveCmdF(); renderCmds(); };
 for (const [id, k, ev] of [["cmdSearch", "q", "input"], ["cmdStatus", "status", "change"], ["cmdType", "type", "change"], ["cmdLocal", "local", "change"], ["cmdPeriod", "period", "change"], ["cmdErr", "err", "change"]]) {
   $(id).addEventListener(ev, () => { cmdF[k] = $(id).value; cmdLimit = 200; saveCmdF(); renderCmds(); });
@@ -2216,18 +2252,30 @@ function bytesPerNight() {
   const last = [...nights].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 3).map(x => x[1]);
   return last.length ? last.reduce((a, b) => a + b, 0) / last.length : 0;
 }
+// the share the ASIAIR saves its frames to: that of the newest frame ("" if none)
+function shootingShare() {
+  let best = null;
+  for (const f of state.files) {
+    if (!f.remote || f.status === "filtered" || infoOf(f).kind === "other") continue;
+    if (!best || f.mtime > best.mtime) best = f;
+  }
+  return best ? shareOf(best.path) : "";
+}
 function renderSpace(a) {
   const dd = $("aSpace"), st = a.storage || [];
   dd.replaceChildren();
   if (!st.length) { dd.textContent = a.version ? "агент пока не сообщил (нужен агент 1.17 или новее)" : "—"; return; }
-  const per = bytesPerNight();
+  const per = bytesPerNight(), active = shootingShare();
   for (const sp of st) {
-    const nights = per > 0 ? Math.floor(sp.free / per) : null;
-    const low = nights !== null ? nights < 1 : sp.free < 0.03 * sp.total;
+    // only the share the ASIAIR shoots to fills up overnight
+    const idle = active && sp.share !== active;
+    const nights = per > 0 && !idle ? Math.floor(sp.free / per) : null;
+    const low = nights !== null ? nights < 1 : !idle && sp.free < 0.03 * sp.total;
     let t = `${shareLabel(sp.share)}: свободно ${fmtBytes(sp.free)} из ${fmtBytes(sp.total)}`;
-    if (nights !== null) t += nights < 1 ? " — меньше, чем на ночь съёмки!" : ` — примерно на ${nights} ${plural(nights, "ночь", "ночи", "ночей")}`;
+    if (idle) t += " — сюда сейчас не снимается";
+    else if (nights !== null) t += nights < 1 ? " — меньше, чем на ночь съёмки!" : ` — примерно на ${nights} ${plural(nights, "ночь", "ночи", "ночей")}`;
     else if (low) t += " — почти заполнено!";
-    dd.append(el("span", { className: "space" + (low ? " err" : ""), title: per ? `Ночь съёмки в среднем занимает ${fmtBytes(per)} (по последним ночам)` : "" },
+    dd.append(el("span", { className: "space" + (low ? " err" : idle ? " muted" : ""), title: idle ? `Последние кадры ASIAIR сохраняет в «${shareLabel(active)}»` : per ? `Ночь съёмки в среднем занимает ${fmtBytes(per)} (по последним ночам)` : "" },
       t, el("div", { className: "progress disk" + (low ? " full" : "") }, el("div", { style: `width:${(100 * (sp.total - sp.free) / sp.total).toFixed(1)}%` }))));
   }
 }
@@ -3673,7 +3721,7 @@ function plMaybeLoad() { if (!PL.loaded && !$("plannerPanel").classList.contains
 // every settings and status panel folds by its title
 {
   const folded = new Set(store.get("foldedPanels", []));
-  document.querySelectorAll("#infoGrid .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2, #plannerPanel > h2").forEach(h => {
+  document.querySelectorAll("#infoGrid .panel > h2:first-child, #setupGrid > .panel > h2:first-child, #speedPanel > h2, #summaryPanel > h2, #plannerPanel > h2, #filesPanel > h2").forEach(h => {
     const key = h.textContent.trim();
     h.classList.add("fold");
     h.title = "Свернуть или развернуть";

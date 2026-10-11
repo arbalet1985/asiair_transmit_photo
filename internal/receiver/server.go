@@ -514,6 +514,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
+	mux.HandleFunc("/ui/api/delpause", s.handleUIDeletePause)
 	mux.HandleFunc("/ui/api/fetch", s.handleUIFetch)
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
@@ -579,6 +580,7 @@ type uiState struct {
 	Site          Site                            `json:"site"`
 	ObsTZ         obsTZ                           `json:"obs_tz"`
 	Paused        bool                            `json:"paused"`
+	DeletePaused  bool                            `json:"delete_paused"`
 	WaitStart     bool                            `json:"wait_start"`
 	Fetch         []string                        `json:"fetch"`
 	SyncDirs      []string                        `json:"sync_dirs"`
@@ -636,6 +638,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		ObsTZ:         newObsTZ(snap.Status),
 		Site:          snap.Site,
 		Paused:        snap.Paused,
+		DeletePaused:  snap.DeletePaused,
 		WaitStart:     snap.WaitStart,
 		Fetch:         snap.Fetch,
 		SyncDirs:      snap.SyncDirs,
@@ -850,6 +853,26 @@ func (s *Server) handleUIPause(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Приёмник: передача запущена")
 	} else {
 		log.Printf("Приёмник: пауза снята")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUIDeletePause pauses or resumes deleting on the ASIAIR: {"paused": true}.
+func (s *Server) handleUIDeletePause(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paused bool `json:"paused"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if err := s.state.SetDeletePaused(req.Paused); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if req.Paused {
+		log.Printf("Приёмник: удаление на ASIAIR поставлено на паузу")
+	} else {
+		log.Printf("Приёмник: удаление на ASIAIR продолжено")
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

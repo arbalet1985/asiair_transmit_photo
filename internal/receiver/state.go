@@ -63,6 +63,9 @@ type persisted struct {
 	Site     Site             `json:"site"`
 	Planner  PlannerState     `json:"planner"`
 	Paused   bool             `json:"paused"` // transfer paused from the page
+	// DeletePaused: deleting on the ASIAIR paused from the page; the
+	// commands stay pending.
+	DeletePaused bool `json:"delete_paused,omitempty"`
 	// WaitStart: a new receiver shows the ASIAIR tree but does not let the
 	// agent transfer until "Старт" is pressed on the page.
 	WaitStart bool `json:"wait_start"`
@@ -215,7 +218,7 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	s.p.LastSeen = time.Now()
 	s.storeEventsLocked(req)
 	resp := protocol.SyncResponse{BatchResults: true, EventsAck: s.p.EventSeq, Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), ReadBlock: s.p.ReadBlock, ReadDepth: s.p.ReadDepth, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
-		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}, Order: s.p.Order}
+		DeletePaused: s.p.DeletePaused, Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}, Order: s.p.Order}
 	s.applySchedule(&resp, time.Now())
 	if r := s.p.Status.SpeedTest; r != nil && !r.Running && r.ID != s.p.SpeedResults[r.Kind].ID {
 		if s.p.SpeedResults == nil {
@@ -233,6 +236,9 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	}
 	s.logsForSync(&resp)
 	for _, c := range s.p.Commands {
+		if s.p.DeletePaused {
+			break
+		}
 		if c.Status == StatusPending && len(resp.Commands) < maxSyncCommands {
 			resp.Commands = append(resp.Commands, c.Command)
 		}
@@ -523,6 +529,15 @@ func (s *State) SetPaused(p bool) error {
 	if !p {
 		s.p.WaitStart = false
 	}
+	s.bump()
+	return s.save()
+}
+
+// SetDeletePaused pauses or resumes deleting on the ASIAIR.
+func (s *State) SetDeletePaused(p bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.p.DeletePaused = p
 	s.bump()
 	return s.save()
 }

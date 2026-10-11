@@ -33,6 +33,7 @@ type cmdRunner struct {
 	results []protocol.CommandResult // carried out, not yet acknowledged
 	batch   bool                     // the receiver accepts /api/results
 	prog    protocol.DeleteProgress
+	paused  bool // deleting paused on the receiver page
 	wake    chan struct{}
 }
 
@@ -48,10 +49,22 @@ func (r *cmdRunner) wakeUp() {
 }
 
 // take queues the commands not seen before; called with every sync answer.
-func (a *Agent) takeCommands(cmds []protocol.Command, batch bool) {
+// While deleting is paused the queued commands not started are dropped: the
+// receiver keeps them pending and sends them again after the pause.
+func (a *Agent) takeCommands(cmds []protocol.Command, batch, paused bool) {
 	r := a.cmds
 	r.mu.Lock()
 	r.batch = batch
+	dropped := 0
+	if paused && !r.paused && len(r.queue) > 0 {
+		dropped = len(r.queue)
+		r.prog.Total -= dropped
+		r.queue = nil
+		if len(r.running) == 0 {
+			r.prog = protocol.DeleteProgress{}
+		}
+	}
+	r.paused = paused
 	inAnswer := make(map[string]bool, len(cmds))
 	added := 0
 	for _, c := range cmds {
@@ -79,6 +92,9 @@ func (a *Agent) takeCommands(cmds []protocol.Command, batch bool) {
 	}
 	queued := len(r.queue)
 	r.mu.Unlock()
+	if dropped > 0 {
+		a.event("", "удаление на ASIAIR на паузе: отложено команд %d", dropped)
+	}
 	if added > 0 {
 		a.event("", "получено команд удаления: %d (в очереди %d)", added, queued)
 		r.wakeUp()
@@ -173,11 +189,20 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	marked := a.markDeleted(targets)
 
 	src := a.source()
+	// skipped: not started because deleting was paused meanwhile
+	skipped := make([]bool, len(batch))
 	remove := func(i int) {
 		c := batch[i]
 		r.mu.Lock()
-		r.prog.Current = c.Path
+		paused := r.paused
+		if !paused {
+			r.prog.Current = c.Path
+		}
 		r.mu.Unlock()
+		if paused {
+			skipped[i] = true
+			return
+		}
 		err := ctx.Err()
 		if err == nil {
 			err = func() (err error) {
@@ -240,9 +265,13 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	r.mu.Unlock()
 
 	var gone, failed []delTarget
+	nSkipped := 0
 	for _, i := range valid {
 		t := delTarget{batch[i].Path, batch[i].Type == protocol.CmdDeleteDir}
-		if results[i].OK {
+		if skipped[i] {
+			nSkipped++
+			failed = append(failed, t) // not deleted: uploads may go on
+		} else if results[i].OK {
 			gone = append(gone, t)
 		} else {
 			failed = append(failed, t)
@@ -254,10 +283,15 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	}
 
 	r.mu.Lock()
-	for _, c := range batch {
+	for i, c := range batch {
 		delete(r.running, c.ID)
+		if skipped[i] {
+			delete(r.known, c.ID) // taken again after the pause
+		} else {
+			r.results = append(r.results, results[i])
+		}
 	}
-	r.results = append(r.results, results...)
+	r.prog.Total -= nSkipped
 	last := len(r.queue) == 0
 	prog := r.prog
 	if last {
@@ -269,7 +303,11 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 		if prog.Failed > 0 {
 			level = "warn"
 		}
-		a.event(level, "удаление на ASIAIR закончено: выполнено %d, не удалось %d", prog.Done-prog.Failed, prog.Failed)
+		if nSkipped > 0 {
+			a.event(level, "удаление на ASIAIR на паузе: выполнено %d, не удалось %d, отложено %d", prog.Done-prog.Failed, prog.Failed, nSkipped)
+		} else {
+			a.event(level, "удаление на ASIAIR закончено: выполнено %d, не удалось %d", prog.Done-prog.Failed, prog.Failed)
+		}
 	}
 	a.kickSync() // the page shows the progress at once
 }
