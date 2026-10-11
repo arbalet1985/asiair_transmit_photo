@@ -64,6 +64,7 @@ type Server struct {
 	updater *updater
 
 	previews *previewCache
+	tilts    tiltCache
 
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
@@ -511,6 +512,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/plan", s.handleUIPlan)
 	mux.HandleFunc("/ui/api/catalog", s.handleUICatalog)
 	mux.HandleFunc("/ui/api/open", s.handleUIOpen)
+	mux.HandleFunc("/ui/api/tilt", s.handleUITilt)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)

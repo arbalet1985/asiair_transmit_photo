@@ -933,6 +933,8 @@
         <div class="tablewrap"><table class="vstats"><tbody id="vStatsBody"></tbody></table></div>
       </div>
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
+      <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
+      <div id="vTiltBox" class="hint" hidden></div>
       <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
@@ -4147,6 +4149,74 @@ function renderViewer() {
     o[p + 3] = 255;
   }
   ctx.putImageData(out, 0, 0);
+  if ($("vTilt").checked && im.tilt) drawTilt(ctx, im);
+}
+// the tilt as Siril draws it: a point toward each corner, as far from the
+// centre as the stars of that quarter are big (half way for the mean)
+function drawTilt(ctx, im) {
+  const t = im.tilt, W = im.width, H = im.height;
+  const cx = W / 2, cy = H / 2, half = Math.hypot(cx, cy), mean = t.corners.reduce((a, v) => a + v, 0) / 4;
+  const dirs = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+  const pts = dirs.map(([sx, sy], q) => {
+    const r = half / 2 * t.corners[q] / mean;
+    return [cx + sx * cx / half * r, cy + sy * cy / half * r];
+  });
+  const lw = Math.max(1.5, W / 500), fs = Math.max(11, Math.round(W / 45));
+  ctx.save();
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = "rgba(255, 204, 0, .9)";
+  ctx.setLineDash([lw * 3, lw * 3]);
+  ctx.beginPath();
+  for (const [x, y] of pts) { ctx.moveTo(cx, cy); ctx.lineTo(x, y); }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  [0, 1, 3, 2].forEach((q, i) => i ? ctx.lineTo(...pts[q]) : ctx.moveTo(...pts[q]));
+  ctx.closePath();
+  ctx.stroke();
+  ctx.font = `600 ${fs}px system-ui, sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 4;
+  ctx.fillStyle = "#ffcc00";
+  pts.forEach(([x, y], q) => {
+    ctx.textAlign = dirs[q][0] < 0 ? "right" : "left";
+    ctx.fillText(t.corners[q].toFixed(2), x + dirs[q][0] * lw * 4, y + dirs[q][1] * fs * 0.6);
+  });
+  ctx.textAlign = "center";
+  ctx.fillText(t.center.toFixed(2), cx, cy - fs);
+  ctx.restore();
+}
+// the tilt of the frame shown, measured on the receiver (cached there)
+const tiltCache = new Map();
+async function showTilt(f, im) {
+  const box = $("vTiltBox");
+  box.hidden = !$("vTilt").checked || !im;
+  if (box.hidden) return;
+  if (V.play && !im.tilt) { box.textContent = "Тилт — после блинка"; return; }
+  if (!im.tilt) {
+    box.textContent = "Считаю тилт…";
+    let r = tiltCache.get(f.path);
+    try {
+      if (!r) {
+        const resp = await fetch("/ui/api/tilt?path=" + encodeURIComponent(f.path));
+        if (!resp.ok) throw new Error(await resp.text());
+        r = await resp.json();
+        tiltCache.set(f.path, r);
+      }
+    } catch (e) {
+      if (V.img === im) box.textContent = "Тилт: " + e.message;
+      return;
+    }
+    im.tilt = r;
+    if (V.img !== im) return;
+    renderViewer();
+  }
+  const t = im.tilt, c = t.corners.map(v => v.toFixed(2));
+  box.replaceChildren(
+    el("div", { textContent: `Тилт: ${t.tilt.toFixed(2)} px HFR (${Math.round(t.percent)}%)` }),
+    el("div", { textContent: `По углам: ↖ ${c[0]}  ↗ ${c[1]}  ↙ ${c[2]}  ↘ ${c[3]}` }),
+    el("div", { textContent: `Вне оси (края − центр): ${t.off_axis.toFixed(2)} px (центр ${t.center.toFixed(2)}, края ${t.edge.toFixed(2)})` }),
+    el("div", { className: "muted", textContent: `Звёзд: ${t.stars}, HFR ${t.hfr.toFixed(2)} px (FWHM ≈ 2×HFR)` }));
 }
 const hdrNames = { OBJECT: "Объект", IMAGETYP: "Тип", FRAME: "Тип", EXPTIME: "Выдержка, с", EXPOSURE: "Выдержка, с", GAIN: "Gain", OFFSET: "Offset",
   "CCD-TEMP": "Температура, °C", "SET-TEMP": "Задано, °C", FILTER: "Фильтр", XBINNING: "Бининг", INSTRUME: "Камера", TELESCOP: "Телескоп",
@@ -4275,6 +4345,7 @@ async function showFile() {
     $("vMsg").textContent = "";
     place(node);
     if (im) drawHist(); else $("vHistBox").hidden = true;
+    showTilt(f, im);
     showInfo(f, im);
     V.meta = im;
     renderMoon(f, im);
@@ -4442,6 +4513,14 @@ $("vClose").onclick = () => $("viewer").close();
 $("vSel").onclick = toggleSel;
 $("vDelete").onclick = () => $("delBtn").click();
 for (const id of ["vAuto", "vLinked"]) $(id).onchange = computeStretch;
+$("vTilt").checked = !!store.get("vTilt", false);
+$("vTilt").onchange = () => {
+  store.set("vTilt", $("vTilt").checked);
+  // the frames kept are drawn again: with the tilt or without it
+  for (const e of vCache.values()) if (e.img) e.img.drawn = "";
+  const f = V.list[V.idx];
+  if (V.img) { computeStretch(); showTilt(f, V.img); }
+};
 for (const id of ["vHistOn", "vHistShown", "vHistLog"]) {
   $(id).checked = !!store.get(id, false);
   $(id).onchange = () => { store.set(id, $(id).checked); drawHist(); };

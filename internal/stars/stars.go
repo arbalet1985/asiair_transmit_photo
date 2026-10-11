@@ -39,6 +39,29 @@ func MeasureFile(name string) (Result, error) {
 
 // Measure finds the stars of an image (colour channels are averaged).
 func Measure(img *fits.Image) Result {
+	found := find(img)
+	if len(found) == 0 {
+		return Result{}
+	}
+	// the size is taken from the brighter half: the faintest stars are
+	// mostly noise
+	sort.Slice(found, func(i, j int) bool { return found[i].Flux > found[j].Flux })
+	bright := found[:max(1, (len(found)+1)/2)]
+	hfrs := make([]float64, len(bright))
+	for i, s := range bright {
+		hfrs[i] = s.HFR
+	}
+	sort.Float64s(hfrs)
+	return Result{Stars: len(found), HFR: hfrs[len(hfrs)/2]}
+}
+
+// Star is a star found: its centre and HFR in pixels of the original frame.
+type Star struct {
+	X, Y, HFR, Flux float64
+}
+
+// find returns the stars of an image (colour channels are averaged).
+func find(img *fits.Image) []Star {
 	w, h := img.Width, img.Height
 	lum := img.Data
 	if img.Channels > 1 {
@@ -52,8 +75,13 @@ func Measure(img *fits.Image) Result {
 		}
 	}
 	bin := float64(max(img.Binning, 1))
-	hfr, n := measure(lum, w, h)
-	return Result{Stars: n, HFR: hfr * bin}
+	found := measure(lum, w, h)
+	for i := range found {
+		s := &found[i]
+		// the centre of a preview pixel
+		s.X, s.Y, s.HFR = (s.X+0.5)*bin, (s.Y+0.5)*bin, s.HFR*bin
+	}
+	return found
 }
 
 // background returns the median and the noise (from the median absolute
@@ -87,17 +115,16 @@ const (
 
 var errTooBig = errors.New("too big")
 
-// measure returns the median HFR (in pixels of d) and the number of stars.
-func measure(d []float32, w, h int) (float64, int) {
+// measure returns the stars of d, in its pixels.
+func measure(d []float32, w, h int) []Star {
 	if w < 32 || h < 32 {
-		return 0, 0
+		return nil
 	}
 	med, sigma := background(d)
 	thr := med + detectSigma*sigma
 	seen := make([]bool, len(d))
 	stack := make([]int, 0, 256)
-	type star struct{ hfr, flux float64 }
-	var found []star
+	var found []Star
 	comps := 0
 	for start, v := range d {
 		if v <= thr || seen[start] {
@@ -145,29 +172,41 @@ func measure(d []float32, w, h int) (float64, int) {
 		}
 		cx, cy := sx/sum, sy/sum
 		r := math.Min(math.Max(3*math.Sqrt(float64(n)/math.Pi), 4), 25)
-		if cx < r || cy < r || cx >= float64(w)-r || cy >= float64(h)-r {
+		if cx < r+ring || cy < r+ring || cx >= float64(w)-r-ring || cy >= float64(h)-r-ring {
 			continue // cut by the edge
 		}
-		if v, ok := hfrAt(d, w, med, cx, cy, r); ok {
-			found = append(found, star{v, sum})
+		// the background around the star: a gradient or a nebula makes
+		// it brighter than that of the frame
+		bg := localBackground(d, w, cx, cy, r)
+		if peak-float64(bg) < detectSigma*float64(sigma) {
+			continue // a brighter patch of the background, not a star
+		}
+		if v, ok := hfrAt(d, w, bg, cx, cy, r); ok {
+			found = append(found, Star{X: cx, Y: cy, HFR: v, Flux: sum})
 			if len(found) >= maxStars {
 				break
 			}
 		}
 	}
-	if len(found) == 0 {
-		return 0, 0
+	return found
+}
+
+// ring: the width of the ring around a star its background is taken from
+const ring = 4
+
+// localBackground is the median of the ring from r to r+ring around a star.
+func localBackground(d []float32, w int, cx, cy, r float64) float32 {
+	var v []float32
+	ro := r + ring
+	for y := int(cy - ro); y <= int(cy+ro); y++ {
+		for x := int(cx - ro); x <= int(cx+ro); x++ {
+			if dist := math.Hypot(float64(x)-cx, float64(y)-cy); dist > r && dist <= ro {
+				v = append(v, d[y*w+x])
+			}
+		}
 	}
-	// the size is taken from the brighter half: the faintest stars are
-	// mostly noise
-	sort.Slice(found, func(i, j int) bool { return found[i].flux > found[j].flux })
-	bright := found[:max(1, (len(found)+1)/2)]
-	hfrs := make([]float64, len(bright))
-	for i, s := range bright {
-		hfrs[i] = s.hfr
-	}
-	sort.Float64s(hfrs)
-	return hfrs[len(hfrs)/2], len(found)
+	sort.Slice(v, func(i, j int) bool { return v[i] < v[j] })
+	return v[len(v)/2]
 }
 
 // hfrAt is the flux weighted mean distance from the centre within radius r.
