@@ -226,6 +226,7 @@ func (s *Server) apiHandler() http.Handler {
 	mux.HandleFunc("/api/sync", s.handleSync)
 	mux.HandleFunc("/api/inventory", s.handleInventory)
 	mux.HandleFunc("/api/result", s.handleResult)
+	mux.HandleFunc("/api/results", s.handleResults)
 	mux.HandleFunc("/api/update/agent", s.handleUpdateAgent)
 	mux.HandleFunc("/api/speedtest", s.handleSpeedTest)
 	mux.HandleFunc("/api/logs", s.handleAgentLogs)
@@ -418,26 +419,51 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &res) {
 		return
 	}
-	c, err := s.state.Result(res)
+	s.applyResults(w, []protocol.CommandResult{res})
+}
+
+// handleResults takes the results of many commands at once (new agents).
+func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
+	var rs protocol.CommandResults
+	if !readJSON(w, r, &rs) {
+		return
+	}
+	s.applyResults(w, rs.Results)
+}
+
+func (s *Server) applyResults(w http.ResponseWriter, rs []protocol.CommandResult) {
+	cmds, err := s.state.Results(rs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if c != nil {
-		if res.OK {
-			log.Printf("Приёмник: удалено на ASIAIR: %s", c.Path)
-			if c.AlsoLocal {
-				remove := s.getStore().Remove
-				if c.IsDir() {
-					remove = s.getStore().RemoveDir
-				}
-				if err := remove(c.Path); err != nil {
-					log.Printf("Приёмник: не удалось удалить локальную копию %s: %v", c.Path, err)
-				}
-			}
-		} else {
+	byID := make(map[string]protocol.CommandResult, len(rs))
+	for _, r := range rs {
+		byID[r.ID] = r
+	}
+	ok := 0
+	for _, c := range cmds {
+		res := byID[c.ID]
+		if !res.OK {
 			log.Printf("Приёмник: ошибка удаления %s на ASIAIR: %s", c.Path, res.Error)
+			continue
 		}
+		ok++
+		if len(cmds) <= 20 {
+			log.Printf("Приёмник: удалено на ASIAIR: %s", c.Path)
+		}
+		if c.AlsoLocal {
+			remove := s.getStore().Remove
+			if c.IsDir() {
+				remove = s.getStore().RemoveDir
+			}
+			if err := remove(c.Path); err != nil {
+				log.Printf("Приёмник: не удалось удалить локальную копию %s: %v", c.Path, err)
+			}
+		}
+	}
+	if len(cmds) > 20 {
+		log.Printf("Приёмник: удалено на ASIAIR: %d, ошибок: %d", ok, len(cmds)-ok)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -491,6 +517,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/fetch", s.handleUIFetch)
 	mux.HandleFunc("/ui/api/clear", s.handleUIClear)
 	mux.HandleFunc("/ui/api/cancel", s.handleUICancel)
+	mux.HandleFunc("/ui/api/retry", s.handleUIRetry)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
 	mux.HandleFunc("/ui/thumb", s.handleUIThumb)
 	mux.HandleFunc("/ui/api/connect", s.handleUIConnect)
@@ -557,6 +584,7 @@ type uiState struct {
 	SyncDirs      []string                        `json:"sync_dirs"`
 	Agent         protocol.AgentStatus            `json:"agent"`
 	AgentOnline   bool                            `json:"agent_online"`
+	AgentEvents   []AgentEvent                    `json:"agent_events"`
 	LastSeen      time.Time                       `json:"last_seen"`
 	InventoryTime time.Time                       `json:"inventory_time"`
 	Fingerprint   string                          `json:"fingerprint"`
@@ -614,6 +642,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Agent:         snap.Status,
 		LastSeen:      snap.LastSeen,
 		AgentOnline:   online,
+		AgentEvents:   snap.Events,
 		InventoryTime: snap.InvTime,
 		Fingerprint:   s.fingerprint,
 		DestDir:       store.root,
@@ -885,11 +914,14 @@ func (s *Server) handleUIFetch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUIClear(w http.ResponseWriter, r *http.Request) {
-	var req struct{}
+	var req struct {
+		IDs    []string `json:"ids"`    // nil = all
+		Status string   `json:"status"` // "done", "failed", "" = both
+	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if err := s.state.ClearFinished(); err != nil {
+	if err := s.state.Clear(req.IDs, req.Status); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -898,16 +930,37 @@ func (s *Server) handleUIClear(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUICancel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID string `json:"id"`
+		ID  string   `json:"id"`
+		IDs []string `json:"ids"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if err := s.state.Cancel(req.ID); err != nil {
+	ids := req.IDs
+	if req.ID != "" {
+		ids = append(ids, req.ID)
+	}
+	if err := s.state.CancelMany(ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUIRetry queues failed delete commands again.
+func (s *Server) handleUIRetry(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	n, err := s.state.Retry(req.IDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]int{"queued": n})
 }
 
 // handleUIFile serves a received file (for previewing JPG/PNG in the browser).

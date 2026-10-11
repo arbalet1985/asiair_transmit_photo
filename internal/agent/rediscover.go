@@ -95,12 +95,12 @@ func (a *Agent) rediscover(ctx context.Context) {
 		return
 	}
 	kind := wantKind(link, a.cfg.Username)
-	log.Printf("Агент: %s не отвечает по адресу %s — ищу его в сети…", kind, l.Host)
+	a.event("warn", "%s не отвечает по адресу %s — ищу его в сети…", kind, l.Host)
 	dctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	devs, err := a.discover(dctx, nil)
 	cancel()
 	if err != nil && len(devs) == 0 {
-		log.Printf("Агент: поиск %s в сети не удался: %v; путь оставлен прежним: %s", kind, err, link)
+		a.event("warn", "поиск %s в сети не удался: %v; путь оставлен прежним: %s", kind, err, link)
 		return
 	}
 	type candidate struct {
@@ -173,7 +173,7 @@ func (a *Agent) rediscover(ctx context.Context) {
 		return
 	}
 	if len(found) == 0 {
-		log.Printf("Агент: %s в сети не найден; путь оставлен прежним: %s", kind, link)
+		a.event("warn", "%s в сети не найден; путь оставлен прежним: %s", kind, link)
 	}
 }
 
@@ -219,7 +219,7 @@ func (a *Agent) useSource(src source.Source, link, user, pass string) {
 	a.scanErrors = 0
 	a.mu.Unlock()
 	a.cfg.ASIAIR = link
-	log.Printf("Агент: ASIAIR найден по новому адресу, путь обновлён: %s", link)
+	a.event("", "ASIAIR найден по новому адресу, путь обновлён: %s", link)
 	a.saveConfig(values)
 	a.rescan.Store(true)
 	a.wakeUp()

@@ -49,6 +49,7 @@ type frameModel struct {
 	kind      string                // shown kind, "" = all, "?" = unknown
 	only      map[*sorter.Item]bool // the frames of a line of the summary, nil = all
 	words     []string              // the filter: every word is somewhere in the row
+	object    string                // the object chosen (normObject), "" = all
 	folders   map[string]folderTotal
 	shown     folderTotal // of the rows shown
 	// gone: the frames of the output the receiver of the input has no more
@@ -202,13 +203,58 @@ func (m *frameModel) setFilter(text string) {
 	m.filter()
 }
 
-// matches: every word of the filter is in some column of the row.
+// objects lists the objects of the frames, in natural order ("M 2" before
+// "M 10"), each once however it is written.
+func (m *frameModel) objects() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range m.all {
+		o := strings.TrimSpace(r.f.Object)
+		if o == "" || seen[sorter.NormObject(o)] {
+			continue
+		}
+		seen[sorter.NormObject(o)] = true
+		out = append(out, o)
+	}
+	sort.Slice(out, func(i, j int) bool { return sorter.NaturalLess(out[i], out[j]) })
+	return out
+}
+
+// objectOfRow: the object a row belongs to: of the frame (lights), or of
+// the object folder it goes to (calibration laid into the session folders).
+func objectOfRow(r row) string {
+	if r.f.Object != "" {
+		return r.f.Object
+	}
+	if r.it != nil {
+		if parts := strings.SplitN(r.it.Dest, "/", 3); len(parts) == 3 && parts[0] == sorter.ObjectsDir {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
+// setObject takes the text of the object box.
+func (m *frameModel) setObject(text string) {
+	m.object = ""
+	if t := strings.TrimSpace(text); t != "" && t != allObjects {
+		m.object = t
+	}
+	m.filter()
+}
+
+// allObjects is the first line of the object box.
+const allObjects = "все объекты"
+
+// matches: every word of the filter is in some column of the row (an object
+// written without spaces matches too: «m31» finds «M 31»).
 func (m *frameModel) matches(r row) bool {
 	var b strings.Builder
 	for col := range columns {
 		b.WriteString(strings.ToLower(m.cell(r, col)))
 		b.WriteByte('\n')
 	}
+	b.WriteString(sorter.NormObject(r.f.Object))
 	text := b.String()
 	for _, w := range m.words {
 		if !strings.Contains(text, w) {
@@ -221,7 +267,17 @@ func (m *frameModel) matches(r row) bool {
 func (m *frameModel) filter() {
 	m.rows = m.rows[:0]
 	m.shown = folderTotal{}
+	var objs map[string]bool
+	if m.object != "" {
+		objs = map[string]bool{}
+		for _, o := range sorter.ObjectsMatching(m.objects(), m.object) {
+			objs[sorter.NormObject(o)] = true
+		}
+	}
 	for _, r := range m.all {
+		if objs != nil && !objs[sorter.NormObject(objectOfRow(r))] {
+			continue
+		}
 		if m.only != nil && !m.only[r.it] {
 			continue
 		}

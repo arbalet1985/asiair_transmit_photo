@@ -63,6 +63,9 @@ func newClient(base, token, fingerprint string, dial DialFunc) (*client, error) 
 	return c, nil
 }
 
+// closeIdle drops the kept connections (after a network change).
+func (c *client) closeIdle() { c.http.CloseIdleConnections() }
+
 func (c *client) verify(cs tls.ConnectionState) error {
 	if len(cs.PeerCertificates) == 0 {
 		return errors.New("приёмник не прислал сертификат")

@@ -76,7 +76,26 @@ type persisted struct {
 	InvTime   time.Time             `json:"inventory_time"`
 	Status    protocol.AgentStatus  `json:"agent_status"`
 	LastSeen  time.Time             `json:"agent_last_seen"`
+	// Events: the important steps the agent reported, oldest first (at
+	// most maxAgentEvents).
+	Events []AgentEvent `json:"agent_events,omitempty"`
+	// EventSession, EventSeq: the agent run and its last event stored.
+	EventSession string `json:"agent_event_session,omitempty"`
+	EventSeq     uint64 `json:"agent_event_seq,omitempty"`
 }
+
+// AgentEvent is an event of the agent as kept here.
+type AgentEvent struct {
+	Time     time.Time `json:"time"`
+	Text     string    `json:"text"`
+	Level    string    `json:"level,omitempty"`
+	Received time.Time `json:"received"`
+}
+
+const (
+	maxAgentEvents  = 500
+	maxSyncCommands = 1000 // commands sent to the agent in one answer
+)
 
 // State holds the command queue, rate setting, and what the agent reported.
 type State struct {
@@ -194,7 +213,8 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 		s.session, s.seq = req.Session, req.Seq
 	}
 	s.p.LastSeen = time.Now()
-	resp := protocol.SyncResponse{Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), ReadBlock: s.p.ReadBlock, ReadDepth: s.p.ReadDepth, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
+	s.storeEventsLocked(req)
+	resp := protocol.SyncResponse{BatchResults: true, EventsAck: s.p.EventSeq, Rev: s.rev, MaxRate: s.p.MaxRate, Streams: s.streamsLocked(), ReadBlock: s.p.ReadBlock, ReadDepth: s.p.ReadDepth, Paused: s.p.Paused || s.p.WaitStart, WaitStart: s.p.WaitStart,
 		Fetch: append([]string(nil), s.p.Fetch...), Commands: []protocol.Command{}, Order: s.p.Order}
 	s.applySchedule(&resp, time.Now())
 	if r := s.p.Status.SpeedTest; r != nil && !r.Running && r.ID != s.p.SpeedResults[r.Kind].ID {
@@ -213,11 +233,38 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	}
 	s.logsForSync(&resp)
 	for _, c := range s.p.Commands {
-		if c.Status == StatusPending {
+		if c.Status == StatusPending && len(resp.Commands) < maxSyncCommands {
 			resp.Commands = append(resp.Commands, c.Command)
 		}
 	}
 	return resp
+}
+
+// storeEventsLocked keeps the new events of the request. Caller holds s.mu.
+func (s *State) storeEventsLocked(req protocol.SyncRequest) {
+	if req.Session == "" {
+		return
+	}
+	if req.Session != s.p.EventSession {
+		s.p.EventSession, s.p.EventSeq = req.Session, 0
+	}
+	now := time.Now()
+	added := false
+	for _, e := range req.Events {
+		if e.Seq <= s.p.EventSeq {
+			continue
+		}
+		s.p.EventSeq = e.Seq
+		s.p.Events = append(s.p.Events, AgentEvent{Time: e.Time, Text: e.Text, Level: e.Level, Received: now})
+		added = true
+	}
+	if !added {
+		return
+	}
+	if len(s.p.Events) > maxAgentEvents {
+		s.p.Events = slices.Clone(s.p.Events[len(s.p.Events)-maxAgentEvents:])
+	}
+	s.save()
 }
 
 // StartSpeedTest asks the agent for a speed test (protocol.SpeedTest*).
@@ -245,29 +292,65 @@ func (s *State) SpeedTestPending() *protocol.SpeedTest {
 
 // Result applies a command result and returns the command (nil if unknown).
 func (s *State) Result(r protocol.CommandResult) (*Command, error) {
+	cmds, err := s.Results([]protocol.CommandResult{r})
+	if len(cmds) == 0 {
+		return nil, err
+	}
+	return cmds[0], err
+}
+
+// Results applies the results of many commands at once (one save) and
+// returns the commands they belong to, in order; unknown ones are skipped.
+func (s *State) Results(rs []protocol.CommandResult) ([]*Command, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	byID := make(map[string]*Command, len(s.p.Commands))
 	for _, c := range s.p.Commands {
-		if c.ID != r.ID {
+		byID[c.ID] = c
+	}
+	now := time.Now()
+	var out []*Command
+	files := map[string]bool{}
+	var dirs []string
+	for _, r := range rs {
+		c := byID[r.ID]
+		if c == nil {
 			continue
 		}
-		c.Updated = time.Now()
+		c.Updated = now
 		if r.OK {
 			c.Status, c.Error = StatusDone, ""
-			// drop the file (or the folder's files) from the inventory right away
-			gone := func(p string) bool { return c.Covers(p) }
-			s.p.Inventory = slices.DeleteFunc(s.p.Inventory, func(f protocol.RemoteFile) bool { return gone(f.Path) })
-			s.p.Fetch = slices.DeleteFunc(s.p.Fetch, gone)
+			files[c.Path] = true
 			if c.IsDir() {
-				s.p.SyncDirs = slices.DeleteFunc(s.p.SyncDirs, func(d string) bool { return d == c.Path || underDir(d, c.Path) })
+				dirs = append(dirs, c.Path)
 			}
 		} else {
 			c.Status, c.Error = StatusFailed, r.Error
 		}
 		cp := *c
-		return &cp, s.save()
+		out = append(out, &cp)
 	}
-	return nil, nil
+	if len(out) == 0 {
+		return nil, nil
+	}
+	// drop the files (and the folders' files) from the inventory right away
+	gone := func(p string) bool {
+		if files[p] {
+			return true
+		}
+		for _, d := range dirs {
+			if underDir(p, d) {
+				return true
+			}
+		}
+		return false
+	}
+	s.p.Inventory = slices.DeleteFunc(s.p.Inventory, func(f protocol.RemoteFile) bool { return gone(f.Path) })
+	s.p.Fetch = slices.DeleteFunc(s.p.Fetch, gone)
+	if len(dirs) > 0 {
+		s.p.SyncDirs = slices.DeleteFunc(s.p.SyncDirs, gone)
+	}
+	return out, s.save()
 }
 
 // SetInventory stores the list of files currently on the ASIAIR.
@@ -445,12 +528,18 @@ func (s *State) SetPaused(p bool) error {
 }
 
 // ClearFinished removes done/failed commands from the list.
-func (s *State) ClearFinished() error {
+func (s *State) ClearFinished() error { return s.Clear(nil, "") }
+
+// Clear removes finished commands: those of ids (all when nil) whose status
+// is status ("" = done or failed).
+func (s *State) Clear(ids []string, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	pick := idSet(ids)
 	cmds := s.p.Commands[:0]
 	for _, c := range s.p.Commands {
-		if c.Status == StatusPending {
+		finished := c.Status != StatusPending && (status == "" || c.Status == status)
+		if !(finished && (pick == nil || pick[c.ID])) {
 			cmds = append(cmds, c)
 		}
 	}
@@ -458,19 +547,60 @@ func (s *State) ClearFinished() error {
 	return s.save()
 }
 
+func idSet(ids []string) map[string]bool {
+	if ids == nil {
+		return nil
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
 // Cancel removes a pending command.
-func (s *State) Cancel(id string) error {
+func (s *State) Cancel(id string) error { return s.CancelMany([]string{id}) }
+
+// CancelMany removes the pending commands of ids.
+func (s *State) CancelMany(ids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	pick := idSet(ids)
 	cmds := s.p.Commands[:0]
 	for _, c := range s.p.Commands {
-		if !(c.ID == id && c.Status == StatusPending) {
+		if !(pick[c.ID] && c.Status == StatusPending) {
 			cmds = append(cmds, c)
 		}
 	}
 	s.p.Commands = cmds
 	s.bump()
 	return s.save()
+}
+
+// Retry queues the failed commands of ids again.
+func (s *State) Retry(ids []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pick := idSet(ids)
+	n := 0
+	now := time.Now()
+	for _, c := range s.p.Commands {
+		if pick[c.ID] && c.Status == StatusFailed {
+			c.Status, c.Error, c.Updated = StatusPending, "", now
+			n++
+		}
+	}
+	if n > 0 {
+		s.bump()
+	}
+	return n, s.save()
+}
+
+// AgentBuild is the build the agent reported last ("" = unknown).
+func (s *State) AgentBuild() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.p.Status.Build
 }
 
 // Snapshot returns a copy of the state for the UI.
@@ -486,5 +616,6 @@ func (s *State) Snapshot() persisted {
 	cp.Inventory = append([]protocol.RemoteFile(nil), s.p.Inventory...)
 	cp.Fetch = append([]string{}, s.p.Fetch...)
 	cp.SyncDirs = append([]string{}, s.p.SyncDirs...)
+	cp.Events = append([]AgentEvent(nil), s.p.Events...)
 	return cp
 }

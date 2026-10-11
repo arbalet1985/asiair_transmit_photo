@@ -9,6 +9,7 @@
 //	POST /api/sync      body: SyncRequest   -> SyncResponse
 //	POST /api/inventory body: Inventory     -> 204
 //	POST /api/result    body: CommandResult -> 204
+//	POST /api/results   body: CommandResults -> 204 (when SyncResponse.BatchResults)
 //
 // P is "<share>/<path inside share>" with forward slashes, T is Unix nanoseconds.
 package protocol
@@ -26,6 +27,13 @@ import (
 // (-ldflags "-X .../internal/protocol.Version=1.2.0"). Programs built by
 // hand are "dev" and never update themselves.
 var Version = "dev"
+
+// Build identifies the code of the program regardless of the version
+// number: a hash of the build made without Version and Build, set by the
+// release build (-X .../internal/protocol.Build=…). A new release whose
+// build of a program is the same as the running one has nothing new for
+// that program, which then does not update. Empty in programs built by hand.
+var Build = ""
 
 // Fingerprint returns the SHA-256 fingerprint of a DER certificate as "AB:CD:...".
 func Fingerprint(der []byte) string {
@@ -128,6 +136,39 @@ type AgentStatus struct {
 
 	// Failed lists files waiting for a retry (at most 50).
 	Failed []FailedFile `json:"failed,omitempty"`
+
+	// Deleting: the delete commands being carried out (nil when none).
+	Deleting *DeleteProgress `json:"deleting,omitempty"`
+	// WiFi: the Wi-Fi network the agent's computer is connected to ("" =
+	// none or unknown, e.g. a cable).
+	WiFi *WiFiInfo `json:"wifi,omitempty"`
+	// Build identifies the agent's code (see Build); "" in old agents.
+	Build string `json:"build,omitempty"`
+}
+
+// DeleteProgress is how far the agent is with the delete commands.
+type DeleteProgress struct {
+	Total   int    `json:"total"`  // commands taken since the queue was last empty
+	Done    int    `json:"done"`   // carried out (deleted or failed)
+	Failed  int    `json:"failed"` // of Done, not deleted
+	Current string `json:"current,omitempty"`
+}
+
+// WiFiInfo is the wireless network the agent's computer uses.
+type WiFiInfo struct {
+	SSID   string `json:"ssid"`
+	Signal int    `json:"signal,omitempty"` // percent, 0 = unknown
+	Iface  string `json:"iface,omitempty"`
+}
+
+// AgentEvent is an important step the agent reports before (or right
+// after) taking it, so the receiver knows what it was doing if it breaks.
+type AgentEvent struct {
+	Seq  uint64    `json:"seq"` // growing within one agent run (SyncRequest.Session)
+	Time time.Time `json:"time"`
+	Text string    `json:"text"`
+	// Level: "" information, "warn", "error".
+	Level string `json:"level,omitempty"`
 }
 
 // FailedFile is a file whose last transfer attempt failed.
@@ -150,6 +191,8 @@ type SyncRequest struct {
 	// the agent gave up may still reach the receiver late.
 	Session string `json:"session,omitempty"`
 	Seq     uint64 `json:"seq,omitempty"`
+	// Events the receiver has not acknowledged yet (EventsAck), oldest first.
+	Events []AgentEvent `json:"events,omitempty"`
 }
 
 // SyncResponse carries pending commands and the rate limit set on the receiver.
@@ -195,6 +238,10 @@ type SyncResponse struct {
 	// Update offers a new agent version; the program is downloaded from
 	// /api/update/agent.
 	Update *UpdateOffer `json:"update,omitempty"`
+	// BatchResults: the receiver takes many results at once on /api/results.
+	BatchResults bool `json:"batch_results,omitempty"`
+	// EventsAck: the highest SyncRequest.Events Seq of this session stored.
+	EventsAck uint64 `json:"events_ack,omitempty"`
 }
 
 // StorageSpace is the free space of one ASIAIR share.
@@ -316,6 +363,9 @@ type UpdateOffer struct {
 	Version string `json:"version"`
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256"`
+	// Build of the offered program (protocol.Build); "" when unknown. An
+	// agent whose own Build is the same skips the offer.
+	Build string `json:"build,omitempty"`
 }
 
 // Command types.
@@ -330,6 +380,11 @@ type Command struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 	Path string `json:"path"`
+}
+
+// CommandResults carries the results of many commands in one request.
+type CommandResults struct {
+	Results []CommandResult `json:"results"`
 }
 
 type CommandResult struct {

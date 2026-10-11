@@ -57,20 +57,31 @@ jobs:
             version="dev-${GITHUB_SHA::7}"
             name="$version"
           fi
-          ldflags="-s -w -X github.com/arbalet1985/asiair_transmit_photo/internal/protocol.Version=$version"
-          mkdir -p dist/windows dist/linux
+          pkg=github.com/arbalet1985/asiair_transmit_photo/internal/protocol
+          mkdir -p dist/windows dist/linux fp
+          # Build of each program: the hash of a build without the version
+          # number. A program whose code did not change gets the same hash
+          # in a new release and then does not update (builds.json).
+          build() { # goos out pkg extra-ldflags
+            GOOS=$1 GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w $4 -X $pkg.Version=0.0.0" -o "fp/$(basename "$2")" "$3"
+            b=$(sha256sum "fp/$(basename "$2")" | cut -c1-16)
+            GOOS=$1 GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w $4 -X $pkg.Version=$version -X $pkg.Build=$b" -o "$2" "$3"
+            echo "$(basename "$2") $b"
+          }
           for cmd in asiair-agent asiair-receiver; do
-            GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/windows/$cmd.exe" "./cmd/$cmd"
-            GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/linux/$cmd"     "./cmd/$cmd"
+            build windows "dist/windows/$cmd.exe" "./cmd/$cmd" "" >> builds.txt
+            build linux   "dist/linux/$cmd"       "./cmd/$cmd" "" >> builds.txt
           done
           # раскладка кадров для Siril: только окно Windows
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags -H windowsgui" -o dist/windows/asiair-sorter.exe ./cmd/asiair-sorter
+          build windows dist/windows/asiair-sorter.exe ./cmd/asiair-sorter "-H windowsgui" >> builds.txt
+          cat builds.txt
+          python3 -c 'import json,sys; print(json.dumps(dict(l.split() for l in open("builds.txt")), indent=1))' > builds.json
           cp configs/*.example.yaml LICENSE dist/windows/
           cp configs/*.example.yaml LICENSE dist/linux/
           mkdir -p upload
           (cd dist/windows && zip -9 "../../upload/asiair-remote-transfer-$name-windows.zip" *)
           tar -czf "upload/asiair-remote-transfer-$name-linux-amd64.tar.gz" -C dist/linux .
-          cp dist/windows/*.exe upload/
+          cp dist/windows/*.exe builds.json upload/
           ls -l upload
 
       - name: Файлы пробной сборки

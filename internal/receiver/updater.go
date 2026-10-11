@@ -40,6 +40,7 @@ type agentFile struct {
 	Path    string
 	Size    int64
 	SHA256  string
+	Build   string // protocol.Build of the program, from the release ("" = unknown)
 }
 
 // updater looks for new releases, updates the receiver itself and keeps
@@ -56,6 +57,7 @@ type updater struct {
 	checking   bool
 	checked    time.Time
 	latest     *update.Release
+	builds     map[string]string // of latest: the build of each program (nil = unknown)
 	err        string
 	status     string
 	agent      *agentFile
@@ -93,7 +95,8 @@ func (u *updater) findAgentFile() *agentFile {
 		if err != nil {
 			continue
 		}
-		best = &agentFile{Version: v, Path: m, Size: st.Size(), SHA256: sum}
+		b, _ := os.ReadFile(m + ".build")
+		best = &agentFile{Version: v, Path: m, Size: st.Size(), SHA256: sum, Build: strings.TrimSpace(string(b))}
 	}
 	return best
 }
@@ -209,7 +212,12 @@ func (u *updater) check(ctx context.Context, install, asked bool) {
 		return
 	}
 
+	builds, err := c.Builds(ctx, rel)
+	if err != nil {
+		log.Printf("Обновление: %v", err)
+	}
 	u.mu.Lock()
+	u.builds = builds
 	have := u.agent
 	u.mu.Unlock()
 	if a, ok := rel.Assets[update.AgentAsset]; ok && (have == nil || update.Newer(rel.Version, have.Version)) {
@@ -224,15 +232,24 @@ func (u *updater) check(ctx context.Context, install, asked bool) {
 		st, _ := os.Stat(dst)
 		u.mu.Lock()
 		old := u.agent
-		u.agent = &agentFile{Version: rel.Version, Path: dst, Size: st.Size(), SHA256: sum}
+		u.agent = &agentFile{Version: rel.Version, Path: dst, Size: st.Size(), SHA256: sum, Build: builds[update.AgentAsset]}
 		u.mu.Unlock()
+		if b := builds[update.AgentAsset]; b != "" {
+			os.WriteFile(dst+".build", []byte(b), 0o644)
+		}
 		if old != nil && old.Path != dst {
 			os.Remove(old.Path)
+			os.Remove(old.Path + ".build")
 		}
 		u.setStatus("агент %s скачан, агент обновится при следующей связи", rel.Version)
 	}
 
 	if !update.Newer(rel.Version, protocol.Version) {
+		return
+	}
+	if update.Unchanged(builds, update.ReceiverAsset, protocol.Build) {
+		// the release changed other programs only: nothing to download or restart
+		u.setStatus("вышла версия %s, но в приёмнике изменений нет — обновлять его не нужно", rel.Version)
 		return
 	}
 	if !install {
@@ -318,7 +335,10 @@ func (u *updater) offer(st protocol.AgentStatus) *protocol.UpdateOffer {
 	if a == nil || !(u.auto || u.manual) || st.OS != agentPlatform || !update.Newer(a.Version, st.Version) {
 		return nil
 	}
-	return &protocol.UpdateOffer{Version: a.Version, Size: a.Size, SHA256: a.SHA256}
+	if a.Build != "" && a.Build == st.Build {
+		return nil // the same code under a new number: the agent stays as it is
+	}
+	return &protocol.UpdateOffer{Version: a.Version, Size: a.Size, SHA256: a.SHA256, Build: a.Build}
 }
 
 // ---------- API for the agent ----------
@@ -361,6 +381,10 @@ type updateInfo struct {
 	TokenSet      bool      `json:"token_set"`
 	Agent         string    `json:"agent"` // agent version kept for the agent
 	CanSelfUpdate bool      `json:"can_self_update"`
+	// ReceiverSame, AgentSame: the latest release has no changes for the
+	// receiver (for the agent that reported its build).
+	ReceiverSame bool `json:"receiver_same,omitempty"`
+	AgentSame    bool `json:"agent_same,omitempty"`
 }
 
 func (u *updater) info() updateInfo {
@@ -376,6 +400,8 @@ func (u *updater) info() updateInfo {
 	if u.agent != nil {
 		in.Agent = u.agent.Version
 	}
+	in.ReceiverSame = update.Unchanged(u.builds, update.ReceiverAsset, protocol.Build)
+	in.AgentSame = update.Unchanged(u.builds, update.AgentAsset, u.s.state.AgentBuild())
 	return in
 }
 

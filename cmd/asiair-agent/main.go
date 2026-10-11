@@ -33,6 +33,7 @@ func main() {
 				return nil, cfg.LogFile, err
 			}
 			a.Restart = svc.Restart
+			a.App = "asiair-agent"
 			return a.Run, cfg.LogFile, nil
 		},
 		GUI: guiMain,

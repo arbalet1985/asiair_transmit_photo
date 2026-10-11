@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,7 +108,11 @@ func setupLog(file string) {
 	}
 	if IsService() {
 		// a service has no console: send crash reports to the log too
-		crash := func(lf *os.File) { debug.SetCrashOutput(lf, debug.CrashOptions{}) }
+		crash := func(lf *os.File) {
+			if !crashCaught.Load() {
+				debug.SetCrashOutput(lf, debug.CrashOptions{})
+			}
+		}
 		crash(f.File())
 		f.OnRotate = crash
 		log.SetOutput(f)
@@ -237,6 +242,15 @@ func Main(app App) {
 	abs, err := filepath.Abs(*cfgPath)
 	if err == nil {
 		*cfgPath = abs
+	}
+
+	if cmd == guardCommand { // started by StartGuardian
+		if fs.NArg() >= 2 {
+			if pid, err := strconv.Atoi(fs.Arg(1)); err == nil {
+				guardian(app.Name, pid, os.Args[len(os.Args)-(fs.NArg()-2):])
+			}
+		}
+		return
 	}
 
 	if cmd == "gui" && app.GUI != nil {
