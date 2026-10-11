@@ -25,6 +25,8 @@ type zoomView struct {
 
 	// changed is called after the zoom changed
 	changed func()
+	// overlay draws over the picture placed at x0, y0, dw × dh
+	overlay func(c *walk.Canvas, x0, y0, dw, dh float64)
 }
 
 func newZoomView() *zoomView { return &zoomView{scale: 1, cx: 0.5, cy: 0.5} }
@@ -147,7 +149,13 @@ func (z *zoomView) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
 		X: int(math.Round(x0 + sx0*s)), Y: int(math.Round(y0 + sy0*s)),
 		Width: int(math.Round((sx1 - sx0) * s)), Height: int(math.Round((sy1 - sy0) * s)),
 	}
-	return canvas.DrawBitmapPart(z.bmp, dst, src)
+	if err := canvas.DrawBitmapPart(z.bmp, dst, src); err != nil {
+		return err
+	}
+	if z.overlay != nil {
+		z.overlay(canvas, x0, y0, dw, dh)
+	}
+	return nil
 }
 
 func (z *zoomView) mouseDown(x, y int, b walk.MouseButton) {

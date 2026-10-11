@@ -23,6 +23,7 @@ type preview struct {
 	full       bool // the picture has the full resolution
 	moon       *moon.Info
 	obj        *skyObject
+	hist       *fits.Histogram
 	err        error
 }
 
@@ -187,6 +188,7 @@ func readPreview(f *sorter.Frame, local []string, maxW int) *preview {
 	}
 	p.moon, p.obj = frameSky(f, get)
 	p.pic = im.Stretched()
+	p.hist = im.Histogram(histBins)
 	p.srcW = im.Width * im.Binning
 	p.full = maxW >= fullWidth || im.Binning <= 1 || im.Bayer != "" && im.Binning <= 2
 	p.info = fmt.Sprintf("%s — %d×%d", name, im.Width*im.Binning, im.Height*im.Binning)
@@ -244,6 +246,7 @@ func (w *window) setPlay(on bool) {
 		w.scheduleBlink() // a frame being read schedules again when shown
 	} else {
 		w.btnPlay.SetText("▶ Блинк")
+		w.measureTilt(w.table.CurrentIndex()) // not measured while blinking
 	}
 }
 

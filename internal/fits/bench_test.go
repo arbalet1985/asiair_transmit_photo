@@ -24,3 +24,16 @@ func BenchmarkPreviewBayer(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkStretched: the picture of a 533MC preview for the sorter.
+func BenchmarkStretched(b *testing.B) {
+	rnd := rand.New(rand.NewSource(1))
+	im := &Image{Width: 1504, Height: 1504, Channels: 3, Data: make([]float32, 1504*1504*3)}
+	for i := range im.Data {
+		im.Data[i] = float32(0.08 + 0.01*rnd.Float64())
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		im.Stretched()
+	}
+}

@@ -22,6 +22,7 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/stars"
 )
 
 // A receiver of this project (asiair-receiver) as the input: its received
@@ -357,6 +358,19 @@ func (r *Receiver) Preview(ctx context.Context, p string, maxWidth int) (*fits.I
 		im.Data[i] = float32(binary.LittleEndian.Uint16(px[i*2:])) / 65535
 	}
 	return im, nil
+}
+
+// Tilt asks the receiver to measure the tilt of the sensor on a frame (at
+// its full resolution, there).
+func (r *Receiver) Tilt(ctx context.Context, p string) (stars.Tilt, error) {
+	var t stars.Tilt
+	resp, err := r.get(ctx, "/ui/api/tilt", url.Values{"path": {p}}, nil)
+	if err != nil {
+		return t, err
+	}
+	defer resp.Body.Close()
+	err = json.NewDecoder(resp.Body).Decode(&t)
+	return t, err
 }
 
 // PartSuffix marks a download not finished yet; the next run continues it.

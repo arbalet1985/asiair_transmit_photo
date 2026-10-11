@@ -139,3 +139,28 @@ func TestPreview16MatchesGeneral(t *testing.T) {
 		}
 	}
 }
+
+func TestHistogram(t *testing.T) {
+	im := &Image{Width: 100, Height: 100, Channels: 1, Data: make([]float32, 10000)}
+	rnd := rand.New(rand.NewSource(5))
+	for i := range im.Data {
+		im.Data[i] = float32(0.1 + 0.01*rnd.NormFloat64())
+	}
+	h := im.Histogram(200)
+	if h.Lo > 0.07 || h.Hi < 0.13 || h.Hi > 0.2 {
+		t.Fatalf("range %.3f..%.3f", h.Lo, h.Hi)
+	}
+	var n, shown uint32
+	for _, k := range h.Counts[0] {
+		n += k
+	}
+	for _, k := range h.Shown[0] {
+		shown += k
+	}
+	if shown != 10000 || n < 9990 {
+		t.Fatalf("counts %d, shown %d", n, shown)
+	}
+	if h.Black <= 0.05 || h.Black >= 0.1 {
+		t.Fatalf("black point %.3f", h.Black)
+	}
+}
