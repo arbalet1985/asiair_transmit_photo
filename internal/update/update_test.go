@@ -53,8 +53,11 @@ func TestLatestAndDownload(t *testing.T) {
 		switch r.URL.Path {
 		case "/repos/o/r/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.3.0","html_url":"https://x/rel","assets":[
-				{"name":"asiair-agent.exe","size":%d,"digest":"sha256:%s","url":"%s/assets/1","browser_download_url":"https://nowhere/a.exe"}]}`,
-				len(exe), sum(exe), srv.URL)
+				{"name":"asiair-agent.exe","size":%d,"digest":"sha256:%s","url":"%s/assets/1","browser_download_url":"https://nowhere/a.exe"},
+				{"name":"builds.json","size":10,"url":"%s/assets/2","browser_download_url":"https://nowhere/b.json"}]}`,
+				len(exe), sum(exe), srv.URL, srv.URL)
+		case "/assets/2":
+			w.Write([]byte(`{"asiair-agent.exe":"aaa","asiair-receiver.exe":"bbb"}`))
 		case "/assets/1":
 			if r.Header.Get("Accept") != "application/octet-stream" {
 				t.Errorf("accept %q", r.Header.Get("Accept"))
@@ -73,6 +76,13 @@ func TestLatestAndDownload(t *testing.T) {
 	}
 	if rel.Version != "1.3.0" || rel.Assets[AgentAsset].SHA256 != sum(exe) {
 		t.Fatalf("release: %+v", rel)
+	}
+	builds, err := c.Builds(context.Background(), rel)
+	if err != nil || !Unchanged(builds, AgentAsset, "aaa") || Unchanged(builds, ReceiverAsset, "aaa") || Unchanged(builds, AgentAsset, "") {
+		t.Fatalf("builds: %v %v", builds, err)
+	}
+	if b, err := c.Builds(context.Background(), &Release{}); b != nil || err != nil {
+		t.Fatalf("no builds.json: %v %v", b, err)
 	}
 	dst := filepath.Join(t.TempDir(), "a.exe")
 	got, err := c.Download(context.Background(), rel.Assets[AgentAsset], dst)

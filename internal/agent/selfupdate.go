@@ -20,6 +20,9 @@ import (
 func (a *Agent) maybeUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if offer != nil && offer.Build != "" && offer.Build == protocol.Build {
+		offer = nil // a new number, the same code: nothing to install
+	}
 	if offer == nil || !update.Newer(offer.Version, protocol.Version) {
 		if a.offer != nil && !a.updating {
 			if a.status.Update == availableText(a.offer.Version) {
@@ -92,10 +95,14 @@ func (a *Agent) InstallUpdate(ctx context.Context) error {
 // selfUpdate downloads the new agent from the receiver, replaces this
 // program and restarts it.
 func (a *Agent) selfUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
+	a.event("", "обновление до версии %s: скачивание с приёмника", offer.Version)
 	a.setUpdate("скачивается версия %s", offer.Version)
 	err := a.installUpdate(ctx, offer)
 	if err == nil {
 		a.setUpdate("установлена версия %s, перезапуск…", offer.Version)
+		// the receiver learns it before the agent goes away (and before the
+		// watchdog's deadline starts)
+		a.eventWait(3*time.Second, "warn", "версия %s установлена, перезапуск агента", offer.Version)
 		a.startWatch(offer.Version)
 		err = a.Restart()
 		if err == nil {
@@ -120,7 +127,7 @@ func (a *Agent) selfUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
 		retry = "можно повторить кнопкой «Обновить»"
 	}
 	a.mu.Unlock()
-	log.Printf("Агент: обновление до %s не удалось: %v (%s)", offer.Version, err, retry)
+	a.event("error", "обновление до %s не удалось: %v (%s)", offer.Version, err, retry)
 }
 
 func (a *Agent) setUpdate(format string, args ...any) {
@@ -209,7 +216,7 @@ func (a *Agent) startupUpdate() {
 		a.rolledBack = rb
 		a.status.Update = rollbackText(rb)
 		a.mu.Unlock()
-		log.Printf("Агент: %s", rollbackText(rb))
+		a.event("error", "%s", rollbackText(rb))
 	}
 	if update.Started(exe, protocol.Version) {
 		a.checkUpdate = true
@@ -230,7 +237,7 @@ func (a *Agent) updateWorks() {
 		return
 	}
 	update.Healthy(exe, protocol.Version)
-	log.Printf("Агент: версия %s работает, старая копия больше не нужна", protocol.Version)
+	a.event("", "версия %s работает, связь с приёмником есть", protocol.Version)
 	a.cleanupLater(exe)
 }
 

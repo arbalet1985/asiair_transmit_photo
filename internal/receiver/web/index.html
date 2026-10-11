@@ -69,6 +69,7 @@
   .muted { color: var(--muted); }
   a { color: var(--accent); }
   .err { color: var(--danger); }
+  td.warn { color: var(--warn); }
   code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
   .field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 10px; }
   .field .value { flex: 1 1 260px; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
@@ -332,11 +333,13 @@
         <dt>Версия агента</dt><dd id="aVersion">—</dd>
         <dt>ASIAIR</dt><dd id="aAsiair">—</dd>
         <dt>Связь</dt><dd id="aSeen">—</dd>
+        <dt>Wi-Fi</dt><dd id="aWifi">—</dd>
         <dt>Последний обход</dt><dd id="aScan">—</dd>
         <dt>Очередь</dt><dd id="aQueue">—</dd>
         <dt>Место на ASIAIR</dt><dd id="aSpace">—</dd>
         <dt>Отправлено</dt><dd id="aSent">—</dd>
         <dt>Ошибка</dt><dd id="aErr" class="err">—</dd>
+        <dt>События</dt><dd id="aEvents"><details id="aEvBox"><summary id="aEvSum">—</summary><div class="tablewrap" style="max-height:260px;overflow-y:auto"><table><tbody id="aEvList"></tbody></table></div></details></dd>
         <dt>Журналы</dt><dd id="aLogs"><button id="logsBtn" title="Агент пришлёт свои журналы за последние 3 дня (и журнал обновлений); скачаются вместе с журналами приёмника">Получить с агента</button> <span id="logsNow" class="muted"></span><div id="logsList"></div></dd>
       </dl>
     </section>
@@ -807,17 +810,58 @@
     <div class="muted" id="filesInfo" style="margin-top:8px"></div>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="cmdPanel">
     <div class="toolbar">
-      <h2 style="margin:0">Команды удаления</h2>
+      <h2 style="margin:0;cursor:pointer" id="cmdHead" title="Свернуть или развернуть"><span id="cmdArrow">▾</span> Команды удаления</h2>
+      <span id="cmdSummary" class="muted"></span>
       <span class="spacer"></span>
-      <button id="clearBtn">Очистить завершённые</button>
     </div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th>Файл</th><th>Статус</th><th>Создана</th><th></th></tr></thead>
-        <tbody id="cmds"></tbody>
-      </table>
+    <div id="cmdProgress" hidden style="margin-bottom:10px">
+      <div id="cmdProgressText" class="muted"></div>
+      <div class="progress"><div id="cmdProgressBar"></div></div>
+    </div>
+    <div id="cmdBody">
+      <div class="toolbar">
+        <input type="search" id="cmdSearch" placeholder="Поиск по пути…" style="min-width:220px">
+        <select id="cmdStatus" title="Состояние команды">
+          <option value="">все состояния</option>
+          <option value="pending">ожидают агента</option>
+          <option value="done">удалено</option>
+          <option value="failed">ошибка</option>
+        </select>
+        <select id="cmdType" title="Что удаляется">
+          <option value="">файлы и папки</option>
+          <option value="file">только файлы</option>
+          <option value="dir">только папки</option>
+        </select>
+        <select id="cmdLocal" title="Удаляется ли копия на этом компьютере">
+          <option value="">с копией и без</option>
+          <option value="yes">и копия здесь</option>
+          <option value="no">только на ASIAIR</option>
+        </select>
+        <select id="cmdPeriod" title="Когда создана команда">
+          <option value="">за всё время</option>
+          <option value="1">за последний час</option>
+          <option value="24">за сутки</option>
+          <option value="168">за неделю</option>
+        </select>
+        <select id="cmdErr" title="Текст ошибки" hidden><option value="">любая ошибка</option></select>
+        <button id="cmdReset" title="Сбросить фильтры">Сбросить</button>
+      </div>
+      <div class="toolbar">
+        <span id="cmdShown" class="muted"></span>
+        <span class="spacer"></span>
+        <button id="cmdCancelShown" title="Отменить показанные команды, которые ещё ждут агента">Отменить ожидающие</button>
+        <button id="cmdRetryShown" title="Поставить показанные команды с ошибкой в очередь ещё раз">Повторить ошибки</button>
+        <button id="clearBtn" title="Убрать из списка показанные завершённые команды">Очистить завершённые</button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Файл</th><th>Статус</th><th>Создана</th><th>Выполнена</th><th></th></tr></thead>
+          <tbody id="cmds"></tbody>
+        </table>
+      </div>
+      <div class="toolbar" id="cmdMore" hidden style="margin-top:8px"><button id="cmdMoreBtn">Показать ещё</button></div>
     </div>
   </section>
 
@@ -1326,15 +1370,68 @@ function fetchControl(f) {
   return "";
 }
 
+// ---------- delete commands: collapsible, with filters ----------
+const cmdF = Object.assign({ open: true, q: "", status: "", type: "", local: "", period: "", err: "" }, store.get("cmdFilter", {}));
+let cmdLimit = 200;
+function saveCmdF() { store.set("cmdFilter", cmdF); }
+function cmdErrKey(c) { return (c.error || "").replace(/\s+/g, " ").slice(0, 80); }
+function filteredCmds() {
+  const q = cmdF.q.trim().toLowerCase();
+  const since = cmdF.period ? Date.now() - (+cmdF.period) * 3600e3 : 0;
+  return state.commands.filter(c =>
+    (!cmdF.status || c.status === cmdF.status) &&
+    (!cmdF.type || (cmdF.type === "dir") === (c.type === "delete_dir")) &&
+    (!cmdF.local || (cmdF.local === "yes") === !!c.also_local) &&
+    (!since || new Date(c.created) >= since) &&
+    (!cmdF.err || c.status === "failed" && cmdErrKey(c) === cmdF.err) &&
+    (!q || c.path.toLowerCase().includes(q))).reverse();
+}
 function renderCmds() {
+  const all = state.commands;
+  const n = { pending: 0, done: 0, failed: 0 };
+  for (const c of all) n[c.status] = (n[c.status] || 0) + 1;
+  $("cmdSummary").textContent = all.length
+    ? [n.pending && `ожидают ${n.pending}`, n.done && `удалено ${n.done}`, n.failed && `ошибок ${n.failed}`].filter(Boolean).join(" · ")
+    : "нет команд";
+  $("cmdArrow").textContent = cmdF.open ? "▾" : "▸";
+  $("cmdBody").hidden = !cmdF.open;
+  // the agent's progress (agents since 1.36)
+  const d = state.agent && state.agent.deleting;
+  $("cmdProgress").hidden = !(d && d.total);
+  if (d && d.total) {
+    $("cmdProgressText").textContent = `Агент удаляет на ASIAIR: ${d.done} из ${d.total}` +
+      (d.failed ? `, не удалось ${d.failed}` : "") + (d.current ? ` — ${d.current}` : "");
+    $("cmdProgressBar").style.width = Math.round(100 * d.done / d.total) + "%";
+  }
+  if (!cmdF.open) return;
+  // the error filter lists the errors there are
+  const errs = new Map();
+  for (const c of all) if (c.status === "failed") errs.set(cmdErrKey(c), (errs.get(cmdErrKey(c)) || 0) + 1);
+  const es = $("cmdErr");
+  es.hidden = !errs.size;
+  const want = ["", ...errs.keys()].join("\n");
+  if (es.dataset.keys !== want) {
+    es.dataset.keys = want;
+    es.replaceChildren(el("option", { value: "", textContent: "любая ошибка" }),
+      ...[...errs].map(([k, c]) => el("option", { value: k, textContent: `${k || "(без текста)"} — ${c}` })));
+  }
+  if (cmdF.err && !errs.has(cmdF.err)) cmdF.err = "";
+  for (const [id, k] of [["cmdSearch", "q"], ["cmdStatus", "status"], ["cmdType", "type"], ["cmdLocal", "local"], ["cmdPeriod", "period"], ["cmdErr", "err"]]) {
+    if (document.activeElement !== $(id)) $(id).value = cmdF[k];
+  }
+  const list = filteredCmds();
+  const fp = list.filter(c => c.status === "pending").length, ff = list.filter(c => c.status === "failed").length;
+  $("cmdCancelShown").disabled = !fp; $("cmdCancelShown").textContent = `Отменить ожидающие (${fp})`;
+  $("cmdRetryShown").disabled = !ff; $("cmdRetryShown").textContent = `Повторить ошибки (${ff})`;
+  const fin = list.length - fp;
+  $("clearBtn").disabled = !fin; $("clearBtn").textContent = `Очистить завершённые (${fin})`;
+  $("cmdShown").textContent = list.length === all.length ? `всего ${all.length}` : `показано ${list.length} из ${all.length}`;
   const tb = $("cmds");
   tb.replaceChildren();
-  const cmds = [...state.commands].reverse();
-  if (!cmds.length) {
-    tb.append(el("tr", {}, el("td", { colSpan: 4, className: "muted", textContent: "нет команд" })));
-    return;
+  if (!list.length) {
+    tb.append(el("tr", {}, el("td", { colSpan: 5, className: "muted", textContent: all.length ? "нет команд по фильтру" : "нет команд" })));
   }
-  for (const c of cmds) {
+  for (const c of list.slice(0, cmdLimit)) {
     let st;
     if (c.status === "pending") st = el("span", { className: "badge pend", textContent: "ожидает агента" });
     else if (c.status === "done") st = el("span", { className: "badge on", textContent: "удалено" + (c.also_local ? " (и у меня)" : "") });
@@ -1344,13 +1441,49 @@ function renderCmds() {
       const b = el("button", { textContent: "Отменить" });
       b.onclick = async () => { await post("/ui/api/cancel", { id: c.id }); refresh(); };
       td.append(b);
+    } else if (c.status === "failed") {
+      const b = el("button", { textContent: "Повторить" });
+      b.onclick = async () => { await post("/ui/api/retry", { ids: [c.id] }); refresh(); };
+      td.append(b);
     }
     const what = c.type === "delete_dir" ? el("td", { className: "name" }, "📁 " + c.path + "/ ", el("span", { className: "muted", textContent: "папка целиком" }))
       : el("td", { className: "name", textContent: c.path });
     tb.append(el("tr", {}, what, el("td", {}, st),
-      el("td", { textContent: fmtTime(c.created) }), td));
+      el("td", { textContent: fmtTime(c.created) }),
+      el("td", { textContent: c.status === "pending" ? "" : fmtTime(c.updated) }), td));
   }
+  $("cmdMore").hidden = list.length <= cmdLimit;
 }
+$("cmdHead").onclick = () => { cmdF.open = !cmdF.open; saveCmdF(); renderCmds(); };
+for (const [id, k, ev] of [["cmdSearch", "q", "input"], ["cmdStatus", "status", "change"], ["cmdType", "type", "change"], ["cmdLocal", "local", "change"], ["cmdPeriod", "period", "change"], ["cmdErr", "err", "change"]]) {
+  $(id).addEventListener(ev, () => { cmdF[k] = $(id).value; cmdLimit = 200; saveCmdF(); renderCmds(); });
+}
+$("cmdReset").onclick = () => { Object.assign(cmdF, { q: "", status: "", type: "", local: "", period: "", err: "" }); saveCmdF(); renderCmds(); };
+$("cmdMoreBtn").onclick = () => { cmdLimit += 500; renderCmds(); };
+$("cmdCancelShown").onclick = async () => {
+  const ids = filteredCmds().filter(c => c.status === "pending").map(c => c.id);
+  if (!ids.length || !confirm(`Отменить ${ids.length} команд удаления? Файлы останутся на ASIAIR.`)) return;
+  await post("/ui/api/cancel", { ids }); refresh();
+};
+$("cmdRetryShown").onclick = async () => {
+  const ids = filteredCmds().filter(c => c.status === "failed").map(c => c.id);
+  if (!ids.length) return;
+  await post("/ui/api/retry", { ids }); refresh();
+};
+
+// the important steps the agent reported (agents since 1.36), newest first
+function renderAgentEvents() {
+  const ev = state.agent_events || [];
+  if (!ev.length) { $("aEvSum").textContent = "—"; $("aEvList").replaceChildren(); return; }
+  const last = ev[ev.length - 1];
+  $("aEvSum").textContent = `${fmtTime(last.time)}: ${last.text}`;
+  $("aEvSum").className = last.level === "error" ? "err" : "";
+  if (!$("aEvBox").open) return;
+  $("aEvList").replaceChildren(...ev.slice(-200).reverse().map(e => el("tr", {},
+    el("td", { className: "muted", textContent: fmtTime(e.time) }),
+    el("td", { className: e.level === "error" ? "err" : e.level === "warn" ? "warn" : "", textContent: e.text, style: "white-space:normal" }))));
+}
+$("aEvBox").addEventListener("toggle", renderAgentEvents);
 
 // deviceHost returns the address of the ASIAIR from its link, or "" for a
 // folder or a USB stick.
@@ -1404,6 +1537,10 @@ function renderStatus() {
   $("aSeen").textContent = (stale ? "нет связи с " + fmtTime(state.last_seen) : ago(state.last_seen)) +
     (a && a.connection === "tailscale" ? " · через Tailscale" : a && a.connection === "internet" ? " · через интернет" : "");
   $("aScan").textContent = ago(a.last_scan);
+  $("aWifi").textContent = a.wifi && a.wifi.ssid
+    ? a.wifi.ssid + (a.wifi.signal ? ` · сигнал ${a.wifi.signal}%` : "") + (a.wifi.iface ? ` · ${a.wifi.iface}` : "")
+    : a.version && !newer("1.36.0", a.version) ? "не подключён (кабель или Wi-Fi выключен)" : "—";
+  renderAgentEvents();
   $("aQueue").textContent = `${a.queue_files || 0} файл(ов), ${fmtBytes(a.queue_bytes || 0)}`;
   $("aSent").textContent = `${a.sent_files || 0} файл(ов), ${fmtBytes(a.sent_bytes || 0)} с момента запуска агента`;
   $("aErr").textContent = a.last_error || "—";
@@ -1494,12 +1631,22 @@ function newer(x, y) {
 function renderUpdate(u, a) {
   const ver = v => v === "dev" ? "собран вручную" : v ? "v" + v : "—";
   $("hdrVersion").textContent = "приёмник " + ver(u.version);
-  $("upMine").textContent = ver(u.version) + (u.latest && newer(u.latest, u.version) ? " — есть новая версия" : u.latest && u.version === u.latest ? " — последняя" : "");
   const av = (a && a.version) || "";
-  $("upAgent").textContent = av ? ver(av) + (!state.agent_online ? " (на момент последней связи)" : "") +
-    (a.update && state.agent_online ? " — " + a.update : u.agent && newer(u.agent, av) ? ` — обновится до v${u.agent} при следующей связи` : "") : "агент ещё не выходил на связь";
+  const checked = !!u.latest;
+  // a release that changed nothing in a program is not an update for it
+  const recvNew = checked && newer(u.latest, u.version) && !u.receiver_same;
+  const agentNew = !!av && !u.agent_same && (checked && newer(u.latest, av) || !!u.agent && newer(u.agent, av));
+  const none = " — обновлений нет";
+  $("upMine").textContent = ver(u.version) + (u.version === "dev" ? "" : recvNew ? ` — доступна v${u.latest}`
+    : !checked ? "" : newer(u.latest, u.version) ? `${none} (в v${u.latest} приёмник не менялся)` : `${none}, это последняя версия`);
+  $("upAgent").textContent = !av ? "агент ещё не выходил на связь"
+    : ver(av) + (!state.agent_online ? " (на момент последней связи)" : "") +
+      (a.update && state.agent_online ? " — " + a.update
+        : agentNew ? ` — доступна v${u.agent && newer(u.agent, u.latest || "") ? u.agent : u.latest}, агент обновится при следующей связи`
+        : !checked || av === "dev" ? ""
+        : newer(u.latest, av) ? `${none} (в v${u.latest} агент не менялся)` : `${none}, это последняя версия`);
   const seen = state.last_seen && !state.last_seen.startsWith("0001");
-  $("aVersion").textContent = av ? ver(av) + (a.update ? " — " + a.update : u.agent && newer(u.agent, av) ? ` — обновится до v${u.agent}` : "")
+  $("aVersion").textContent = av ? ver(av) + (a.update ? " — " + a.update : u.agent && newer(u.agent, av) && !u.agent_same ? ` — обновится до v${u.agent}` : "")
     : seen ? "неизвестна (старая версия агента — обновите его вручную)" : "агент ещё не выходил на связь";
   $("upLatest").innerHTML = "";
   if (u.latest) {
@@ -1508,13 +1655,14 @@ function renderUpdate(u, a) {
   } else {
     $("upLatest").textContent = u.checking ? "проверка…" : u.checked && !u.checked.startsWith("0001") ? "не удалось узнать" : "ещё не проверялось";
   }
-  $("upStatus").textContent = u.status || (u.checking ? "Проверка обновлений…" : "");
+  // a status about a download or a new version is stale once nothing is new
+  $("upStatus").textContent = u.checking ? (u.status || "Проверка обновлений…")
+    : !recvNew && !agentNew && checked && !u.error ? "Обновлений нет: установлены последние версии."
+    : u.status || "";
   $("upErr").textContent = u.error || "";
   $("upCheck").disabled = u.checking;
   // something to install: a newer receiver it can put in itself, or a newer
   // agent for the agent
-  const recvNew = !!u.latest && newer(u.latest, u.version);
-  const agentNew = !!av && (!!u.latest && newer(u.latest, av) || !!u.agent && newer(u.agent, av));
   const canInstall = recvNew && u.can_self_update || agentNew;
   $("upInstall").disabled = u.checking || !canInstall;
   $("upInstall").title = canInstall ? "" : !u.latest ? "Сначала нажмите «Проверить»" : "Обновлений нет: установлены последние версии";
@@ -1525,7 +1673,7 @@ function renderUpdate(u, a) {
   if (u.token_set) $("upTokenBox").open = true;
   $("hdrUpdate").hidden = !recvNew && !agentNew;
   $("hdrUpdate").textContent = recvNew ? "доступна версия v" + u.latest : agentNew ? "агент: доступна версия v" + (u.agent && newer(u.agent, u.latest || "") ? u.agent : u.latest) : "";
-  if (!u.can_self_update && u.latest && newer(u.latest, u.version))
+  if (!u.can_self_update && u.latest && newer(u.latest, u.version) && !u.receiver_same)
     $("upStatus").textContent = (u.version === "dev" ? "Приёмник собран вручную и сам не обновляется. " : "") + ($("upStatus").textContent || "");
 }
 async function updateAction(body, okText) {
@@ -2735,7 +2883,11 @@ $("pauseBtn").onclick = async () => {
   try { await post("/ui/api/pause", { paused: !(state.paused || state.wait_start) }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
 };
-$("clearBtn").onclick = async () => { await post("/ui/api/clear"); refresh(); };
+$("clearBtn").onclick = async () => {
+  const ids = filteredCmds().filter(c => c.status !== "pending").map(c => c.id);
+  if (!ids.length) return;
+  await post("/ui/api/clear", { ids }); refresh();
+};
 
 // ---------- folding the settings ----------
 function setSetupFolded(f) {
@@ -2754,7 +2906,7 @@ function renderSetupSummary(firstRun) {
   if (state.dest_dir) parts.push("папка " + state.dest_dir);
   if (d.total) parts.push(`свободно ${fmtBytes(d.free)}` + (d.full ? " (мало!)" : ""));
   if (t.enabled) parts.push("Tailscale: " + (t.state === "running" ? "подключён" : t.state === "login" ? "нужно войти" : t.state));
-  if (u.version) parts.push("приёмник " + (u.version === "dev" ? "dev" : "v" + u.version) + (u.latest && newer(u.latest, u.version) ? ", есть обновление" : ""));
+  if (u.version) parts.push("приёмник " + (u.version === "dev" ? "dev" : "v" + u.version) + (u.latest && newer(u.latest, u.version) && !u.receiver_same ? ", есть обновление" : ""));
   $("setupSummary").textContent = $("setupWrap").classList.contains("folded") ? parts.join(" · ") : "";
 }
 $("setupToggle").onclick = () => {

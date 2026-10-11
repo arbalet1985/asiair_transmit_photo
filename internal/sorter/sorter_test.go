@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -481,5 +482,30 @@ func TestScanForOnly(t *testing.T) {
 	}
 	if frames, _ := ScanForOnly(in, out, nil, nil); len(frames) != 4 {
 		t.Fatalf("all: %d", len(frames))
+	}
+}
+
+func TestObjectsMatching(t *testing.T) {
+	all := []string{"M 1", "M 101", "M 31", "NGC 7000", "IC 1396"}
+	for _, c := range []struct {
+		q    string
+		want string
+	}{
+		{"m1", "M 1"},       // exact, not M 101
+		{"M 31", "M 31"},    // spaces do not split the name
+		{"m31", "M 31"},     // nor do they have to be typed
+		{"ngc", "NGC 7000"}, // a part of the name
+		{"10", "M 101"},     // likewise
+		{"", "M 1,M 101,M 31,NGC 7000,IC 1396"},
+		{"xyz", ""},
+	} {
+		if got := strings.Join(ObjectsMatching(all, c.q), ","); got != c.want {
+			t.Errorf("%q: %q, want %q", c.q, got, c.want)
+		}
+	}
+	names := []string{"M 10", "M 2", "IC 5", "m 1"}
+	sort.Slice(names, func(i, j int) bool { return NaturalLess(names[i], names[j]) })
+	if got := strings.Join(names, ","); got != "IC 5,m 1,M 2,M 10" {
+		t.Errorf("order %q", got)
 	}
 }

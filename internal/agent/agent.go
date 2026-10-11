@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/ratelimit"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
@@ -104,6 +105,13 @@ type Agent struct {
 	// installed when the user asks (InstallUpdate), whatever auto_update says.
 	ConfirmUpdate bool
 	Exe           string // program to replace; the running one when empty (tests set it)
+	// App is the program name ("asiair-agent"): crashes are then reported
+	// to the receiver on the next start (see reportCrash). Empty in tests.
+	App string
+
+	wifi   atomic.Pointer[protocol.WiFiInfo]
+	cmds   *cmdRunner // commands from the receiver, carried out apart from the sync
+	events eventLog   // important steps, sent to the receiver
 
 	// OnConfigChanged is told what the agent itself wrote to agent.yaml
 	// (a new ASIAIR address, the receiver certificate), for the window.
@@ -161,6 +169,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		partial: map[string]int64{}, fetch: map[string]bool{}, active: map[string]*upload{},
 		wake:        make(chan struct{}, 1),
 		syncSession: newSession(),
+		cmds:        newCmdRunner(),
 	}
 	a.status.Version = protocol.Version
 	a.status.CanLogs = true
@@ -257,20 +266,30 @@ func (a *Agent) saveState() {
 func (a *Agent) Run(ctx context.Context) error {
 	log.Printf("Агент %s: ASIAIR %s → %s, ограничение скорости: %s",
 		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate.Load()))
+	a.reportCrash()
+	a.event("", "агент %s запущен (ASIAIR %s)", protocol.Version, a.cfg.ASIAIR)
 	if a.Restart != nil {
 		a.startupUpdate()
 	}
+	// every loop is guarded: a panic in one restarts it, not the agent
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		a.pollLoop(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		a.watchPath(ctx)
-	}()
-	a.transferLoop(ctx)
+	loops := []struct {
+		name string
+		fn   func(context.Context)
+	}{
+		{"связь с приёмником", a.pollLoop},
+		{"слежение за файлами", a.watchPath},
+		{"команды удаления", a.commandLoop},
+		{"сведения о сети", a.netInfoLoop},
+	}
+	for _, l := range loops {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.guard(ctx, l.name, l.fn)
+		}()
+	}
+	a.guard(ctx, "передача", a.transferLoop)
 	wg.Wait()
 	a.Close()
 	return nil
@@ -485,10 +504,11 @@ func (a *Agent) transferLoop(ctx context.Context) {
 type upload struct {
 	f       source.File
 	ctx     context.Context
-	cancel  context.CancelFunc // the pause interrupts the upload
-	done    atomic.Int64       // bytes the receiver has, with this upload
-	started atomic.Bool        // the data is being sent (done is meaningful)
-	seq     uint64             // start order
+	cancel  context.CancelFunc          // the pause interrupts the upload
+	done    atomic.Int64                // bytes the receiver has, with this upload
+	started atomic.Bool                 // the data is being sent (done is meaningful)
+	seq     uint64                      // start order
+	preview atomic.Pointer[fits.Stream] // the picture as it is sent (FITS only)
 }
 
 func (a *Agent) activeCount() int {
@@ -613,11 +633,18 @@ func (a *Agent) scan(ctx context.Context) error {
 		return nil
 	})
 	a.mu.Lock()
+	was, ever := a.status.Connected, a.everScanned
 	a.status.Connected = err == nil
 	if err != nil {
 		a.status.ASIAIRError = err.Error()
 		a.mu.Unlock()
+		if was && ctx.Err() == nil {
+			a.event("warn", "ASIAIR перестал отвечать: %v", err)
+		}
 		return err
+	}
+	if !was && ever {
+		a.event("", "ASIAIR снова доступен")
 	}
 	a.status.ASIAIRError = ""
 	a.scanErrors, a.everScanned = 0, true
@@ -917,8 +944,15 @@ func (a *Agent) uploadOnce(u *upload) error {
 	// The checksum covers the whole file, so hash the part the receiver
 	// already has (read over the local network, not rate limited).
 	h := sha256.New()
+	var hw io.Writer = h
+	if isFITS(f.Path) {
+		// the tray shows the frame as it goes, built from the bytes sent
+		st := fits.NewStream(previewWidth)
+		u.preview.Store(st)
+		hw = io.MultiWriter(h, st)
+	}
 	if offset > 0 {
-		if _, err := io.CopyN(h, src, offset); err != nil {
+		if _, err := io.CopyN(hw, src, offset); err != nil {
 			return fmt.Errorf("чтение с ASIAIR: %w", err)
 		}
 		log.Printf("Агент: %s: продолжение с %s из %s", f.Path, config.FormatBytes(offset), config.FormatBytes(f.Size))
@@ -931,13 +965,13 @@ func (a *Agent) uploadOnce(u *upload) error {
 
 	share, _, _ := strings.Cut(f.Path, "/")
 	read := &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, share: share}
-	var data io.Reader = &progressReader{r: io.TeeReader(read, h), n: &u.done}
+	var data io.Reader = &progressReader{r: io.TeeReader(read, hw), n: &u.done}
 	size, encoding := f.Size-offset, ""
 	var enc *wire.Encoder
 	if compress {
 		// the rate limit and the network see the compressed bytes; the
 		// progress counts a block once it has gone out
-		enc = wire.NewEncoder(io.TeeReader(read, h))
+		enc = wire.NewEncoder(io.TeeReader(read, hw))
 		defer enc.Close()
 		enc.Busy = a.diag.busy
 		enc.Done = func(raw int64) { u.done.Store(offset + raw) }
@@ -1013,9 +1047,56 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// previewWidth: the width of the picture shown in the tray.
+const previewWidth = 320
+
+func isFITS(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".fit", ".fits", ".fts":
+		return true
+	}
+	return false
+}
+
+// UploadPreview is the frame being sent, for the tray.
+type UploadPreview struct {
+	Path       string
+	Done, Size int64
+	Image      *fits.Image // the rows sent so far; nil when none yet or not FITS
+	Full       int         // the height of the whole picture
+	FromBottom bool        // Image is the bottom part of the picture
+	Others     int         // other files being sent at the same time
+}
+
+// Preview returns the first file being sent (nil when none).
+func (a *Agent) Preview() *UploadPreview {
+	a.mu.Lock()
+	var first *upload
+	n := 0
+	for _, u := range a.active {
+		if !u.started.Load() {
+			continue
+		}
+		n++
+		if first == nil || u.seq < first.seq {
+			first = u
+		}
+	}
+	a.mu.Unlock()
+	if first == nil {
+		return nil
+	}
+	p := &UploadPreview{Path: first.f.Path, Done: first.done.Load(), Size: first.f.Size, Others: n - 1}
+	if st := first.preview.Load(); st != nil {
+		p.Image, p.Full, p.FromBottom = st.Snapshot()
+	}
+	return p
+}
+
 // ---------- commands from the receiver ----------
 
 func (a *Agent) pollLoop(ctx context.Context) {
+	lostAt := time.Now()
 	for ctx.Err() == nil {
 		held, err := a.poll(ctx)
 		if ctx.Err() != nil {
@@ -1037,9 +1118,14 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			if err.Error() != prev {
 				log.Printf("Агент: связь с приёмником: %v", err)
 			}
+			if prev == "" {
+				lostAt = time.Now()
+			}
 			a.setError(err)
 		} else if prev != "" {
-			log.Printf("Агент: связь с приёмником восстановлена")
+			// told to the receiver now that it hears again: why it was lost
+			a.event("warn", "связь с приёмником восстановлена; её не было %s (%s)",
+				time.Since(lostAt).Round(time.Second), prev)
 		}
 		if err == nil {
 			a.updateWorks()
@@ -1104,6 +1190,9 @@ func (a *Agent) Status() protocol.AgentStatus {
 		a.status.Next = append(a.status.Next, protocol.Upload{Path: f.Path, Size: f.Size, Done: min(a.partial[f.Path], f.Size)})
 	}
 	a.status.Diag = a.diag.result(a.status.Streams)
+	a.status.Deleting = a.cmds.deleting()
+	a.status.WiFi = a.wifi.Load()
+	a.status.Build = protocol.Build
 	a.status.Speed = a.lim.Speed()
 	a.status.Rate = a.lim.Rate()
 	own := a.localRate.Load()
@@ -1143,7 +1232,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 
 	// the receiver holds the request until something changes for the agent
 	a.syncSeq++
-	req := protocol.SyncRequest{Status: st, Rev: a.syncRev, Session: a.syncSession, Seq: a.syncSeq}
+	req := protocol.SyncRequest{Status: st, Rev: a.syncRev, Session: a.syncSession, Seq: a.syncSeq, Events: a.pendingEvents()}
 	if a.syncRev != 0 {
 		req.WaitMS = int(max(a.cfg.PollInterval.D(), time.Second) / time.Millisecond)
 	}
@@ -1188,23 +1277,8 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.setRemotePaused(resp.Paused, resp.WaitStart)
 	a.startSpeedTest(ctx, resp.SpeedTest)
 	a.startLogs(ctx, resp.Logs)
-	for _, c := range resp.Commands {
-		if ctx.Err() != nil {
-			return held, nil
-		}
-		res := protocol.CommandResult{ID: c.ID, OK: true}
-		switch c.Type {
-		case protocol.CmdDelete, protocol.CmdDeleteDir:
-			if err := a.deletePath(c.Path, c.Type == protocol.CmdDeleteDir); err != nil {
-				res.OK, res.Error = false, err.Error()
-			}
-		default:
-			res.OK, res.Error = false, "неизвестная команда "+c.Type
-		}
-		if err := a.cl.postJSON(ctx, "/api/result", res, nil); err != nil {
-			return held, err
-		}
-	}
+	a.ackEvents(resp.EventsAck)
+	a.takeCommands(resp.Commands, resp.BatchResults)
 	return held, nil
 }
 
@@ -1226,25 +1300,8 @@ func (a *Agent) deletePath(p string, dir bool) error {
 	if _, _, err := source.SplitPath(p); err != nil {
 		return err
 	}
-	// p itself, or with dir everything under it
-	under := func(q string) bool { return q == p || dir && strings.HasPrefix(q, p+"/") }
-	what := "удалён"
-	if dir {
-		what = "удалена папка"
-	}
-	a.mu.Lock()
-	var marked []string
-	mark := func(q string) {
-		if under(q) && !a.deleted[q] {
-			a.deleted[q] = true
-			marked = append(marked, q)
-		}
-	}
-	mark(p)
-	for _, f := range a.files {
-		mark(f.Path)
-	}
-	a.mu.Unlock()
+	t := []delTarget{{p, dir}}
+	marked := a.markDeleted(t)
 	var err error
 	if dir {
 		err = a.source().RemoveAll(p)
@@ -1256,43 +1313,16 @@ func (a *Agent) deletePath(p string, dir bool) error {
 	}
 	if err != nil {
 		// with a folder some files may be gone already: the next scan tells
-		a.mu.Lock()
-		for _, q := range marked {
-			delete(a.deleted, q)
-		}
-		a.mu.Unlock()
+		a.forgetDeleted(nil, t, marked)
 		log.Printf("Агент: не удалось удалить %s на ASIAIR: %v", p, err)
 		return err
 	}
+	what := "удалён"
+	if dir {
+		what = "удалена папка"
+	}
 	log.Printf("Агент: %s на ASIAIR: %s", what, p)
-	a.mu.Lock()
-	for q := range a.sent {
-		if under(q) {
-			delete(a.sent, q)
-		}
-	}
-	for q := range a.seen {
-		if under(q) {
-			delete(a.seen, q)
-		}
-	}
-	for q := range a.partial {
-		if under(q) {
-			delete(a.partial, q)
-		}
-	}
-	kept := a.files[:0]
-	for _, f := range a.files {
-		if under(f.Path) {
-			a.dequeue(f.Path)
-		} else {
-			kept = append(kept, f)
-		}
-	}
-	a.files = kept
-	a.dequeue(p)
-	a.saveState()
-	a.mu.Unlock()
+	a.forgetDeleted(t, nil, marked)
 	return nil
 }
 

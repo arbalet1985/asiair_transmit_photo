@@ -28,6 +28,10 @@ const DefaultRepo = "arbalet1985/asiair_transmit_photo"
 const (
 	AgentAsset    = "asiair-agent.exe"
 	ReceiverAsset = "asiair-receiver.exe"
+	// BuildsAsset maps each program of a release to its build (see
+	// protocol.Build): a program whose build is the same as the running one
+	// has not changed in that release.
+	BuildsAsset = "builds.json"
 )
 
 // Release is a published version.
@@ -194,6 +198,36 @@ func (c *Client) Latest(ctx context.Context) (*Release, error) {
 		rel.Assets[a.Name] = Asset{Name: a.Name, Size: a.Size, SHA256: strings.ToLower(sum), api: a.URL, public: a.Public}
 	}
 	return rel, nil
+}
+
+// Builds returns the build of each program of the release, or nil when
+// the release does not say (releases before builds.json).
+func (c *Client) Builds(ctx context.Context, rel *Release) (map[string]string, error) {
+	a, ok := rel.Assets[BuildsAsset]
+	if !ok {
+		return nil, nil
+	}
+	url := a.public
+	if c.Token != "" && a.api != "" {
+		url = a.api
+	}
+	resp, err := c.request(ctx, url, "application/octet-stream")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var m map[string]string
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&m); err != nil {
+		return nil, fmt.Errorf("%s: %w", BuildsAsset, err)
+	}
+	return m, nil
+}
+
+// Unchanged reports whether the program asset of a release with builds is
+// the same code as the running build (then there is nothing to update).
+// Unknown builds (old releases, programs built by hand) are never the same.
+func Unchanged(builds map[string]string, asset, running string) bool {
+	return running != "" && builds[asset] == running
 }
 
 // Download saves the asset to dst (via a temporary file) and verifies its

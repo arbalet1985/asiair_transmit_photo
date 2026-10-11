@@ -197,6 +197,10 @@ func (s *SMB) share(ctx context.Context, name string) (*smb2.Share, error) {
 	return m, nil
 }
 
+// Reconnect drops the connection (e.g. after the network changed): the
+// next call connects again.
+func (s *SMB) Reconnect() { s.reset() }
+
 // reset drops the connection so the next call reconnects.
 func (s *SMB) reset() {
 	s.mu.Lock()

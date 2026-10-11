@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -117,6 +118,9 @@ type window struct {
 	foldersInfo                *walk.Label
 	loginRow                   *walk.Composite
 	modeBox, kindBox           *walk.ComboBox
+	objBox                     *walk.ComboBox // the object: a list with a quick search
+	objList                    []string       // the objects of the frames shown in objBox
+	objBusy                    bool           // objBox is being refilled: ignore its events
 	fillBox                    *walk.CheckBox
 	btnScan, btnApply, btnStop *walk.PushButton
 	btnOpen                    *walk.PushButton
@@ -285,6 +289,13 @@ func main() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
 						w.filterChanged()
 					}},
+					Label{Text: "Объект:"},
+					ComboBox{AssignTo: &w.objBox, Editable: true, Model: []string{allObjects}, CurrentIndex: 0,
+						MinSize: Size{Width: 130}, MaxSize: Size{Width: 200},
+						ToolTipText:       "Только кадры этого объекта. Начните вводить имя — в списке останутся подходящие объекты («m31» найдёт «M 31», «ngc» — все NGC); точное имя выбирает только этот объект.",
+						OnTextChanged:     func() { w.objectChanged(true) },
+						OnEditingFinished: func() { w.objectChanged(false) }},
+					PushButton{Text: "✕", MaxSize: Size{Width: 28}, ToolTipText: "Все объекты", OnClicked: func() { w.setObjectText("") }},
 					Label{Text: "Фильтр:"},
 					LineEdit{AssignTo: &w.filterEdit, MinSize: Size{Width: 160}, MaxSize: Size{Width: 240}, CueBanner: "объект, ночь, фильтр, папка…",
 						OnTextChanged: func() { w.model.setFilter(w.filterEdit.Text()); w.filterChanged() },
@@ -602,6 +613,7 @@ func (w *window) scan() {
 			w.scannedOnly = strings.Join(only, "\n")
 			w.offline = offline
 			w.model.set(l, remote && !offline)
+			w.objectsChanged()
 			w.btnGone.SetText(goneOn)
 			w.btnDelete.SetVisible(false)
 			w.showAll()
@@ -954,6 +966,68 @@ func (w *window) deleteGone() {
 			w.scan()
 		})
 	}()
+}
+
+// objectChanged applies the object box; typing: the text is being typed,
+// so the list keeps only the objects that match it.
+func (w *window) objectChanged(typing bool) {
+	if w.objBusy {
+		return
+	}
+	text := w.objBox.Text()
+	w.model.setObject(text)
+	w.filterChanged()
+	if typing {
+		w.mw.Synchronize(func() { w.fillObjects(text) })
+	}
+}
+
+// fillObjects puts the objects matching text into the list of the object
+// box, keeping what is typed and the cursor.
+func (w *window) fillObjects(text string) {
+	items := []string{allObjects}
+	t := strings.TrimSpace(text)
+	if t == allObjects {
+		t = ""
+	}
+	match := sorter.ObjectsMatching(w.objList, t)
+	if len(match) == 1 && sorter.NormObject(match[0]) == sorter.NormObject(t) {
+		match = w.objList // one chosen: the list offers all to choose another
+	}
+	items = append(items, match...)
+	if cur, ok := w.objBox.Model().([]string); ok && slices.Equal(cur, items) {
+		return
+	}
+	start, end := w.objBox.TextSelection()
+	w.objBusy = true
+	w.objBox.SetModel(items)
+	w.objBox.SetText(text)
+	w.objBox.SetTextSelection(start, end)
+	w.objBusy = false
+}
+
+// setObjectText chooses the object (or all with "").
+func (w *window) setObjectText(text string) {
+	w.objBusy = true
+	w.objBox.SetModel(append([]string{allObjects}, w.objList...))
+	if text == "" {
+		w.objBox.SetCurrentIndex(0)
+	} else {
+		w.objBox.SetText(text)
+	}
+	w.objBusy = false
+	w.objectChanged(false)
+}
+
+// objectsChanged refills the object box after the frames were read: the
+// object chosen stays if the new frames have it.
+func (w *window) objectsChanged() {
+	w.objList = w.model.objects()
+	keep := ""
+	if t := strings.TrimSpace(w.objBox.Text()); t != allObjects && len(sorter.ObjectsMatching(w.objList, t)) > 0 {
+		keep = t
+	}
+	w.setObjectText(keep)
 }
 
 // filterChanged shows the model filtered again and how much it shows.

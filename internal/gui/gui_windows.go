@@ -62,6 +62,7 @@ func (r *runner) start(cfgPath string, paused bool) {
 		r.agent.Restart = svc.Restart
 		r.agent.ConfirmUpdate = true // the user installs new versions with "Обновить"
 		r.agent.OnConfigChanged = r.onConfig
+		r.agent.App = appName
 	}
 	if err != nil {
 		r.err = err
@@ -130,6 +131,8 @@ type window struct {
 	tabs                                                                 *walk.TabWidget
 	form                                                                 settingsForm
 
+	preview trayPreview // the frame being sent, over the tray icon
+
 	tsNotified     string // login link already announced in the tray
 	updateNotified string // new version already announced in the tray
 
@@ -161,6 +164,7 @@ func Run(cfgPath string) error {
 		return nil
 	}
 	defer release()
+	svc.StartGuardian(appName) // brings the agent back after a crash
 
 	w := &window{
 		cfgPath:      cfgPath,
@@ -211,6 +215,23 @@ func Run(cfgPath string) error {
 	w.update()
 
 	stop := make(chan struct{})
+	w.preview.w = w
+	if err := w.preview.create(); err != nil {
+		log.Printf("Окно предпросмотра в трее: %v", err)
+	} else {
+		go func() {
+			t := time.NewTicker(200 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-t.C:
+					w.mw.Synchronize(w.preview.tick)
+				}
+			}
+		}()
+	}
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -529,6 +550,9 @@ func (w *window) setTray(state, tip string) {
 	if r := []rune(tip); len(r) > 120 { // Windows limits tooltips to 127 chars
 		tip = string(r[:120]) + "…"
 	}
+	if w.preview.shown {
+		tip = "" // the preview window shows it
+	}
 	w.ni.SetToolTip(tip)
 }
 
@@ -569,7 +593,11 @@ func (w *window) update() {
 	st := a.Status()
 	lastSync, syncErr := a.Receiver()
 	w.updateTailscale(a)
-	setShort(w.lblVersion, versionText(st.Update), maxStatus)
+	upd := st.Update
+	if upd == "" && syncErr == "" && !lastSync.IsZero() && protocol.Version != "dev" {
+		upd = "обновлений нет" // the receiver offers a new version when there is one
+	}
+	setShort(w.lblVersion, versionText(upd), maxStatus)
 	w.updateRateNote(st)
 	w.updateDiag(st)
 	w.updateOffer(a)

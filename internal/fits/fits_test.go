@@ -143,3 +143,48 @@ func TestPreviewTruncated(t *testing.T) {
 		t.Fatal("truncated file accepted")
 	}
 }
+
+// TestStreamMatchesPreview: the stream fed in odd pieces ends with the
+// same picture as Preview, and shows a part of it on the way.
+func TestStreamMatchesPreview(t *testing.T) {
+	w, h := 64, 40
+	var data bytes.Buffer
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			binary.Write(&data, binary.BigEndian, int16(x*100+y*10))
+		}
+	}
+	f := makeFITS([]string{"SIMPLE  = T", "BITPIX  = 16", "NAXIS   = 2", "NAXIS1  = 64", "NAXIS2  = 40", "BZERO   = 32768"}, data.Bytes())
+	want, err := Preview(bytes.NewReader(f), 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewStream(16)
+	half := len(f) / 2
+	for i := 0; i < half; i += 777 {
+		s.Write(f[i:min(i+777, half)])
+	}
+	part, full, _ := s.Snapshot()
+	if part == nil || part.Height >= full || full != want.Height {
+		t.Fatalf("half way: %+v of %d", part, full)
+	}
+	s.Write(f[half:])
+	got, _, _ := s.Snapshot()
+	if got.Width != want.Width || got.Height != want.Height || len(got.Data) != len(want.Data) {
+		t.Fatalf("size %dx%d, want %dx%d", got.Width, got.Height, want.Width, want.Height)
+	}
+	for i := range got.Data {
+		if math.Abs(float64(got.Data[i]-want.Data[i])) > 1e-6 {
+			t.Fatalf("pixel %d: %v, want %v", i, got.Data[i], want.Data[i])
+		}
+	}
+	if p := s.Progress(); p != 1 {
+		t.Fatalf("progress %v", p)
+	}
+	// not a FITS file: ignored
+	j := NewStream(16)
+	j.Write(bytes.Repeat([]byte{0xff}, 10000))
+	if im, _, _ := j.Snapshot(); im != nil {
+		t.Fatal("preview of a non-FITS file")
+	}
+}
