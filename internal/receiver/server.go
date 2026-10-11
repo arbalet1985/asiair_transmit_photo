@@ -64,6 +64,7 @@ type Server struct {
 	updater *updater
 
 	previews *previewCache
+	tilts    tiltCache
 
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
@@ -511,6 +512,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/plan", s.handleUIPlan)
 	mux.HandleFunc("/ui/api/catalog", s.handleUICatalog)
 	mux.HandleFunc("/ui/api/open", s.handleUIOpen)
+	mux.HandleFunc("/ui/api/tilt", s.handleUITilt)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
@@ -529,7 +531,15 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/mkdir", s.handleUIMkdir)
 	mux.HandleFunc("/ui/api/destdir", s.handleUIDestDir)
 	mux.HandleFunc("/ui/api/startup", s.handleUIStartup)
-	mux.HandleFunc("/ui/preview", gzipped(s.handleUIPreview))
+	// a preview is barely smaller compressed and takes as long to compress
+	// as to read: compressed only for a phone or another remote viewer
+	mux.HandleFunc("/ui/preview", func(w http.ResponseWriter, r *http.Request) {
+		if isRemote(r) {
+			gzipped(s.handleUIPreview)(w, r)
+			return
+		}
+		s.handleUIPreview(w, r)
+	})
 	return mux
 }
 

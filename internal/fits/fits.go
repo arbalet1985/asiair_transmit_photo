@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const blockSize = 2880
@@ -102,6 +104,8 @@ type Image struct {
 	// Binning is how many source pixels form one preview pixel (per axis).
 	Binning int
 	Bayer   string // debayered pattern, "" for mono or RGB data
+	// Stats: of the whole frame, per channel (only from Preview).
+	Stats []ChannelStats
 }
 
 // bayer colour index (0=R,1=G,2=B) for a pattern at (x%2, y%2).
@@ -177,21 +181,35 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 		return nil, errors.New("изображение слишком маленькое")
 	}
 	img.Width, img.Height, img.Channels, img.Binning = ow, oh, channels, step
+	usePlanes := planes
+	if channels == 1 {
+		usePlanes = 1 // ignore extra planes of a mono cube
+	}
+	if bitpix == 16 && step <= 256 { // the sum of a preview pixel fits 32 bits
+		return preview16(br, img, w, ht, usePlanes, isBayer, pattern, bscale, bzero)
+	}
 	sum := make([]float32, ow*oh*channels)
 	cnt := make([]float32, ow*oh*channels)
 
 	row := make([]byte, w*bpp)
 	vals := make([]float64, w)
-	usePlanes := planes
-	if channels == 1 {
-		usePlanes = 1 // ignore extra planes of a mono cube
-	}
+	acc := make([]momentAcc, channels)
 	for p := 0; p < usePlanes; p++ {
 		for y := 0; y < ht; y++ {
 			if _, err := io.ReadFull(br, row); err != nil {
 				return nil, fmt.Errorf("файл обрезан: %w", err)
 			}
 			decodeRow(row, bitpix, bscale, bzero, vals)
+			for x, v := range vals {
+				if math.IsNaN(v) {
+					continue
+				}
+				c := p
+				if isBayer {
+					c = pattern[y%2][x%2]
+				}
+				acc[c].add(v)
+			}
 			oy := y / step
 			if oy >= oh {
 				continue
@@ -222,6 +240,129 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 		flipRows(sum, ow*channels, oh)
 	}
 	img.Data = sum
+	for c, name := range channelNames(channels) {
+		img.Stats = append(img.Stats, acc[c].stats(name))
+	}
+	return img, nil
+}
+
+// preview16 is Preview of 16-bit integer data, the data of cameras: the
+// samples are binned as integers and counted in a histogram per channel
+// for the statistics. The data is read whole and worked on in bands of
+// rows at once.
+func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, pattern [2][2]int, bscale, bzero float64) (*Image, error) {
+	ow, oh, ch, step := img.Width, img.Height, img.Channels, img.Binning
+	data := make([]byte, w*ht*2*planes)
+	if _, err := io.ReadFull(br, data); err != nil {
+		return nil, fmt.Errorf("файл обрезан: %w", err)
+	}
+	sum := make([]uint32, ow*oh*ch)
+	cw := ow * step // columns inside the preview
+	// row adds row y of plane p; every band has its own histograms
+	row := func(p, y int, hist [][]uint32) {
+		r := data[(p*ht+y)*w*2:][:w*2]
+		oy := y / step
+		in := oy < oh
+		base := oy * ow * ch
+		if isBayer {
+			pr := pattern[y%2]
+			h0, h1 := hist[pr[0]], hist[pr[1]]
+			// i: the preview pixel of column x, k: columns left in it
+			i, k := base, step
+			for x := 0; x+1 < w; x += 2 {
+				// int16 + 32768: the sample as unsigned
+				u0 := uint16(r[2*x])<<8 | uint16(r[2*x+1]) ^ 0x8000
+				u1 := uint16(r[2*x+2])<<8 | uint16(r[2*x+3]) ^ 0x8000
+				h0[u0]++
+				h1[u1]++
+				if in && x < cw {
+					sum[i+pr[0]] += uint32(u0)
+					sum[i+pr[1]] += uint32(u1)
+					if k -= 2; k == 0 {
+						i, k = i+ch, step
+					}
+				}
+			}
+			if w%2 == 1 {
+				x := w - 1
+				h0[uint16(r[2*x])<<8|uint16(r[2*x+1])^0x8000]++
+			}
+			return
+		}
+		hc := hist[p]
+		i, k := base+p, step
+		for x := 0; x < w; x++ {
+			u := uint16(r[2*x])<<8 | uint16(r[2*x+1]) ^ 0x8000
+			hc[u]++
+			if in && x < cw {
+				sum[i] += uint32(u)
+				if k--; k == 0 {
+					i, k = i+ch, step
+				}
+			}
+		}
+	}
+	// bands of whole preview rows: no two bands add to the same pixel
+	bands := max(1, min(runtime.GOMAXPROCS(0), 8, ht/64))
+	per := ((ht+step-1)/step + bands - 1) / bands * step
+	hists := make([][][]uint32, bands)
+	var wg sync.WaitGroup
+	for b := range bands {
+		hist := make([][]uint32, ch)
+		for c := range hist {
+			hist[c] = make([]uint32, 65536)
+		}
+		hists[b] = hist
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := 0; p < planes; p++ {
+				for y := b * per; y < min((b+1)*per, ht); y++ {
+					row(p, y, hist)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	hist := hists[0]
+	for _, h := range hists[1:] {
+		for c := range h {
+			for u, k := range h[c] {
+				hist[c][u] += k
+			}
+		}
+	}
+	// samples in a preview pixel per channel: a Bayer square has one red,
+	// two green and one blue sample per 2×2
+	cnt := make([]float64, ch)
+	for c := range cnt {
+		cnt[c] = float64(step * step)
+	}
+	if isBayer {
+		q := float64(step * step / 4)
+		cnt[0], cnt[1], cnt[2] = q, 2*q, q
+	}
+	var mul, add [3]float32
+	for c := range ch {
+		mul[c] = float32(1 / (cnt[c] * 65535))
+		if bscale < 0 {
+			mul[c], add[c] = -mul[c], 1
+		}
+	}
+	d := make([]float32, len(sum))
+	for i, c := 0, 0; i < len(sum); i++ {
+		d[i] = float32(sum[i])*mul[c] + add[c]
+		if c++; c == ch {
+			c = 0
+		}
+	}
+	if strings.EqualFold(img.Header.Get("ROWORDER"), "BOTTOM-UP") {
+		flipRows(d, ow*ch, oh)
+	}
+	img.Data = d
+	for c, name := range channelNames(ch) {
+		img.Stats = append(img.Stats, histStats(name, hist[c], bscale, bzero))
+	}
 	return img, nil
 }
 

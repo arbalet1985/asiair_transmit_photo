@@ -33,8 +33,10 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/stars"
 )
 
 // The .syso resource files next to this file carry the application icon and
@@ -60,6 +62,9 @@ type settings struct {
 	FillCalibration bool                     `json:"fill_calibration"`
 	BlinkSpeed      int                      `json:"blink_speed,omitempty"` // half frames per second
 	ShowMoon        bool                     `json:"show_moon,omitempty"`
+	ShowTilt        bool                     `json:"show_tilt,omitempty"`
+	ShowHist        bool                     `json:"show_hist,omitempty"`
+	HistMode        int                      `json:"hist_mode,omitempty"`
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
 	Planner         plannerSettings          `json:"planner"`
 	// Folders: for each input (receiverKey) the folders synchronised; none = all
@@ -156,6 +161,13 @@ type window struct {
 	blinkShown                 time.Time // when the frame of the blink was asked for
 	previewPending             bool      // the selected frame is being read
 	moonBox                    *walk.CheckBox
+	tiltBox                    *walk.CheckBox
+	histBox                    *walk.CheckBox
+	histView                   *walk.CustomWidget
+	hist                       *fits.Histogram // of the frame shown
+	tilt                       *stars.Tilt     // of the frame shown, when measured
+	tilts                      tiltCache
+	previewText, previewHead   string // the text of the preview shown, without the tilt
 	moonView                   *walk.CustomWidget
 	moon                       *moon.Info // of the frame shown
 	skyObj                     *skyObject
@@ -282,8 +294,16 @@ func main() {
 					PushButton{AssignTo: &w.btnDelete, Text: "Удалить с диска…", Visible: false, OnClicked: w.deleteGone,
 						ToolTipText: "Удалить из выходного каталога показанные кадры, удалённые или помеченные на удаление на приёмнике (в Корзину, если она есть на этом диске)."},
 					HSpacer{},
+				},
+			},
+			// the filters have a row of their own: with the buttons in one
+			// row the window was wider than a 1536 px screen
+			Composite{
+				Layout: HBox{MarginsZero: true},
+				Children: []Widget{
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
+					HSpacer{},
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
@@ -366,13 +386,28 @@ func main() {
 									Slider{AssignTo: &w.speedSlider, MinValue: 1, MaxValue: 20, Value: blinkSpeed(s), Tracking: true,
 										MinSize: Size{Width: 90}, MaxSize: Size{Width: 140}, ToolTipsHidden: true, OnValueChanged: w.speedChanged},
 									Label{AssignTo: &w.speedLabel, MinSize: Size{Width: 45}, ToolTipText: "Скорость блинка, кадров в секунду"},
+								},
+							},
+							// the boxes have a row of their own: in the row above they made the pane too wide
+							Composite{
+								Layout: HBox{MarginsZero: true},
+								Children: []Widget{
 									CheckBox{AssignTo: &w.moonBox, Text: "Луна", Checked: s.ShowMoon, OnCheckedChanged: w.moonToggled,
 										ToolTipText: "Где была Луна и какая у неё фаза в момент съёмки кадра"},
+									CheckBox{AssignTo: &w.histBox, Text: "Гистограмма", Checked: s.ShowHist, OnCheckedChanged: w.histToggled,
+										ToolTipText: "Гистограмма кадра под предпросмотром; щелчок по ней меняет вид: значения кадра, лог. шкала, после растяжки"},
+									CheckBox{AssignTo: &w.tiltBox, Text: "Тилт", Checked: s.ShowTilt, OnCheckedChanged: w.tiltToggled,
+										ToolTipText: "Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, не во время блинка"},
+									HSpacer{},
 								},
 							},
 							CustomWidget{AssignTo: &w.moonView, PaintPixels: w.paintMoon, Visible: s.ShowMoon,
 								DoubleBuffering: true, InvalidatesOnResize: true,
 								MinSize: Size{Height: 110}, MaxSize: Size{Height: 110}},
+							CustomWidget{AssignTo: &w.histView, PaintPixels: w.paintHist, Visible: s.ShowHist,
+								DoubleBuffering: true, InvalidatesOnResize: true, OnMouseDown: w.histClicked,
+								MinSize: Size{Height: 120}, MaxSize: Size{Height: 120},
+								ToolTipText: "Пунктир — чёрная и белая точки растяжки. Щелчок меняет вид"},
 							Label{AssignTo: &w.previewInfo, EllipsisMode: EllipsisEnd, Text: "Выберите кадр — здесь будет предпросмотр (автоматическое растяжение) и заголовок FITS."},
 							TextEdit{AssignTo: &w.header, ReadOnly: true, VScroll: true, Font: mono, StretchFactor: 2},
 						},
@@ -390,6 +425,7 @@ func main() {
 	}
 	w.zoom.cw.MouseWheel().Attach(w.zoom.wheel)
 	w.zoom.changed = w.zoomChanged
+	w.zoom.overlay = w.paintTilt
 	w.speedChanged()
 	w.inputChanged()
 	w.pl.init()
@@ -1099,8 +1135,14 @@ func (w *window) showPreview() {
 				w.previewFull = true
 			}
 			w.zoomLabel.SetText(w.zoom.label())
+			w.previewText, w.previewHead, w.tilt = p.info, p.head, nil
+			w.hist = p.hist
+			w.histView.Invalidate()
 			setLong(w.previewInfo, p.info)
 			w.header.SetText(p.head)
+			if p.err == nil {
+				w.measureTilt(i)
+			}
 			w.moon, w.skyObj = p.moon, p.obj
 			w.moonView.Invalidate()
 			w.readAhead()

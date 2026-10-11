@@ -25,7 +25,12 @@ type qualityEntry struct {
 	// NoSky: the header was read and tells nothing of it
 	Sky   *skyEntry `json:"sky,omitempty"`
 	NoSky bool      `json:"nosky,omitempty"`
+	// V: the version of the measurement; an older one is measured again
+	V int `json:"v,omitempty"`
 }
+
+// qualityVersion: 2 takes the background of each star around it.
+const qualityVersion = 2
 
 // quality keeps the star measurements of the received Light frames in
 // quality.json in the data folder. A background worker measures new frames
@@ -166,8 +171,8 @@ func (s *Server) measurePending(ctx context.Context) int {
 			continue
 		}
 		keep[f.Path] = true
-		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok {
-			todo = append(todo, f)
+		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok || e.V < qualityVersion {
+			todo = append(todo, f) // new, or measured the old way (shown until then)
 		} else if e.Sky == nil && !e.NoSky {
 			hdrTodo = append(hdrTodo, f) // measured by an older version
 		}
@@ -181,7 +186,7 @@ func (s *Server) measurePending(ctx context.Context) int {
 			break
 		}
 		r, err := stars.MeasureFile(store.Local(f.Path))
-		e := qualityEntry{Size: f.Size, MTime: f.ModTime.UnixNano(), HFR: r.HFR, Stars: r.Stars}
+		e := qualityEntry{Size: f.Size, MTime: f.ModTime.UnixNano(), HFR: r.HFR, Stars: r.Stars, V: qualityVersion}
 		if err != nil {
 			e.Err = err.Error()
 		}

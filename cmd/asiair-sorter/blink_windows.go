@@ -23,6 +23,7 @@ type preview struct {
 	full       bool // the picture has the full resolution
 	moon       *moon.Info
 	obj        *skyObject
+	hist       *fits.Histogram
 	err        error
 }
 
@@ -182,8 +183,12 @@ func readPreview(f *sorter.Frame, local []string, maxW int) *preview {
 			return ""
 		}
 	}
+	if t := fits.StatsTable(im.Stats); t != "" {
+		p.head = "Статистика кадра, " + statsUnit(im) + ":\r\n" + t + "\r\n" + p.head
+	}
 	p.moon, p.obj = frameSky(f, get)
 	p.pic = im.Stretched()
+	p.hist = im.Histogram(histBins)
 	p.srcW = im.Width * im.Binning
 	p.full = maxW >= fullWidth || im.Binning <= 1 || im.Bayer != "" && im.Binning <= 2
 	p.info = fmt.Sprintf("%s — %d×%d", name, im.Width*im.Binning, im.Height*im.Binning)
@@ -241,6 +246,7 @@ func (w *window) setPlay(on bool) {
 		w.scheduleBlink() // a frame being read schedules again when shown
 	} else {
 		w.btnPlay.SetText("▶ Блинк")
+		w.measureTilt(w.table.CurrentIndex()) // not measured while blinking
 	}
 }
 
@@ -274,14 +280,25 @@ func (w *window) blinkNext() {
 	w.table.SetCurrentIndex((w.table.CurrentIndex() + 1) % n) // shows the frame, then schedules the next
 }
 
-// readAhead reads the next frame of the blink while this one is shown.
+// readAhead reads the next frames of the blink while this one is shown,
+// several at once.
 func (w *window) readAhead() {
 	n := len(w.model.rows)
 	if !w.playing || n < 2 {
 		return
 	}
-	r := w.model.rows[(w.table.CurrentIndex()+1)%n]
 	maxW := w.previewWidth()
-	local := w.localPaths(r)
-	go w.previews.get(r.f, local, maxW)
+	for k := 1; k <= min(3, n-1); k++ {
+		r := w.model.rows[(w.table.CurrentIndex()+k)%n]
+		local := w.localPaths(r)
+		go w.previews.get(r.f, local, maxW)
+	}
+}
+
+// statsUnit: the units of the statistics: ADU for integer data
+func statsUnit(im *fits.Image) string {
+	if len(im.Stats) > 0 && im.Stats[0].NoMedian {
+		return "значения файла"
+	}
+	return "АЦП (ADU)"
 }
