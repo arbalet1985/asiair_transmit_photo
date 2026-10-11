@@ -294,8 +294,16 @@ func main() {
 					PushButton{AssignTo: &w.btnDelete, Text: "Удалить с диска…", Visible: false, OnClicked: w.deleteGone,
 						ToolTipText: "Удалить из выходного каталога показанные кадры, удалённые или помеченные на удаление на приёмнике (в Корзину, если она есть на этом диске)."},
 					HSpacer{},
+				},
+			},
+			// the filters have a row of their own: with the buttons in one
+			// row the window was wider than a 1536 px screen
+			Composite{
+				Layout: HBox{MarginsZero: true},
+				Children: []Widget{
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
+					HSpacer{},
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
