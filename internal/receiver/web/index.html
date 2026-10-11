@@ -101,6 +101,8 @@
   #vZoomV { min-width: 4.2em; text-align: center; font-size: 12px; }
   #vSpeed { width: 110px; }
   #vSpeedV { min-width: 3.4em; font-size: 12px; }
+  .vstats td, .vstats th { padding: 1px 6px; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; border: 0; }
+  .vstats th:first-child, .vstats td:first-child { text-align: left; color: var(--muted); font-weight: 400; }
   #vPlay.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .vnav #vPrev, .vnav #vNext { min-width: 3.5em; }
   .vimg { flex: 1; overflow: auto; background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
@@ -915,6 +917,10 @@
       </div>
       <h3>Кадр</h3>
       <dl class="kv" id="vInfo"></dl>
+      <div id="vStats" hidden>
+        <h3 title="Статистика всего кадра в полном разрешении (не превью), как Statistics в PixInsight. У цветного кадра — по цветам матрицы">Статистика кадра</h3>
+        <div class="tablewrap"><table class="vstats"><tbody id="vStatsBody"></tbody></table></div>
+      </div>
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
       <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), Esc — закрыть.</div>
@@ -4091,6 +4097,20 @@ function showInfo(f, meta) {
       add(name, v);
     }
   }
+  showStats(meta && meta.frameStats);
+}
+// the statistics of the whole frame, as PixInsight's Statistics shows them
+function showStats(st) {
+  $("vStats").hidden = !st || !st.length;
+  if (!st || !st.length) return;
+  const num = v => Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toFixed(6);
+  const med = (c, v) => c.no_median ? "—" : num(v);
+  const rows = [["count", c => String(c.count)], ["mean", c => num(c.mean)], ["median", c => med(c, c.median)],
+    ["avgDev", c => med(c, c.avgdev)], ["MAD", c => med(c, c.mad)], ["stdDev", c => num(c.stddev)],
+    ["minimum", c => num(c.min)], ["maximum", c => num(c.max)]];
+  $("vStatsBody").replaceChildren(
+    el("tr", {}, el("th", { textContent: st[0].no_median ? "" : "ADU" }), ...st.map(c => el("th", { textContent: c.name }))),
+    ...rows.map(([name, get]) => el("tr", {}, el("td", { textContent: name }), ...st.map(c => el("td", { textContent: get(c) })))));
 }
 function updateSel() {
   const f = V.list[V.idx];
@@ -4137,7 +4157,9 @@ function fetchFits(f, max) {
     const canvas = el("canvas", { width: meta.width, height: meta.height });
     // the screen-sized preview is the full frame already: no need for more
     if (max < 8000 && meta.binning <= (meta.bayer ? 2 : 1)) V.full.add(f.path);
-    return { ...meta, data, canvas, max };
+    // stats: of the whole frame; im.stats is the cache of the stretch
+    const { stats: frameStats, ...rest } = meta;
+    return { ...rest, frameStats, data, canvas, max };
   })();
   vCache.set(key, e);
   e.p.then(im => { e.img = im; e.bytes = imBytes(im); cacheTrim(); }, () => vCache.delete(key));
@@ -4185,10 +4207,13 @@ async function showFile() {
     if (req === V.req) $("vMsg").textContent = "Не удалось открыть: " + e.message;
   }
 }
-// while blinking the next FITS frame is loaded while this one is shown
+// while blinking the next FITS frames are loaded while this one is shown:
+// several at once, the receiver reads them in parallel
 function prefetch() {
-  const f = V.list[(V.idx + 1) % V.list.length];
-  if (f && isFits(f.name)) fetchFits(f, fitsMax(f)).catch(() => {});
+  for (let k = 1; k <= Math.min(3, V.list.length - 1); k++) {
+    const f = V.list[(V.idx + k) % V.list.length];
+    if (f && isFits(f.name)) fetchFits(f, fitsMax(f)).catch(() => {});
+  }
 }
 function place(node) {
   if (V.node !== node) {

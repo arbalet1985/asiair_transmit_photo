@@ -341,6 +341,7 @@ func (r *Receiver) Preview(ctx context.Context, p string, maxWidth int) (*fits.I
 	var info struct {
 		Width, Height, Channels, Binning int
 		Bayer                            string
+		Stats                            []fits.ChannelStats
 	}
 	if err := json.Unmarshal(b[4:4+n], &info); err != nil {
 		return nil, err
@@ -351,7 +352,7 @@ func (r *Receiver) Preview(ctx context.Context, p string, maxWidth int) (*fits.I
 		return nil, errors.New("ответ приёмника обрезан")
 	}
 	im := &fits.Image{Width: info.Width, Height: info.Height, Channels: info.Channels, Binning: info.Binning, Bayer: info.Bayer,
-		Data: make([]float32, want)}
+		Stats: info.Stats, Data: make([]float32, want)}
 	for i := range im.Data {
 		im.Data[i] = float32(binary.LittleEndian.Uint16(px[i*2:])) / 65535
 	}

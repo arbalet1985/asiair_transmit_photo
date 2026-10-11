@@ -33,6 +33,8 @@ type previewInfo struct {
 	Bayer    string            `json:"bayer,omitempty"`
 	Source   [2]int            `json:"source"` // original width and height
 	Header   map[string]string `json:"header"` // selected keywords
+	// Stats: of the whole frame, per channel (PixInsight's Statistics)
+	Stats []fits.ChannelStats `json:"stats,omitempty"`
 }
 
 // headerKeys are shown under the preview.
@@ -114,7 +116,7 @@ func (s *Server) buildPreview(p string, maxWidth int) (*cachedPreview, error) {
 	}
 	info := previewInfo{
 		Width: im.Width, Height: im.Height, Channels: im.Channels, Binning: im.Binning, Bayer: im.Bayer,
-		Header: map[string]string{},
+		Header: map[string]string{}, Stats: im.Stats,
 	}
 	info.Source[0], _ = strconv.Atoi(im.Header.Get("NAXIS1"))
 	info.Source[1], _ = strconv.Atoi(im.Header.Get("NAXIS2"))
