@@ -101,6 +101,10 @@
   #vZoomV { min-width: 4.2em; text-align: center; font-size: 12px; }
   #vSpeed { width: 110px; }
   #vSpeedV { min-width: 3.4em; font-size: 12px; }
+  /* the canvas is out of the flow: its pixel size never widens the panel */
+  .vhistwrap { position: relative; height: 110px; margin-top: 4px; }
+  #vHist { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--row); border-radius: 4px; }
+  .vhistaxis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .vstats td, .vstats th { padding: 1px 6px; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; border: 0; }
   .vstats th:first-child, .vstats td:first-child { text-align: left; color: var(--muted); font-weight: 400; }
   #vPlay.on { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -914,6 +918,13 @@
         <label for="vWhite">Белая точка: <span id="vWhiteV"></span></label>
         <input type="range" id="vWhite" min="0.05" max="1" step="0.005" value="1">
         <div class="toolbar" style="margin-top:8px"><button id="vReset">Сбросить</button></div>
+        <label style="margin-top:8px" title="Гистограмма кадра (по превью). Пунктир — чёрная и белая точки растяжки"><input type="checkbox" id="vHistOn"> Гистограмма</label>
+        <div id="vHistBox" hidden>
+          <div class="vhistwrap"><canvas id="vHist"></canvas></div>
+          <div class="vhistaxis"><span id="vHistLo"></span><span id="vHistHi"></span></div>
+          <label title="Как распределены яркости на экране, после растяжки"><input type="checkbox" id="vHistShown"> после растяжки</label>
+          <label title="Логарифмическая шкала по высоте: видны и редкие яркие пиксели"><input type="checkbox" id="vHistLog"> лог. шкала</label>
+        </div>
       </div>
       <h3>Кадр</h3>
       <dl class="kv" id="vInfo"></dl>
@@ -4049,6 +4060,7 @@ function computeStretch() {
     }
     for (const c of g) params[c] = { c0, m };
   }
+  im.params = params; im.c1 = c1;
   // one lookup table per channel: 16-bit sample -> 8-bit screen value
   im.luts = params.map(({ c0, m }) => {
     const lut = new Uint8ClampedArray(65536), span = c1 - c0;
@@ -4059,6 +4071,70 @@ function computeStretch() {
     return lut;
   });
   renderViewer();
+  drawHist();
+}
+// the histogram of the frame shown: of its samples (zoomed to where they
+// are) or of the screen after the stretch
+const histColors = ["#e5484d", "#30a46c", "#3e63dd"];
+function drawHist() {
+  const on = $("vHistOn").checked, im = V.img;
+  $("vHistBox").hidden = !on;
+  if (!on || !im || !im.data || !im.luts) return;
+  const ch = im.channels, d = im.data;
+  if (!im.hist) {
+    im.hist = [...Array(ch)].map(() => new Uint32Array(65536));
+    for (let i = 0; i < d.length; i += ch) for (let c = 0; c < ch; c++) im.hist[c][d[i + c]]++;
+  }
+  const cv = $("vHist"), dpr = window.devicePixelRatio || 1;
+  const W = Math.max(50, Math.round(cv.clientWidth * dpr)), H = Math.round(110 * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, W, H);
+  const shown = $("vHistShown").checked, log = $("vHistLog").checked;
+  // the samples: from 0.01% to 99.95% of them, where the picture is
+  let lo = 0, hi = 65535;
+  if (!shown) {
+    const all = new Float64Array(65536);
+    let n = 0;
+    for (const h of im.hist) for (let v = 0; v < 65536; v++) { all[v] += h[v]; n += h[v]; }
+    let acc = 0; lo = -1;
+    for (let v = 0; v < 65536; v++) {
+      acc += all[v];
+      if (lo < 0 && acc >= n * 0.0001) lo = v;
+      if (acc >= n * 0.9995) { hi = v; break; }
+    }
+    const pad = Math.max(8, (hi - lo) * 0.05);
+    lo = Math.max(0, Math.floor(lo - pad)); hi = Math.min(65535, Math.ceil(hi + pad));
+  }
+  const bins = [];
+  let top = 1;
+  for (let c = 0; c < ch; c++) {
+    const b = new Float64Array(W), h = im.hist[c], lut = im.luts[c];
+    if (shown) { for (let v = 0; v < 65536; v++) if (h[v]) b[Math.min(W - 1, Math.floor(lut[v] / 256 * W))] += h[v]; }
+    else { const k = W / (hi - lo + 1); for (let v = lo; v <= hi; v++) if (h[v]) b[Math.floor((v - lo) * k)] += h[v]; }
+    for (let x = 0; x < W; x++) { if (log) b[x] = Math.log1p(b[x]); top = Math.max(top, b[x]); }
+    bins.push(b);
+  }
+  ctx.globalCompositeOperation = ch > 1 ? "lighter" : "source-over";
+  bins.forEach((b, c) => {
+    ctx.fillStyle = ch > 1 ? histColors[c] : getComputedStyle(cv).color;
+    ctx.globalAlpha = ch > 1 ? 0.8 : 0.9;
+    ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x < W; x++) ctx.lineTo(x, H - b[x] / top * (H - 2));
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  });
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+  // the black and white points of the stretch
+  if (!shown && im.params) {
+    ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = dpr;
+    const mark = (v, color) => { const x = (v * 65535 - lo) / (hi - lo + 1) * W; if (x >= 0 && x <= W) { ctx.strokeStyle = color; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); } };
+    const uniq = new Set(im.params.map(p => p.c0));
+    [...uniq].forEach(c0 => mark(c0, uniq.size > 1 ? histColors[im.params.findIndex(p => p.c0 === c0)] : "#888"));
+    mark(im.c1, "#888");
+    ctx.setLineDash([]);
+  }
+  $("vHistLo").textContent = shown ? "0" : String(lo);
+  $("vHistHi").textContent = shown ? "255 (экран)" : String(hi);
 }
 function renderViewer() {
   const im = V.img;
@@ -4198,6 +4274,7 @@ async function showFile() {
     clearTimeout(slow);
     $("vMsg").textContent = "";
     place(node);
+    if (im) drawHist(); else $("vHistBox").hidden = true;
     showInfo(f, im);
     V.meta = im;
     renderMoon(f, im);
@@ -4365,6 +4442,10 @@ $("vClose").onclick = () => $("viewer").close();
 $("vSel").onclick = toggleSel;
 $("vDelete").onclick = () => $("delBtn").click();
 for (const id of ["vAuto", "vLinked"]) $(id).onchange = computeStretch;
+for (const id of ["vHistOn", "vHistShown", "vHistLog"]) {
+  $(id).checked = !!store.get(id, false);
+  $(id).onchange = () => { store.set(id, $(id).checked); drawHist(); };
+}
 for (const id of ["vShadow", "vBg", "vWhite"]) $(id).oninput = computeStretch;
 $("vReset").onclick = () => {
   $("vAuto").checked = true; $("vLinked").checked = false;
