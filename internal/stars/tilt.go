@@ -12,7 +12,9 @@ import (
 // Tilt of the sensor, measured as Siril's "tilt" command does: the stars of
 // the four quarters of the frame are compared. A tilted sensor (or a bent
 // focuser) leaves stars of one side bigger than of the other. Sizes are
-// HFR in pixels of the original frame (FWHM is about twice the HFR).
+// HFR in pixels of the original frame. The HFR is the flux weighted mean
+// radius: FWHM is about 1.5 times it for real stars (Moffat profile), 1.9
+// times for a Gaussian.
 type Tilt struct {
 	Stars int     `json:"stars"`
 	HFR   float64 `json:"hfr"` // of all stars

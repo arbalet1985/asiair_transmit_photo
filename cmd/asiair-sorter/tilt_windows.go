@@ -106,7 +106,7 @@ func (w *window) showTilt(t *stars.Tilt, note string) {
 	switch {
 	case t != nil:
 		info += fmt.Sprintf(" · тилт %.2f px (%.0f%%), вне оси %.2f px", t.Tilt, t.Percent, t.OffAxis)
-		head = fmt.Sprintf("Тилт (как в Siril), HFR в пикселях кадра, FWHM ≈ 2×HFR:\r\n"+
+		head = fmt.Sprintf("Тилт (как в Siril), HFR в пикселях кадра, FWHM ≈ 1,5×HFR:\r\n"+
 			"  ↖ %.2f   ↗ %.2f\r\n  ↙ %.2f   ↘ %.2f\r\n"+
 			"тилт      %.2f px (%.0f%% от среднего по углам)\r\n"+
 			"вне оси   %.2f px (центр %.2f, края %.2f)\r\n"+
