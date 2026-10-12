@@ -65,6 +65,7 @@ type settings struct {
 	ShowTilt        bool                     `json:"show_tilt,omitempty"`
 	ShowHist        bool                     `json:"show_hist,omitempty"`
 	HistMode        int                      `json:"hist_mode,omitempty"`
+	LinkedChannels  bool                     `json:"linked_channels,omitempty"` // the colour channels stretched together
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
 	Planner         plannerSettings          `json:"planner"`
 	// Folders: for each input (receiverKey) the folders synchronised; none = all
@@ -163,6 +164,7 @@ type window struct {
 	moonBox                    *walk.CheckBox
 	tiltBox                    *walk.CheckBox
 	histBox                    *walk.CheckBox
+	linkedBox                  *walk.CheckBox
 	histView                   *walk.CustomWidget
 	hist                       *fits.Histogram // of the frame shown
 	tilt                       *stars.Tilt     // of the frame shown, when measured
@@ -381,6 +383,8 @@ func main() {
 									PushButton{Text: "Вписать", ToolTipText: "Весь кадр в окне", OnClicked: func() { w.zoom.fitAll() }},
 									PushButton{Text: "100%", ToolTipText: "Пиксель кадра в пиксель экрана", OnClicked: func() { w.zoom.actual() }},
 									HSpacer{},
+									PushButton{Text: "◀", MaxSize: Size{Width: 32}, ToolTipText: "Предыдущий кадр таблицы", OnClicked: func() { w.step(-1) }},
+									PushButton{Text: "▶", MaxSize: Size{Width: 32}, ToolTipText: "Следующий кадр таблицы", OnClicked: func() { w.step(1) }},
 									PushButton{AssignTo: &w.btnPlay, Text: "▶ Блинк", OnClicked: w.togglePlay,
 										ToolTipText: "Показывать кадры таблицы (как они отфильтрованы) друг за другом по кругу. Масштаб и место на кадре сохраняются"},
 									Slider{AssignTo: &w.speedSlider, MinValue: 1, MaxValue: 20, Value: blinkSpeed(s), Tracking: true,
@@ -396,6 +400,8 @@ func main() {
 										ToolTipText: "Где была Луна и какая у неё фаза в момент съёмки кадра"},
 									CheckBox{AssignTo: &w.histBox, Text: "Гистограмма", Checked: s.ShowHist, OnCheckedChanged: w.histToggled,
 										ToolTipText: "Гистограмма кадра под предпросмотром; щелчок по ней меняет вид: значения кадра, лог. шкала, после растяжки"},
+									CheckBox{AssignTo: &w.linkedBox, Text: "Каналы вместе", Checked: s.LinkedChannels, OnCheckedChanged: w.linkedToggled,
+										ToolTipText: "Растяжка цветного кадра: всех каналов вместе (цвета как на матрице) или каждого отдельно (фон серый), как в приёмнике"},
 									CheckBox{AssignTo: &w.tiltBox, Text: "Тилт", Checked: s.ShowTilt, OnCheckedChanged: w.tiltToggled,
 										ToolTipText: "Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, не во время блинка"},
 									HSpacer{},
@@ -1110,13 +1116,13 @@ func (w *window) showPreview() {
 	f := w.model.rows[i].f
 	local := w.localPaths(w.model.rows[i])
 	gen := w.previewGen.Add(1)
-	maxW := w.previewWidth()
+	maxW, linked := w.previewWidth(), w.linkedChannels()
 	w.previewPending = true
 	if !w.playing {
 		setLong(w.previewInfo, "Читаю "+filepath.Base(filepath.FromSlash(f.Path))+"…")
 	}
 	go func() {
-		p := w.previews.get(f, local, maxW)
+		p := w.previews.get(f, local, maxW, linked)
 		w.mw.Synchronize(func() {
 			if w.previewGen.Load() != gen {
 				return // another frame was selected meanwhile

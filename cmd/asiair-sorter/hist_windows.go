@@ -103,14 +103,26 @@ func (w *window) paintHist(canvas *walk.Canvas, _ walk.Rectangle) error {
 	lo, hi := h.Lo*65535, h.Hi*65535
 	if mode != 2 {
 		// the black and white points of the stretch
-		if pen, err := walk.NewCosmeticPen(walk.PenDash, walk.RGB(150, 150, 150)); err == nil {
-			for _, v := range []float64{h.Black, h.White} {
-				if x := int((v*65535 - lo) / (hi - lo + 1) * float64(W)); x >= 0 && x < W {
-					canvas.DrawLinePixels(pen, walk.Point{X: x, Y: top}, walk.Point{X: x, Y: top + H})
-				}
+		line := func(v float64, c walk.Color) {
+			x := int((v*65535 - lo) / (hi - lo + 1) * float64(W))
+			if x < 0 || x >= W {
+				return
 			}
-			pen.Dispose()
+			if pen, err := walk.NewCosmeticPen(walk.PenDash, c); err == nil {
+				canvas.DrawLinePixels(pen, walk.Point{X: x, Y: top}, walk.Point{X: x, Y: top + H})
+				pen.Dispose()
+			}
 		}
+		grey := walk.RGB(150, 150, 150)
+		if len(h.Blacks) == len(cols) && len(cols) > 1 {
+			// channels stretched each on its own: a black point of each
+			for c, v := range h.Blacks {
+				line(v, colors[c])
+			}
+		} else {
+			line(h.Black, grey)
+		}
+		line(h.White, grey)
 	} else {
 		lo, hi = 0, 255
 	}
