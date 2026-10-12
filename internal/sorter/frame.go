@@ -69,6 +69,12 @@ type Frame struct {
 	// InLibrary: the frame is in the library of the output (ScanLibrary);
 	// when the layout changed it is moved to its new place
 	InLibrary bool
+
+	// the stars of a light frame (package stars): measured by the receiver
+	// or by the sorter (MeasureFrames); HFR in pixels, 0 without stars
+	Measured bool
+	HFR      float64
+	Stars    int
 }
 
 // IsFITS tells FITS files by their extension.
