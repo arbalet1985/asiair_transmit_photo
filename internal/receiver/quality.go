@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/satellites"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/stars"
 )
 
@@ -27,6 +30,19 @@ type qualityEntry struct {
 	NoSky bool      `json:"nosky,omitempty"`
 	// V: the version of the measurement; an older one is measured again
 	V int `json:"v,omitempty"`
+	// Tracks: the straight tracks on the frame (satellites, planes,
+	// meteors) found by version TV of the search; Start: the start of the
+	// exposure (unix ms); Flip: the rows of the file go bottom up
+	Tracks []trackEntry `json:"tracks,omitempty"`
+	TV     int          `json:"tv,omitempty"`
+	Start  int64        `json:"start,omitempty"`
+	Flip   bool         `json:"flip,omitempty"`
+	// Sats: the objects that left the tracks, told with the catalogue of
+	// orbits SatCat downloaded at SatCatT (unix ms); "": not told yet
+	Sats    []satEntry `json:"sats,omitempty"`
+	SatCat  string     `json:"satcat,omitempty"`
+	SatCatT int64      `json:"satcatt,omitempty"`
+	SatErr  string     `json:"saterr,omitempty"`
 }
 
 // qualityVersion: 2 takes the background of each star around it, 3 tells
@@ -123,6 +139,32 @@ func (q *quality) poke() {
 	}
 }
 
+// measureFrame finds the stars and the tracks of a frame file, reading it
+// once.
+func measureFrame(local string) qualityEntry {
+	e := qualityEntry{V: qualityVersion, TV: trackVersion}
+	f, err := os.Open(local)
+	if err != nil {
+		e.Err = err.Error()
+		return e
+	}
+	defer f.Close()
+	img, err := fits.Preview(f, stars.MaxWidth)
+	if err != nil {
+		e.Err = err.Error()
+		return e
+	}
+	r := stars.Measure(img)
+	e.HFR, e.Stars = r.HFR, r.Stars
+	w, _ := fits.ReadWCS(img.Header, filepath.Base(local))
+	e.Tracks = tracksOf(satellites.FindStreaks(img), w)
+	if len(e.Tracks) > 0 {
+		e.Start = frameStart(img.Header)
+		e.Flip = strings.EqualFold(img.Header.Get("ROWORDER"), "BOTTOM-UP")
+	}
+	return e
+}
+
 // measurable: Light frames in FITS.
 func measurable(p string) bool {
 	n := strings.ToLower(p)
@@ -172,7 +214,7 @@ func (s *Server) measurePending(ctx context.Context) int {
 			continue
 		}
 		keep[f.Path] = true
-		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok || e.V < qualityVersion {
+		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok || e.V < qualityVersion || e.TV < trackVersion {
 			todo = append(todo, f) // new, or measured the old way (shown until then)
 		} else if e.Sky == nil && !e.NoSky {
 			hdrTodo = append(hdrTodo, f) // measured by an older version
@@ -181,18 +223,18 @@ func (s *Server) measurePending(ctx context.Context) int {
 	s.quality.forget(keep)
 	// newest first
 	sort.Slice(todo, func(i, j int) bool { return todo[i].ModTime.After(todo[j].ModTime) })
-	n := 0
+	n, tracks := 0, 0
 	for _, f := range todo {
 		if ctx.Err() != nil {
 			break
 		}
-		r, err := stars.MeasureFile(store.Local(f.Path))
-		e := qualityEntry{Size: f.Size, MTime: f.ModTime.UnixNano(), HFR: r.HFR, Stars: r.Stars, V: qualityVersion}
-		if err != nil {
-			e.Err = err.Error()
-		}
+		e := measureFrame(store.Local(f.Path))
+		e.Size, e.MTime = f.Size, f.ModTime.UnixNano()
 		e.Sky, e.NoSky = readSky(store.Local(f.Path), f.Path)
 		s.quality.set(f.Path, e)
+		if len(e.Tracks) > 0 {
+			tracks++
+		}
 		n++
 		if n%20 == 0 {
 			s.quality.save()
@@ -203,7 +245,11 @@ func (s *Server) measurePending(ctx context.Context) int {
 		}
 	}
 	if n > 0 {
-		log.Printf("Приёмник: оценено кадров (звёзды, HFR): %d", n)
+		log.Printf("Приёмник: оценено кадров (звёзды, HFR, треки спутников): %d, с треками: %d", n, tracks)
+	}
+	if tracks > 0 && s.sats != nil {
+		s.quality.save()
+		s.sats.poke()
 	}
 	// the headers only, of the frames measured before the planner
 	for i, f := range hdrTodo {

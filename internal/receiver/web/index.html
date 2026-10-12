@@ -251,6 +251,7 @@
   .tile input[type=checkbox] { position: absolute; top: 6px; left: 6px; width: 18px; height: 18px; }
   .tile .badge { position: absolute; top: 6px; right: 6px; }
   .qbad { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+  .qsat { background: color-mix(in srgb, #3bb4e5 22%, transparent); color: #3bb4e5; }
   .usage { margin-top: 10px; font-size: 13px; }
   .usage .row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 80px; gap: 8px; align-items: center; margin: 2px 0; }
   .usage .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -948,6 +949,7 @@
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
       <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
       <div id="vTiltBox" class="hint" hidden></div>
+      <label title="Прямые треки на кадре (спутники, самолёты, метеоры) и какой спутник их оставил: по орбитам из каталога CelesTrak, времени кадра и его астрометрическому решению"><input type="checkbox" id="vSats"> Треки спутников</label>
       <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), правая кнопка мыши, долгое нажатие или ⌖ — замер звезды (пересвечена ли), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
@@ -2203,8 +2205,32 @@ function qualityTag(f) {
   if (!f.q) return "";
   const t = el("span", { className: "muted", textContent: ` · HFR ${f.hfr ? f.hfr.toFixed(2) : "—"} · ${f.stars}★`,
     title: "Размер звёзд (HFR, пиксели кадра; меньше — резче) и число найденных звёзд" });
-  const j = judge(f);
-  return j && j.bad ? el("span", {}, t, " ", el("span", { className: "badge qbad", textContent: "⚠", title: j.why })) : t;
+  const j = judge(f), sat = tracksBadge(f);
+  if (!(j && j.bad) && !sat) return t;
+  return el("span", {}, t, ...(j && j.bad ? [" ", el("span", { className: "badge qbad", textContent: "⚠", title: j.why })] : []), ...(sat ? [" ", sat] : []));
+}
+// the tracks of satellites (planes, meteors) on a frame
+function tracksBadge(f) {
+  if (!f.tracks || !f.tracks.length) return null;
+  const names = f.tracks.map(t => t.sat ? t.sat.name : "?");
+  return el("span", { className: "badge qsat", textContent: "🛰 " + (f.sat_told ? names.join(", ") : f.tracks.length),
+    title: f.tracks.map((t, i) => `Трек ${i + 1}: ` + trackText(f, t)).join("\n") });
+}
+// what left a track, in words
+function trackText(f, t) {
+  const s = t.sat;
+  if (s) {
+    const orbit = s.apo < 2000 ? `низкая орбита ${s.per}–${s.apo} км` : s.per > 35000 && s.apo < 36600 ? "геостационарная орбита" :
+      `орбита ${s.per}–${s.apo} км`;
+    const off = Math.abs(s.off) < 1 ? "по прогнозу" : `на ${Math.abs(s.off).toFixed(1)} с ${s.off > 0 ? "позже" : "раньше"} прогноза`;
+    return `${s.name} (NORAD ${s.norad}${s.intl ? ", " + s.intl : ""}): ${orbit}, ${s.km} км от обсерватории, ${s.alt}° над горизонтом; прошёл ${off}, в ${(s.cross * 60).toFixed(1)}′ от расчётного пути` +
+      (f.sat_age > 2 ? `; орбиты взяты в ${f.sat_age} дн. от кадра — точность ниже` : "") +
+      (s.others ? `; почти так же подходят ещё ${s.others}` : "");
+  }
+  if (f.sat_err) return "не опознан: " + f.sat_err;
+  if (f.sat_told) return "не опознан: самолёт, метеор или объекта нет в открытом каталоге";
+  const c = state.satellites || {};
+  return "опознание — после загрузки каталога орбит" + (c.error ? ` (не скачан: ${c.error})` : "");
 }
 function qualitySummary(fs) {
   if (!fs.length) return "—";
@@ -4163,7 +4189,36 @@ function renderViewer() {
   }
   ctx.putImageData(out, 0, 0);
   if ($("vTilt").checked && im.tilt) drawTilt(ctx, im);
+  if ($("vSats").checked) drawTracks(ctx, im);
   if (V.probe) drawProbe(ctx, im);
+}
+// the tracks found on the frame, with what left them
+function drawTracks(ctx, im) {
+  const f = V.list[V.idx], cur = f && (state.files.find(x => x.path === f.path) || f);
+  if (!cur || !cur.tracks) return;
+  const b = im.binning || 1, srcH = im.source && im.source[1] ? im.source[1] : im.height * b;
+  const px = (x, y) => [(x + 0.5) / b - 0.5, ((cur.flip ? srcH - 1 - y : y) + 0.5) / b - 0.5];
+  const W = im.width, lw = Math.max(1.5, W / 600), fs = Math.max(11, Math.round(W / 55));
+  ctx.save();
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = "rgba(59, 180, 229, .9)";
+  ctx.fillStyle = "#3bb4e5";
+  ctx.font = `600 ${fs}px system-ui, sans-serif`;
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 4;
+  cur.tracks.forEach(t => {
+    const [x0, y0] = px(t.x0, t.y0), [x1, y1] = px(t.x1, t.y1);
+    // beside the track, not on it
+    const len = Math.hypot(x1 - x0, y1 - y0) || 1, nx = -(y1 - y0) / len * lw * 6, ny = (x1 - x0) / len * lw * 6;
+    ctx.setLineDash([lw * 4, lw * 3]);
+    ctx.beginPath(); ctx.moveTo(x0 + nx, y0 + ny); ctx.lineTo(x1 + nx, y1 + ny); ctx.stroke();
+    ctx.setLineDash([]);
+    const label = t.sat ? `${t.sat.name} (${t.sat.norad})` : cur.sat_told ? "не опознан" : "трек";
+    const lx = (x0 + x1) / 2 + nx * 2.5, ly = (y0 + y1) / 2 + ny * 2.5;
+    ctx.textAlign = lx > W * 0.7 ? "right" : "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, lx, ly);
+  });
+  ctx.restore();
 }
 // the tilt as Siril draws it: a point toward each corner, as far from the
 // centre as the stars of that quarter are big (half way for the mean)
@@ -4245,6 +4300,7 @@ function showInfo(f, meta) {
     add("Звёзды", `${cur.stars}, HFR ${cur.hfr ? cur.hfr.toFixed(2) : "—"} px`);
     const j = judge(cur);
     if (j && j.bad) add("Качество", "⚠ " + j.why);
+    (cur.tracks || []).forEach((t, i) => add(cur.tracks.length > 1 ? `Трек ${i + 1}` : "Трек", trackText(cur, t)));
   }
   if (meta) {
     add("Кадр", `${meta.source[0]}×${meta.source[1]}` + (meta.bayer ? " (цветной, " + meta.bayer + ")" : meta.channels === 3 ? " (RGB)" : " (ч/б)"));
@@ -4639,6 +4695,12 @@ $("vClose").onclick = () => $("viewer").close();
 $("vSel").onclick = toggleSel;
 $("vDelete").onclick = () => $("delBtn").click();
 for (const id of ["vAuto", "vLinked"]) $(id).onchange = computeStretch;
+$("vSats").checked = !!store.get("vSats", true);
+$("vSats").onchange = () => {
+  store.set("vSats", $("vSats").checked);
+  for (const e of vCache.values()) if (e.img) e.img.drawn = "";
+  if (V.img) computeStretch();
+};
 $("vTilt").checked = !!store.get("vTilt", false);
 $("vTilt").onchange = () => {
   store.set("vTilt", $("vTilt").checked);

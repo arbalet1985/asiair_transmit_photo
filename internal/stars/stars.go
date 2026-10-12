@@ -19,9 +19,9 @@ type Result struct {
 	HFR   float64 // median half flux radius in pixels of the original frame; 0 without stars
 }
 
-// maxWidth is the width frames are binned to before measuring: fast enough
+// MaxWidth is the width frames are binned to before measuring: fast enough
 // for tens of megapixels, while a 2 px HFR star still spans several pixels.
-const maxWidth = 3200
+const MaxWidth = 3200
 
 // MeasureFile reads a FITS file and measures it.
 func MeasureFile(name string) (Result, error) {
@@ -30,7 +30,7 @@ func MeasureFile(name string) (Result, error) {
 		return Result{}, err
 	}
 	defer f.Close()
-	img, err := fits.Preview(f, maxWidth)
+	img, err := fits.Preview(f, MaxWidth)
 	if err != nil {
 		return Result{}, err
 	}
