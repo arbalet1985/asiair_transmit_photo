@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 )
 
 // writeFITS writes a small 16-bit mono FITS file.
@@ -82,5 +84,34 @@ func TestUIPreview(t *testing.T) {
 		if rec := get(q); rec.Code != code {
 			t.Errorf("%s: got %d, want %d (%s)", q, rec.Code, code, strings.TrimSpace(rec.Body.String()))
 		}
+	}
+}
+
+func TestUIRegion(t *testing.T) {
+	s, _ := newTestServer(t)
+	ui := s.uiHandler()
+	p := "EMMC Images/Light/M42/a.fit"
+	writeFITS(t, s.getStore().Local(p), 300, 200)
+	get := func(q string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		ui.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/api/region?"+q, nil))
+		return rec
+	}
+	rec := get("path=" + url.QueryEscape(p) + "&x=150&y=100&r=5")
+	if rec.Code != 200 {
+		t.Fatalf("region: %d %s", rec.Code, rec.Body)
+	}
+	var st fits.RegionStats
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.W != 11 || st.H != 11 || st.Width != 300 || len(st.Channels) != 1 || st.Peak <= 0 || st.Saturated != 0 {
+		t.Fatalf("%+v", st)
+	}
+	if rec := get("path=" + url.QueryEscape(p)); rec.Code != 400 {
+		t.Fatalf("without x, y: %d", rec.Code)
+	}
+	if rec := get("path=" + url.QueryEscape("EMMC Images/none.fit") + "&x=1&y=1"); rec.Code != 404 {
+		t.Fatalf("no file: %d", rec.Code)
 	}
 }

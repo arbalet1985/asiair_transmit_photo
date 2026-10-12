@@ -114,6 +114,15 @@
   .vimg.zoom { display: block; }
   .vimg.zoom canvas, .vimg.zoom img { display: block; width: auto; height: auto; max-width: none; object-fit: fill; cursor: zoom-out; }
   .vimg .msg { color: #bbb; position: absolute; }
+  /* a long press measures: no callout or text selection on the picture */
+  .vimg canvas { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .vimg.probe canvas { cursor: crosshair; }
+  #vProbeMode.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .vprobe { position: fixed; z-index: 10; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.45); padding: 8px 10px; font-size: 12px; max-width: 320px; }
+  .vprobe .verdict { font-weight: 600; margin-right: 22px; }
+  .vprobe .verdict.bad { color: var(--danger); }
+  .vprobe .x { position: absolute; top: 4px; right: 4px; min-width: 0; padding: 0 7px; border: 0; background: none; font-size: 16px; }
   .vside { width: 270px; flex: none; padding: 10px 12px; border-left: 1px solid var(--border); overflow-y: auto; font-size: 13px; }
   .vside h3 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .03em; }
   .vside label { display: block; margin: 6px 0 2px; }
@@ -294,6 +303,8 @@
     .vnav .vtools button { padding: 8px 0; min-width: 44px; }
     .vtools .sep { width: 4px; }
     #vZoomV { display: none; }
+    /* on a phone the card of a measurement lies over the bottom of the frame, not under the finger */
+    .vprobe { left: 8px !important; right: 8px; top: auto !important; bottom: calc(150px + env(safe-area-inset-bottom)); max-width: none; font-size: 13px; }
     #vSpeed { flex: 1; width: auto; min-width: 60px; }
     #toast { left: 12px; right: 12px; bottom: 12px; text-align: center; }
   }
@@ -888,6 +899,7 @@
   <div class="vbody">
     <div class="vmain">
       <div class="vimg" id="vImgBox"><span class="msg" id="vMsg"></span></div>
+      <div class="vprobe" id="vProbe" hidden></div>
       <!-- under the picture, where a thumb reaches on a phone -->
       <div class="vnav">
         <button id="vSel" class="vsel" title="Отметить для удаления на ASIAIR (Delete)">Отметить для удаления</button>
@@ -897,6 +909,7 @@
           <span id="vZoomV" class="muted" title="Масштаб: 100% — пиксель кадра в пиксель экрана"></span>
           <button id="vZoomIn" title="Увеличить (+)">+</button>
           <button id="vFit" title="Вписать в окно (0)">⤢</button>
+          <button id="vProbeMode" title="Замер: щелчок (касание) по звезде — её статистика по исходным данным файла: пик, фон, пересвечена ли. То же — правой кнопкой мыши или долгим нажатием">⌖</button>
           <span class="sep"></span>
           <button id="vPlay" title="Блинк: показывать кадры друг за другом по кругу (пробел). Масштаб и место на кадре сохраняются">▶</button>
           <input type="range" id="vSpeed" min="0.5" max="10" step="0.5" value="2" title="Скорость блинка, кадров в секунду">
@@ -936,7 +949,7 @@
       <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
       <div id="vTiltBox" class="hint" hidden></div>
       <div id="vMoonBox" hidden></div>
-      <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), Esc — закрыть.</div>
+      <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), правая кнопка мыши, долгое нажатие или ⌖ — замер звезды (пересвечена ли), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
     </div>
   </div>
@@ -4150,6 +4163,7 @@ function renderViewer() {
   }
   ctx.putImageData(out, 0, 0);
   if ($("vTilt").checked && im.tilt) drawTilt(ctx, im);
+  if (V.probe) drawProbe(ctx, im);
 }
 // the tilt as Siril draws it: a point toward each corner, as far from the
 // centre as the stars of that quarter are big (half way for the mean)
@@ -4249,14 +4263,17 @@ function showInfo(f, meta) {
 function showStats(st) {
   $("vStats").hidden = !st || !st.length;
   if (!st || !st.length) return;
+  $("vStatsBody").replaceChildren(...statsRows(st));
+}
+// the rows of a table of channel statistics
+function statsRows(st, only) {
   const num = v => Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(3) : v.toFixed(6);
   const med = (c, v) => c.no_median ? "—" : num(v);
   const rows = [["count", c => String(c.count)], ["mean", c => num(c.mean)], ["median", c => med(c, c.median)],
     ["avgDev", c => med(c, c.avgdev)], ["MAD", c => med(c, c.mad)], ["stdDev", c => num(c.stddev)],
     ["minimum", c => num(c.min)], ["maximum", c => num(c.max)]];
-  $("vStatsBody").replaceChildren(
-    el("tr", {}, el("th", { textContent: st[0].no_median ? "" : "ADU" }), ...st.map(c => el("th", { textContent: c.name }))),
-    ...rows.map(([name, get]) => el("tr", {}, el("td", { textContent: name }), ...st.map(c => el("td", { textContent: get(c) })))));
+  return [el("tr", {}, el("th", { textContent: st[0].no_median ? "" : "ADU" }), ...st.map(c => el("th", { textContent: c.name }))),
+    ...rows.filter(([name]) => !only || only.includes(name)).map(([name, get]) => el("tr", {}, el("td", { textContent: name }), ...st.map(c => el("td", { textContent: get(c) }))))];
 }
 function updateSel() {
   const f = V.list[V.idx];
@@ -4346,6 +4363,7 @@ async function showFile() {
     place(node);
     if (im) drawHist(); else $("vHistBox").hidden = true;
     showTilt(f, im);
+    if (V.probe) { if (im) probe(); else closeProbe(); }
     showInfo(f, im);
     V.meta = im;
     renderMoon(f, im);
@@ -4418,15 +4436,123 @@ function setScale(s, fx, fy) {
 }
 // a click on the picture: a closer look centred on the clicked point, or back
 function zoomClick(e) {
+  if (V.pressed) { V.pressed = false; return; } // the end of a long press that measured
+  if (V.probeMode) { probeEvent(e); return; }
   if (V.scale > 1) { setScale(1); return; }
-  const n = e.currentTarget, r = n.getBoundingClientRect(), [nw, nh] = natSize(n);
-  // where the click was on the picture (object-fit leaves margins)
-  const sc = Math.min(r.width / nw, r.height / nh), dw = nw * sc, dh = nh * sc;
-  const fx = Math.min(Math.max((e.clientX - r.left - (r.width - dw) / 2) / dw, 0), 1);
-  const fy = Math.min(Math.max((e.clientY - r.top - (r.height - dh) / 2) / dh, 0), 1);
+  const n = e.currentTarget, [fx, fy] = pointOf(e, n);
   const fw = fitWidth(n);
   setScale(fw ? Math.max(2, srcWidth(n) / fw) : 2, fx, fy);
 }
+// pointOf: where an event was on the picture, 0..1 (object-fit leaves margins)
+function pointOf(e, n) {
+  const r = n.getBoundingClientRect(), [nw, nh] = natSize(n);
+  const sc = Math.min(r.width / nw, r.height / nh), dw = nw * sc, dh = nh * sc;
+  return [Math.min(Math.max((e.clientX - r.left - (r.width - dw) / 2) / dw, 0), 1),
+    Math.min(Math.max((e.clientY - r.top - (r.height - dh) / 2) / dh, 0), 1)];
+}
+
+// Measurement of a star: the statistics of a small area around the point,
+// read on the receiver from the file itself (the preview is binned, which
+// lowers the peaks of stars). Right button, a long press on a phone, or a
+// click in the mode ⌖. The point stays while paging and blinking.
+function probeEvent(e) {
+  const n = V.node, f = V.list[V.idx];
+  if (!n || !V.img || !f || !isFits(f.name)) return;
+  const [fx, fy] = pointOf(e, n);
+  V.probe = { fx, fy, x: e.clientX, y: e.clientY, res: null };
+  probe();
+}
+let probeReq = 0;
+async function probe() {
+  const p = V.probe, f = V.list[V.idx], im = V.img, box = $("vProbe");
+  if (!p || !f || !im || !isFits(f.name)) { box.hidden = true; return; }
+  const src = im.source && im.source[0] ? im.source : [im.width * im.binning, im.height * im.binning];
+  const x = Math.round(p.fx * (src[0] - 1)), y = Math.round(p.fy * (src[1] - 1)), req = ++probeReq;
+  if (!p.res) showProbe(el("div", { className: "muted", textContent: "Считаю…" }));
+  try {
+    const r = await fetch(`/ui/api/region?path=${encodeURIComponent(f.path)}&x=${x}&y=${y}&r=10`);
+    if (!r.ok) throw new Error(await r.text());
+    const res = await r.json();
+    if (req !== probeReq || V.probe !== p) return;
+    p.res = res; p.path = f.path;
+    showProbe(probeCard(res));
+    renderViewer();
+  } catch (err) {
+    if (req === probeReq) showProbe(el("div", { textContent: "Замер: " + err.message }));
+  }
+}
+const ru = (v, d = 0) => v.toLocaleString("ru", { maximumFractionDigits: d });
+function probeCard(r) {
+  const sat = r.saturation, peak = r.peak, bad = sat > 0 && r.saturated > 0;
+  const verdict = sat <= 0 ? `Пик ${ru(peak, 3)} — уровень насыщения неизвестен (данные с плавающей точкой)`
+    : bad ? `Пик ${ru(peak)} АЦП — ПЕРЕСВЕЧЕНА: ${r.saturated} пикс. не ниже ${ru(sat)}`
+    : `Пик ${ru(peak)} АЦП — ${Math.round(100 * peak / sat)}% насыщения, не пересвечена`;
+  return el("div", {},
+    el("div", { className: "verdict" + (bad ? " bad" : ""), textContent: verdict }),
+    el("div", { textContent: `Над фоном: ${ru(peak - r.background)} (фон ${ru(r.background)})` }),
+    el("div", { className: "muted", textContent: `Область ${r.w}×${r.h} пикс. в (${r.x}, ${r.y}), пик в (${r.peak_x}, ${r.peak_y}) — по исходному файлу` }),
+    el("div", { className: "tablewrap" }, el("table", { className: "vstats" }, el("tbody", {}, ...statsRows(r.channels, ["median", "mean", "stdDev", "maximum"])))));
+}
+function showProbe(content) {
+  const box = $("vProbe"), p = V.probe;
+  box.replaceChildren(el("button", { className: "x", textContent: "✕", title: "Закрыть (Esc)", onclick: closeProbe }), content);
+  box.hidden = false;
+  // next to the point, inside the window
+  const w = box.offsetWidth, h = box.offsetHeight;
+  let left = p.x + 16, top = p.y + 16;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, p.x - 16 - w);
+  if (top + h > window.innerHeight - 8) top = Math.max(8, p.y - 16 - h);
+  box.style.left = left + "px";
+  box.style.top = top + "px";
+}
+function closeProbe() {
+  V.probe = null; probeReq++;
+  $("vProbe").hidden = true;
+  renderViewer();
+}
+// the area measured, drawn on the frame: red when saturated
+function drawProbe(ctx, im) {
+  const p = V.probe, r = p && p.res, f = V.list[V.idx];
+  if (!r || !f || p.path !== f.path) return;
+  const k = im.width / r.width, lw = Math.max(1.5, im.width / 600);
+  ctx.save();
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = r.saturation > 0 && r.saturated > 0 ? "#ff3b30" : "#30d158";
+  ctx.strokeRect(r.x * k - lw, r.y * k - lw, r.w * k + 2 * lw, r.h * k + 2 * lw);
+  ctx.restore();
+}
+$("vProbeMode").onclick = () => {
+  V.probeMode = !V.probeMode;
+  $("vProbeMode").classList.toggle("on", V.probeMode);
+  $("vImgBox").classList.toggle("probe", V.probeMode);
+};
+// the right button; on a phone a long press (contextmenu does not come on iPhone)
+$("vImgBox").addEventListener("contextmenu", e => {
+  if (e.target !== V.node) return;
+  e.preventDefault();
+  if (V.pressed) return; // measured by the long press already
+  probeEvent(e);
+});
+{
+  let timer = 0, x0 = 0, y0 = 0;
+  const cancel = () => { clearTimeout(timer); timer = 0; };
+  $("vImgBox").addEventListener("pointerdown", e => {
+    cancel();
+    V.pressed = false;
+    if (e.pointerType !== "touch" || e.target !== V.node || !e.isPrimary) return;
+    x0 = e.clientX; y0 = e.clientY;
+    const ev = { clientX: e.clientX, clientY: e.clientY };
+    timer = setTimeout(() => {
+      timer = 0;
+      V.pressed = true;
+      if (navigator.vibrate) navigator.vibrate(20);
+      probeEvent(ev);
+    }, 500);
+  });
+  $("vImgBox").addEventListener("pointermove", e => { if (timer && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
+  for (const t of ["pointerup", "pointercancel"]) $("vImgBox").addEventListener(t, cancel);
+}
+
 // the point in the middle of the window follows scrolling
 $("vImgBox").addEventListener("scroll", () => {
   const box = $("vImgBox"), n = V.node;
@@ -4467,7 +4593,7 @@ async function blinkTick(gen) {
   V.timer = setTimeout(() => blinkTick(gen), Math.max(0, blinkDelay() - (performance.now() - t0)));
 }
 $("vPlay").onclick = () => setPlay(!V.play);
-$("viewer").addEventListener("close", () => setPlay(false));
+$("viewer").addEventListener("close", () => { setPlay(false); closeProbe(); });
 
 // The viewer steps through the frames of the folder of the opened one; with
 // "все папки" ticked it goes on into the next folder.
@@ -4543,6 +4669,7 @@ $("vReset").onclick = () => {
   }, { passive: true });
 }
 $("viewer").addEventListener("keydown", e => {
+  if (e.key === "Escape" && V.probe) { closeProbe(); e.preventDefault(); return; }
   if (e.target.tagName === "INPUT" && e.target.type === "range") return;
   if (e.key === "ArrowLeft") step(-1);
   else if (e.key === "ArrowRight") step(1);

@@ -377,6 +377,25 @@ func (r *Receiver) Tilt(ctx context.Context, p string) (stars.Tilt, error) {
 	return t, err
 }
 
+// Region asks the receiver for the statistics of a small area of a frame,
+// read there from the file itself (fits.ReadRegion).
+func (r *Receiver) Region(ctx context.Context, p string, x, y, rad int) (*fits.RegionStats, error) {
+	q := url.Values{"path": {p}, "x": {strconv.Itoa(x)}, "y": {strconv.Itoa(y)}, "r": {strconv.Itoa(rad)}}
+	resp, err := r.get(ctx, "/ui/api/region", q, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "ответил 404: страницы нет") {
+			return nil, errors.New("замер кадра на приёмнике: нужен приёмник новой версии")
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var st fits.RegionStats
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
 // PartSuffix marks a download not finished yet; the next run continues it.
 const PartSuffix = ".part"
 
