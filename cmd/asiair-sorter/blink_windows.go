@@ -52,9 +52,10 @@ func (c *previewCache) clear() {
 }
 
 // get returns the preview of the frame, reading it if needed (blocks).
-// local: where a copy of a frame of a receiver may be on disk already.
-func (c *previewCache) get(f *sorter.Frame, local []string, maxW int) *preview {
-	key := fmt.Sprintf("%p|%s|%d", f.Src, f.Path, maxW)
+// local: where a copy of a frame of a receiver may be on disk already;
+// linked: the channels are stretched together.
+func (c *previewCache) get(f *sorter.Frame, local []string, maxW int, linked bool) *preview {
+	key := fmt.Sprintf("%p|%s|%d|%t", f.Src, f.Path, maxW, linked)
 	c.mu.Lock()
 	if c.items == nil {
 		c.items = map[string]*cachedPreview{}
@@ -69,7 +70,7 @@ func (c *previewCache) get(f *sorter.Frame, local []string, maxW int) *preview {
 	c.order = append(c.order, key)
 	c.mu.Unlock()
 
-	e.p = readPreview(f, local, maxW)
+	e.p = readPreview(f, local, maxW, linked)
 	c.mu.Lock()
 	if e.p.err != nil {
 		delete(c.items, key) // tried again next time
@@ -132,8 +133,9 @@ func onDisk(paths []string, size int64) string {
 // readPreview reads a frame: binned to at most maxW pixels wide and
 // auto-stretched, with its header. A frame of a receiver is read from its
 // copy on disk (local) when downloaded already, else binned on the
-// receiver, so only the small preview comes over the network.
-func readPreview(f *sorter.Frame, local []string, maxW int) *preview {
+// receiver, so only the small preview comes over the network. The colour
+// channels are stretched together (linked) or each on its own.
+func readPreview(f *sorter.Frame, local []string, maxW int, linked bool) *preview {
 	src, file := f.Src, f.Path
 	if src != nil {
 		if l := onDisk(local, f.Size); l != "" {
@@ -187,8 +189,8 @@ func readPreview(f *sorter.Frame, local []string, maxW int) *preview {
 		p.head = "Статистика кадра, " + statsUnit(im) + ":\r\n" + t + "\r\n" + p.head
 	}
 	p.moon, p.obj = frameSky(f, get)
-	p.pic = im.Stretched()
-	p.hist = im.Histogram(histBins)
+	p.pic = im.StretchedChannels(linked)
+	p.hist = im.HistogramChannels(histBins, linked)
 	p.srcW = im.Width * im.Binning
 	p.full = maxW >= fullWidth || im.Binning <= 1 || im.Bayer != "" && im.Binning <= 2
 	p.info = fmt.Sprintf("%s — %d×%d", name, im.Width*im.Binning, im.Height*im.Binning)
@@ -250,6 +252,45 @@ func (w *window) setPlay(on bool) {
 	}
 }
 
+// step goes to the frame before (-1) or after (+1) in the table; the blink
+// stops, as in the receiver's viewer.
+func (w *window) step(d int) {
+	if w.playing {
+		w.setPlay(false)
+	}
+	n := len(w.model.rows)
+	if n == 0 {
+		return
+	}
+	i := w.table.CurrentIndex() + d
+	if w.table.CurrentIndex() < 0 {
+		i = 0
+	}
+	if i < 0 || i >= n {
+		return
+	}
+	w.table.SetCurrentIndex(i)
+	w.table.EnsureItemVisible(i)
+}
+
+// linkedChannels: the colour channels are stretched together, as
+// "Каналы вместе" in the receiver's viewer.
+func (w *window) linkedChannels() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.saved.LinkedChannels
+}
+
+// linkedToggled shows the frame stretched again.
+func (w *window) linkedToggled() {
+	w.mu.Lock()
+	w.saved.LinkedChannels = w.linkedBox.Checked()
+	w.mu.Unlock()
+	if w.zoom.bmp != nil || w.previewPending {
+		w.showPreview()
+	}
+}
+
 // scheduleBlink: the next frame comes when the one shown has been shown
 // long enough; a frame read slowly holds the next one back. Only the last
 // one scheduled counts.
@@ -287,11 +328,11 @@ func (w *window) readAhead() {
 	if !w.playing || n < 2 {
 		return
 	}
-	maxW := w.previewWidth()
+	maxW, linked := w.previewWidth(), w.linkedChannels()
 	for k := 1; k <= min(3, n-1); k++ {
 		r := w.model.rows[(w.table.CurrentIndex()+k)%n]
 		local := w.localPaths(r)
-		go w.previews.get(r.f, local, maxW)
+		go w.previews.get(r.f, local, maxW, linked)
 	}
 }
 

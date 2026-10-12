@@ -2,6 +2,7 @@ package fits
 
 import (
 	"bytes"
+	"image"
 	"math"
 	"math/rand"
 	"sort"
@@ -162,5 +163,38 @@ func TestHistogram(t *testing.T) {
 	}
 	if h.Black <= 0.05 || h.Black >= 0.1 {
 		t.Fatalf("black point %.3f", h.Black)
+	}
+}
+
+// TestStretchedChannels: a frame with a green background is grey when the
+// channels are stretched each on its own, green when linked.
+func TestStretchedChannels(t *testing.T) {
+	im := &Image{Width: 100, Height: 100, Channels: 3, Data: make([]float32, 30000)}
+	rnd := rand.New(rand.NewSource(7))
+	for i := range im.Data {
+		base := []float64{0.05, 0.2, 0.08}[i%3]
+		im.Data[i] = float32(base + 0.01*rnd.NormFloat64())
+	}
+	mean := func(linked bool) (r, g float64) {
+		pic := im.StretchedChannels(linked).(*image.RGBA)
+		for i := 0; i < len(pic.Pix); i += 4 {
+			r += float64(pic.Pix[i])
+			g += float64(pic.Pix[i+1])
+		}
+		n := float64(len(pic.Pix) / 4)
+		return r / n, g / n
+	}
+	if r, g := mean(false); math.Abs(r-g) > 15 {
+		t.Fatalf("each on its own: red %.0f, green %.0f", r, g)
+	}
+	if r, g := mean(true); g-r < 50 {
+		t.Fatalf("linked: red %.0f, green %.0f", r, g)
+	}
+	h := im.HistogramChannels(100, false)
+	if len(h.Blacks) != 3 || h.Blacks[1] <= h.Blacks[0] {
+		t.Fatalf("black points %v", h.Blacks)
+	}
+	if im.HistogramChannels(100, true).Blacks != nil {
+		t.Fatal("black points of linked channels")
 	}
 }
