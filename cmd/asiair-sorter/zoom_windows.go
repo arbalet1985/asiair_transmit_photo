@@ -27,6 +27,8 @@ type zoomView struct {
 	changed func()
 	// overlay draws over the picture placed at x0, y0, dw × dh
 	overlay func(c *walk.Canvas, x0, y0, dw, dh float64)
+	// onPoint: the right button on the picture, at fx, fy (0..1 of the frame)
+	onPoint func(fx, fy float64)
 }
 
 func newZoomView() *zoomView { return &zoomView{scale: 1, cx: 0.5, cy: 0.5} }
@@ -159,6 +161,13 @@ func (z *zoomView) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
 }
 
 func (z *zoomView) mouseDown(x, y int, b walk.MouseButton) {
+	if b == walk.RightButton && z.onPoint != nil && z.bmp != nil {
+		x0, y0, dw, dh := z.place()
+		if fx, fy := (float64(x)-x0)/dw, (float64(y)-y0)/dh; fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1 {
+			z.onPoint(fx, fy)
+		}
+		return
+	}
 	if b != walk.LeftButton || z.scale <= 1 {
 		return
 	}

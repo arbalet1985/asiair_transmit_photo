@@ -134,6 +134,9 @@ type window struct {
 	qualityCache               *sorter.QualityCache // stars measured on frames on disk
 	measureCancel              context.CancelFunc   // stops the measuring of the stars
 	measureLeft                int                  // frames still to be measured
+	probe                      *probe               // the point measured (right button on the preview)
+	probeDlg                   *walk.Dialog
+	probeEdit                  *walk.TextEdit
 	btnOpen                    *walk.PushButton
 	progress                   *walk.ProgressBar
 	status                     *walk.Label
@@ -379,7 +382,7 @@ func main() {
 							CustomWidget{AssignTo: &w.zoom.cw, PaintPixels: w.zoom.paint, StretchFactor: 3,
 								DoubleBuffering: true, InvalidatesOnResize: true, MinSize: Size{Width: 200, Height: 150},
 								OnMouseDown: w.zoom.mouseDown, OnMouseMove: w.zoom.mouseMove, OnMouseUp: w.zoom.mouseUp,
-								ToolTipText: "Колесо мыши — масштаб, перетаскивание — сдвиг увеличенного кадра"},
+								ToolTipText: "Колесо мыши — масштаб, перетаскивание — сдвиг увеличенного кадра, правая кнопка — замер звезды (пересвечена ли)"},
 							Composite{
 								Layout: HBox{MarginsZero: true},
 								Children: []Widget{
@@ -438,7 +441,11 @@ func main() {
 	}
 	w.zoom.cw.MouseWheel().Attach(w.zoom.wheel)
 	w.zoom.changed = w.zoomChanged
-	w.zoom.overlay = w.paintTilt
+	w.zoom.overlay = func(c *walk.Canvas, x0, y0, dw, dh float64) {
+		w.paintTilt(c, x0, y0, dw, dh)
+		w.paintProbe(c, x0, y0, dw, dh)
+	}
+	w.zoom.onPoint = w.probeAt
 	w.speedChanged()
 	w.inputChanged()
 	w.pl.init()
@@ -1168,6 +1175,9 @@ func (w *window) showPreview() {
 			}
 			w.moon, w.skyObj = p.moon, p.obj
 			w.moonView.Invalidate()
+			if w.probe != nil && p.err == nil {
+				w.measureProbe() // the same point of the next frame
+			}
 			w.readAhead()
 			w.scheduleBlink()
 		})
