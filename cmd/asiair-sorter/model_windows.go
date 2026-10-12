@@ -10,14 +10,34 @@ import (
 
 	"github.com/lxn/walk"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
 // row of the table: a frame and where it goes (nil for frames of unknown kind).
 type row struct {
-	f  *sorter.Frame
-	it *sorter.Item
+	f    *sorter.Frame
+	it   *sorter.Item
+	moon float64 // lit fraction of the Moon when the frame was taken, -1 = unknown
 }
+
+// the columns of the table
+const (
+	colKind = iota
+	colObject
+	colNight
+	colFilter
+	colExposure
+	colGain
+	colTemp
+	colCamera
+	colHFR
+	colStars
+	colMoon
+	colFile
+	colFolder
+	colDest
+)
 
 var columns = []struct {
 	title string
@@ -26,7 +46,16 @@ var columns = []struct {
 }{
 	{"Тип", 70, false}, {"Объект", 110, false}, {"Ночь", 80, false}, {"Фильтр", 55, false},
 	{"Выдержка", 70, true}, {"Гейн", 45, true}, {"Темп.", 45, true}, {"Камера", 120, false},
-	{"Файл", 320, false}, {"В папке", 110, true}, {"Куда", 420, false},
+	{"HFR", 45, true}, {"Звёзд", 50, true}, {"Луна", 45, true},
+	{"Файл", 280, false}, {"В папке", 110, true}, {"Куда", 360, false},
+}
+
+// moonOf: the lit fraction of the Moon at the moment of the frame.
+func moonOf(f *sorter.Frame) float64 {
+	if f.UTC.IsZero() {
+		return -1
+	}
+	return moon.At(f.UTC, 0, 0, false).Illum
 }
 
 // folderTotal: the frames of a folder of the input and their exposure.
@@ -76,7 +105,7 @@ func (m *frameModel) Value(i, col int) interface{} { return m.cell(m.rows[i], co
 func (m *frameModel) cell(r row, col int) string {
 	f := r.f
 	switch col {
-	case 0:
+	case colKind:
 		if f.Kind == "" {
 			return "?"
 		}
@@ -84,28 +113,43 @@ func (m *frameModel) cell(r row, col int) string {
 			return sorter.KindLabel[f.Kind] + " (повтор)"
 		}
 		return sorter.KindLabel[f.Kind]
-	case 1:
+	case colObject:
 		return f.Object
-	case 2:
+	case colNight:
 		return f.Night
-	case 3:
+	case colFilter:
 		return f.Filter
-	case 4:
+	case colExposure:
 		return sorter.FormatExposure(f.Exposure)
-	case 5:
+	case colGain:
 		if f.Gain < 0 {
 			return ""
 		}
 		return strconv.Itoa(f.Gain)
-	case 6:
+	case colTemp:
 		return sorter.FormatTemp(f.Temp)
-	case 7:
+	case colCamera:
 		return f.Camera
-	case 8:
+	case colHFR:
+		if !f.Measured || f.Stars == 0 {
+			return ""
+		}
+		return strings.Replace(strconv.FormatFloat(f.HFR, 'f', 2, 64), ".", ",", 1)
+	case colStars:
+		if !f.Measured {
+			return ""
+		}
+		return strconv.Itoa(f.Stars)
+	case colMoon:
+		if r.moon < 0 {
+			return ""
+		}
+		return fmt.Sprintf("%.0f%%", r.moon*100)
+	case colFile:
 		return strings.ReplaceAll(f.Rel, "/", `\`)
-	case 9:
+	case colFolder:
 		return m.folders[folderOf(f)].String()
-	case 10:
+	case colDest:
 		switch {
 		case r.it == nil:
 			return "— тип не распознан, останется на месте"
@@ -122,16 +166,28 @@ func (m *frameModel) cell(r row, col int) string {
 // num gives the numeric columns their order.
 func (m *frameModel) num(r row, col int) (float64, bool) {
 	switch col {
-	case 4:
+	case colExposure:
 		return r.f.Exposure, true
-	case 5:
+	case colGain:
 		return float64(r.f.Gain), true
-	case 6:
+	case colHFR:
+		if !r.f.Measured || r.f.Stars == 0 {
+			return 1e9, true // not measured: last
+		}
+		return r.f.HFR, true
+	case colStars:
+		if !r.f.Measured {
+			return -1, true
+		}
+		return float64(r.f.Stars), true
+	case colMoon:
+		return r.moon, true
+	case colTemp:
 		if math.IsNaN(r.f.Temp) {
 			return -1e9, true
 		}
 		return r.f.Temp, true
-	case 9:
+	case colFolder:
 		return m.folders[folderOf(r.f)].seconds, true
 	}
 	return 0, false
@@ -172,11 +228,11 @@ func (m *frameModel) set(l *sorter.Layout, remote bool) {
 	if l != nil {
 		for _, it := range l.Items {
 			if !it.InPlace() {
-				m.all = append(m.all, row{f: it.Frame, it: it})
+				m.all = append(m.all, row{f: it.Frame, it: it, moon: moonOf(it.Frame)})
 			}
 		}
 		for _, f := range l.Unknown {
-			m.all = append(m.all, row{f: f})
+			m.all = append(m.all, row{f: f, moon: moonOf(f)})
 		}
 		if remote {
 			m.gone = map[*sorter.Item]bool{}
@@ -340,6 +396,15 @@ func (m *nightModel) Value(i, col int) interface{} {
 		return fmt.Sprintf("%d из %d", r.Here, r.Frames)
 	}
 	return ""
+}
+
+// measured shows again the rows of the frames whose stars were measured.
+func (m *frameModel) measured(frames map[*sorter.Frame]bool) {
+	for i, r := range m.rows {
+		if frames[r.f] {
+			m.PublishRowChanged(i)
+		}
+	}
 }
 
 func (m *nightModel) set(rows []*sorter.NightRow) {

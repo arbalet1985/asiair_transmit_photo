@@ -238,6 +238,10 @@ type RemoteFile struct {
 	Size  int64     `json:"size"`
 	MTime time.Time `json:"mtime"`
 	Local bool      `json:"local"` // received: can be downloaded
+	// the stars of a light frame, as the receiver measured them
+	Measured bool    `json:"q,omitempty"`
+	HFR      float64 `json:"hfr,omitempty"`
+	Stars    int     `json:"stars,omitempty"`
 }
 
 // deleteCmd is a delete request queued on the receiver's page.
@@ -619,5 +623,6 @@ func remoteFrame(r *Receiver, f RemoteFile, cards []Card) Frame {
 	}
 	fr := describe(func(k string) string { return m[k] }, f.Path, f.MTime)
 	fr.Path, fr.Size, fr.Src, fr.MTime, fr.Cards = f.Path, f.Size, r, f.MTime, cards
+	fr.Measured, fr.HFR, fr.Stars = f.Measured, f.HFR, f.Stars
 	return fr
 }

@@ -66,6 +66,7 @@ type settings struct {
 	ShowHist        bool                     `json:"show_hist,omitempty"`
 	HistMode        int                      `json:"hist_mode,omitempty"`
 	LinkedChannels  bool                     `json:"linked_channels,omitempty"` // the colour channels stretched together
+	BestPercent     float64                  `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
 	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
 	Planner         plannerSettings          `json:"planner"`
 	// Folders: for each input (receiverKey) the folders synchronised; none = all
@@ -129,6 +130,10 @@ type window struct {
 	objBusy                    bool           // objBox is being refilled: ignore its events
 	fillBox                    *walk.CheckBox
 	btnScan, btnApply, btnStop *walk.PushButton
+	btnBest                    *walk.PushButton
+	qualityCache               *sorter.QualityCache // stars measured on frames on disk
+	measureCancel              context.CancelFunc   // stops the measuring of the stars
+	measureLeft                int                  // frames still to be measured
 	btnOpen                    *walk.PushButton
 	progress                   *walk.ProgressBar
 	status                     *walk.Label
@@ -284,6 +289,8 @@ func main() {
 					PushButton{AssignTo: &w.btnScan, Text: "1. Просмотреть кадры", OnClicked: w.scan,
 						ToolTipText: "Прочитать заголовки FITS и показать, что куда попадёт. Файлы не меняются."},
 					PushButton{AssignTo: &w.btnApply, Text: "2. Разложить", Enabled: false, OnClicked: w.apply},
+					PushButton{AssignTo: &w.btnBest, Text: "Лучшие кадры…", Enabled: false, OnClicked: w.bestDialog,
+						ToolTipText: "Отобрать лучшие кадры объекта (по HFR и числу звёзд, как взвешенный FWHM в Siril) за выбранные сессии в каталог Stars рядом с Objects, с той же структурой папок"},
 					PushButton{AssignTo: &w.btnStop, Text: "Стоп", Enabled: false, OnClicked: func() {
 						if w.cancel != nil {
 							w.cancel()
@@ -439,6 +446,9 @@ func main() {
 		if w.cancel != nil {
 			w.cancel()
 		}
+		if w.measureCancel != nil {
+			w.measureCancel()
+		}
 		w.settings().save()
 	})
 	w.mw.Run()
@@ -515,6 +525,7 @@ func (w *window) foldersChanged() {
 	in, out := strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	same := w.layout != nil && in == w.scannedIn && out == w.scannedOut && strings.Join(w.chosenFolders(in), "\n") == w.scannedOnly
 	w.btnApply.SetEnabled(same && !w.offline)
+	w.btnBest.SetEnabled(w.layout != nil && out == w.scannedOut && len(w.layout.Sessions) > 0)
 	// the frames deleted on the receiver: known after a scan of this receiver
 	// and output, and until the frames are laid out again
 	w.btnGone.SetEnabled(same && w.model.gone != nil || w.model.mark)
@@ -537,6 +548,7 @@ func (w *window) setBusy(b bool) {
 	if b {
 		w.btnApply.SetEnabled(false)
 		w.btnGone.SetEnabled(false)
+		w.btnBest.SetEnabled(false)
 	} else {
 		w.foldersChanged()
 	}
@@ -589,6 +601,10 @@ func (w *window) scan() {
 	s := w.settings()
 	w.setPlay(false)
 	w.previews.clear() // the frames may have changed
+	if w.measureCancel != nil {
+		w.measureCancel()
+		w.measureCancel = nil
+	}
 	remote := sorter.IsURL(s.In)
 	if err := sorter.CheckDirs(s.In, s.Out); err != nil {
 		w.warn(err.Error())
@@ -663,6 +679,7 @@ func (w *window) scan() {
 			w.summary.SetText(l.Summary())
 			w.pl.setFrames(frames)
 			w.foldersChanged()
+			w.measureStars()
 			msg := fmt.Sprintf("Кадров: %d, сессий: %d, объём %s.", l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
 			if offline {
 				msg = fmt.Sprintf("Приёмник недоступен (%v). Показаны кадры, уже скачанные в выходной каталог: %d, сессий: %d, объём %s. "+
