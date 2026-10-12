@@ -29,8 +29,9 @@ type qualityEntry struct {
 	V int `json:"v,omitempty"`
 }
 
-// qualityVersion: 2 takes the background of each star around it.
-const qualityVersion = 2
+// qualityVersion: 2 takes the background of each star around it, 3 tells
+// saturated stars as Siril does (counted, but not for the HFR).
+const qualityVersion = 3
 
 // quality keeps the star measurements of the received Light frames in
 // quality.json in the data folder. A background worker measures new frames

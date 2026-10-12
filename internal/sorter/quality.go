@@ -23,7 +23,13 @@ type QualityCache struct {
 type qualityEntry struct {
 	HFR   float64 `json:"hfr,omitempty"`
 	Stars int     `json:"stars,omitempty"`
+	// V: the version of the measurement; an older one is measured again
+	V int `json:"v,omitempty"`
 }
+
+// qualityVersion: 1 tells saturated stars as Siril does (counted, but not
+// for the HFR).
+const qualityVersion = 1
 
 // LoadQualityCache reads the cache file ("" = keep in memory only).
 func LoadQualityCache(file string) *QualityCache {
@@ -143,7 +149,7 @@ func measureOne(f *Frame, p string, cache *QualityCache) (Measurement, bool) {
 		cache.mu.Lock()
 		e, ok := cache.m[k]
 		cache.mu.Unlock()
-		if ok {
+		if ok && e.V == qualityVersion {
 			return Measurement{f, e.HFR, e.Stars}, true
 		}
 	}
@@ -153,7 +159,7 @@ func measureOne(f *Frame, p string, cache *QualityCache) (Measurement, bool) {
 	}
 	if cache != nil {
 		cache.mu.Lock()
-		cache.m[k] = qualityEntry{r.HFR, r.Stars}
+		cache.m[k] = qualityEntry{r.HFR, r.Stars, qualityVersion}
 		cache.mu.Unlock()
 	}
 	return Measurement{f, r.HFR, r.Stars}, true

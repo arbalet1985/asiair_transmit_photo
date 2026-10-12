@@ -4230,7 +4230,7 @@ async function showTilt(f, im) {
     el("div", { textContent: `Тилт: ${t.tilt.toFixed(2)} px HFR (${Math.round(t.percent)}%)` }),
     el("div", { textContent: `По углам: ↖ ${c[0]}  ↗ ${c[1]}  ↙ ${c[2]}  ↘ ${c[3]}` }),
     el("div", { textContent: `Вне оси (края − центр): ${t.off_axis.toFixed(2)} px (центр ${t.center.toFixed(2)}, края ${t.edge.toFixed(2)})` }),
-    el("div", { className: "muted", textContent: `Звёзд: ${t.stars}, HFR ${t.hfr.toFixed(2)} px (FWHM ≈ 2×HFR)` }));
+    el("div", { className: "muted", textContent: `Звёзд: ${t.stars}, HFR ${t.hfr.toFixed(2)} px (FWHM ≈ 1,5×HFR)` }));
 }
 const hdrNames = { OBJECT: "Объект", IMAGETYP: "Тип", FRAME: "Тип", EXPTIME: "Выдержка, с", EXPOSURE: "Выдержка, с", GAIN: "Gain", OFFSET: "Offset",
   "CCD-TEMP": "Температура, °C", "SET-TEMP": "Задано, °C", FILTER: "Фильтр", XBINNING: "Бининг", INSTRUME: "Камера", TELESCOP: "Телескоп",

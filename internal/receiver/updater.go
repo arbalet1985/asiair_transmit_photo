@@ -34,7 +34,8 @@ const (
 // agentPlatform is the platform of the agent program in the releases.
 var agentPlatform = "windows/amd64"
 
-// agentFile is the agent program downloaded for the agent.
+// agentFile is a program downloaded for others: the agent for the agent,
+// the sorter for the sorters connected to the receiver.
 type agentFile struct {
 	Version string
 	Path    string
@@ -44,7 +45,7 @@ type agentFile struct {
 }
 
 // updater looks for new releases, updates the receiver itself and keeps
-// the new agent program for the agent.
+// the new agent program for the agent and the new sorter for the sorters.
 type updater struct {
 	s   *Server
 	dir string // where the agent program is kept
@@ -61,6 +62,7 @@ type updater struct {
 	err        string
 	status     string
 	agent      *agentFile
+	sorter     *agentFile
 	rolledBack *update.Rollback // the last update of the receiver that was undone
 	wake       chan bool        // a check asked on the page; true = also install
 }
@@ -71,19 +73,26 @@ func newUpdater(s *Server) *updater {
 		auto: bool(s.cfg.AutoUpdate), token: s.cfg.UpdateToken, repo: s.cfg.UpdateRepo,
 		wake: make(chan bool, 1),
 	}
-	u.agent = u.findAgentFile()
+	u.agent = u.findFile(agentPrefix)
+	u.sorter = u.findFile(sorterPrefix)
 	return u
 }
 
-// agentName is the file name of a downloaded agent version.
-func agentName(version string) string { return "asiair-agent-" + version + ".exe" }
+// The names of the downloaded programs: <prefix><version>.exe.
+const (
+	agentPrefix  = "asiair-agent-"
+	sorterPrefix = "asiair-sorter-"
+)
 
-// findAgentFile picks up the newest agent program downloaded earlier.
-func (u *updater) findAgentFile() *agentFile {
-	matches, _ := filepath.Glob(filepath.Join(u.dir, "asiair-agent-*.exe"))
+// agentName is the file name of a downloaded agent version.
+func agentName(version string) string { return agentPrefix + version + ".exe" }
+
+// findFile picks up the newest program with the prefix downloaded earlier.
+func (u *updater) findFile(prefix string) *agentFile {
+	matches, _ := filepath.Glob(filepath.Join(u.dir, prefix+"*.exe"))
 	var best *agentFile
 	for _, m := range matches {
-		v := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), "asiair-agent-"), ".exe")
+		v := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), prefix), ".exe")
 		if !update.Valid(v) || (best != nil && !update.Newer(v, best.Version)) {
 			continue
 		}
@@ -218,30 +227,18 @@ func (u *updater) check(ctx context.Context, install, asked bool) {
 	}
 	u.mu.Lock()
 	u.builds = builds
-	have := u.agent
 	u.mu.Unlock()
-	if a, ok := rel.Assets[update.AgentAsset]; ok && (have == nil || update.Newer(rel.Version, have.Version)) {
-		u.setStatus("скачивается агент %s", rel.Version)
-		c.Progress = u.progress("агент " + rel.Version)
-		dst := filepath.Join(u.dir, agentName(rel.Version))
-		sum, err := c.Download(ctx, a, dst)
-		if err != nil {
-			u.fail("агент %s не скачан: %v", rel.Version, err)
-			return
-		}
-		st, _ := os.Stat(dst)
-		u.mu.Lock()
-		old := u.agent
-		u.agent = &agentFile{Version: rel.Version, Path: dst, Size: st.Size(), SHA256: sum, Build: builds[update.AgentAsset]}
-		u.mu.Unlock()
-		if b := builds[update.AgentAsset]; b != "" {
-			os.WriteFile(dst+".build", []byte(b), 0o644)
-		}
-		if old != nil && old.Path != dst {
-			os.Remove(old.Path)
-			os.Remove(old.Path + ".build")
-		}
+	if got, err := u.keep(ctx, c, rel, builds, &u.agent, update.AgentAsset, agentPrefix, "агент"); err != nil {
+		u.fail("%v", err)
+		return
+	} else if got {
 		u.setStatus("агент %s скачан, агент обновится при следующей связи", rel.Version)
+	}
+	// the sorter is not needed for the receiver to work: a failure is only noted
+	if got, err := u.keep(ctx, c, rel, builds, &u.sorter, update.SorterAsset, sorterPrefix, "сортировщик"); err != nil {
+		u.setStatus("%v", err)
+	} else if got {
+		u.setStatus("сортировщик %s скачан, сортировщик предложит обновиться при подключении к приёмнику", rel.Version)
 	}
 
 	if !update.Newer(rel.Version, protocol.Version) {
@@ -304,6 +301,41 @@ func (u *updater) check(ctx context.Context, install, asked bool) {
 	}
 }
 
+// keep downloads the program asset of the release into *have when the
+// release is newer than the one kept (the older one is removed). It
+// reports whether it downloaded.
+func (u *updater) keep(ctx context.Context, c *update.Client, rel *update.Release, builds map[string]string, have **agentFile, asset, prefix, what string) (bool, error) {
+	a, ok := rel.Assets[asset]
+	u.mu.Lock()
+	old := *have
+	u.mu.Unlock()
+	if !ok || old != nil && !update.Newer(rel.Version, old.Version) {
+		return false, nil
+	}
+	u.setStatus("скачивается %s %s", what, rel.Version)
+	c.Progress = u.progress(what + " " + rel.Version)
+	dst := filepath.Join(u.dir, prefix+rel.Version+".exe")
+	sum, err := c.Download(ctx, a, dst)
+	if err != nil {
+		return false, fmt.Errorf("%s %s не скачан: %v", what, rel.Version, err)
+	}
+	st, err := os.Stat(dst)
+	if err != nil {
+		return false, err
+	}
+	u.mu.Lock()
+	*have = &agentFile{Version: rel.Version, Path: dst, Size: st.Size(), SHA256: sum, Build: builds[asset]}
+	u.mu.Unlock()
+	if b := builds[asset]; b != "" {
+		os.WriteFile(dst+".build", []byte(b), 0o644)
+	}
+	if old != nil && old.Path != dst {
+		os.Remove(old.Path)
+		os.Remove(old.Path + ".build")
+	}
+	return true, nil
+}
+
 // progress shows how much of a download has arrived on the page (not in
 // the log).
 func (u *updater) progress(what string) func(done, total int64) {
@@ -347,6 +379,33 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	s.updater.mu.Lock()
 	a := s.updater.agent
 	s.updater.mu.Unlock()
+	serveProgram(w, r, a, "агент", update.AgentAsset)
+}
+
+// ---------- API for the sorter ----------
+
+// handleUISorterUpdate tells a sorter connected to the receiver which
+// sorter program the receiver keeps; the sorter decides whether it is new.
+func (s *Server) handleUISorterUpdate(w http.ResponseWriter, r *http.Request) {
+	s.updater.mu.Lock()
+	a := s.updater.sorter
+	s.updater.mu.Unlock()
+	if a == nil {
+		writeJSON(w, protocol.UpdateOffer{})
+		return
+	}
+	writeJSON(w, protocol.UpdateOffer{Version: a.Version, Size: a.Size, SHA256: a.SHA256, Build: a.Build})
+}
+
+func (s *Server) handleUISorterFile(w http.ResponseWriter, r *http.Request) {
+	s.updater.mu.Lock()
+	a := s.updater.sorter
+	s.updater.mu.Unlock()
+	serveProgram(w, r, a, "сортировщик", update.SorterAsset)
+}
+
+// serveProgram sends a program kept for others.
+func serveProgram(w http.ResponseWriter, r *http.Request, a *agentFile, what, name string) {
 	if a == nil {
 		http.Error(w, "обновления нет", http.StatusNotFound)
 		return
@@ -362,9 +421,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Printf("Обновление: агент скачивает версию %s", a.Version)
+	log.Printf("Обновление: %s скачивает версию %s", what, a.Version)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, r, update.AgentAsset, st.ModTime(), f)
+	http.ServeContent(w, r, name, st.ModTime(), f)
 }
 
 // ---------- web page ----------
@@ -379,7 +438,8 @@ type updateInfo struct {
 	Status        string    `json:"status"`
 	Auto          bool      `json:"auto"`
 	TokenSet      bool      `json:"token_set"`
-	Agent         string    `json:"agent"` // agent version kept for the agent
+	Agent         string    `json:"agent"`            // agent version kept for the agent
+	Sorter        string    `json:"sorter,omitempty"` // sorter version kept for the sorters
 	CanSelfUpdate bool      `json:"can_self_update"`
 	// ReceiverSame, AgentSame: the latest release has no changes for the
 	// receiver (for the agent that reported its build).
@@ -399,6 +459,9 @@ func (u *updater) info() updateInfo {
 	}
 	if u.agent != nil {
 		in.Agent = u.agent.Version
+	}
+	if u.sorter != nil {
+		in.Sorter = u.sorter.Version
 	}
 	in.ReceiverSame = update.Unchanged(u.builds, update.ReceiverAsset, protocol.Build)
 	in.AgentSame = update.Unchanged(u.builds, update.AgentAsset, u.s.state.AgentBuild())

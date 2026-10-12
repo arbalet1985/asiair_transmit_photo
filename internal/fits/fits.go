@@ -106,6 +106,10 @@ type Image struct {
 	Bayer   string // debayered pattern, "" for mono or RGB data
 	// Stats: of the whole frame, per channel (only from Preview).
 	Stats []ChannelStats
+	// Max: the brightest sample of each channel of the whole frame (not of
+	// the preview), normalised as Data; nil when unknown. Binning lowers
+	// the peaks of the preview, the level of saturation is known from it.
+	Max []float32
 }
 
 // bayer colour index (0=R,1=G,2=B) for a pattern at (x%2, y%2).
@@ -235,13 +239,14 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 			sum[i] /= cnt[i]
 		}
 	}
-	normalize(sum, bitpix, bscale, bzero, h)
+	norm := normalize(sum, bitpix, bscale, bzero, h)
 	if strings.EqualFold(h.Get("ROWORDER"), "BOTTOM-UP") {
 		flipRows(sum, ow*channels, oh)
 	}
 	img.Data = sum
 	for c, name := range channelNames(channels) {
 		img.Stats = append(img.Stats, acc[c].stats(name))
+		img.Max = append(img.Max, float32(norm(acc[c].max)))
 	}
 	return img, nil
 }
@@ -362,8 +367,28 @@ func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, patter
 	img.Data = d
 	for c, name := range channelNames(ch) {
 		img.Stats = append(img.Stats, histStats(name, hist[c], bscale, bzero))
+		img.Max = append(img.Max, histTop(hist[c], bscale < 0))
 	}
 	return img, nil
+}
+
+// histTop is the brightest sample of a histogram of 16-bit samples,
+// normalised as preview16 does (inverted for a negative BSCALE).
+func histTop(hist []uint32, inverted bool) float32 {
+	if inverted {
+		for u, k := range hist {
+			if k > 0 {
+				return 1 - float32(u)/65535
+			}
+		}
+		return 0
+	}
+	for u := len(hist) - 1; u >= 0; u-- {
+		if hist[u] > 0 {
+			return float32(u) / 65535
+		}
+	}
+	return 0
 }
 
 func decodeRow(row []byte, bitpix int, bscale, bzero float64, out []float64) {
@@ -387,8 +412,9 @@ func decodeRow(row []byte, bitpix int, bscale, bzero float64, out []float64) {
 }
 
 // normalize maps values to 0..1: integer data by the range of its type,
-// floating point data by its actual minimum and maximum.
-func normalize(d []float32, bitpix int, bscale, bzero float64, h *Header) {
+// floating point data by its actual minimum and maximum. It returns the
+// mapping, for other values of the frame.
+func normalize(d []float32, bitpix int, bscale, bzero float64, h *Header) func(float64) float64 {
 	var lo, hi float64
 	switch bitpix {
 	case 8:
@@ -411,15 +437,19 @@ func normalize(d []float32, bitpix int, bscale, bzero float64, h *Header) {
 	if span <= 0 || math.IsInf(span, 0) || math.IsNaN(span) {
 		span = 1
 	}
-	for i, v := range d {
-		x := (float64(v) - lo) / span
+	norm := func(v float64) float64 {
+		x := (v - lo) / span
 		if x < 0 {
 			x = 0
 		} else if x > 1 {
 			x = 1
 		}
-		d[i] = float32(x)
+		return x
 	}
+	for i, v := range d {
+		d[i] = float32(norm(float64(v)))
+	}
+	return norm
 }
 
 func flipRows(d []float32, rowLen, rows int) {

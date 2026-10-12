@@ -362,7 +362,8 @@ const (
 	OrderLights = "lights"
 )
 
-// UpdateOffer describes the agent program the receiver can hand out.
+// UpdateOffer describes the agent program the receiver can hand out (and,
+// at /ui/api/sorter, the sorter program for a sorter connected to it).
 type UpdateOffer struct {
 	Version string `json:"version"`
 	Size    int64  `json:"size"`

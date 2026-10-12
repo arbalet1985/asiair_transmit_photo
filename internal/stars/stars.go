@@ -15,7 +15,7 @@ import (
 
 // Result of a measurement.
 type Result struct {
-	Stars int     // stars found (hot pixels, saturated stars and nebulae left out)
+	Stars int     // stars found, saturated ones too (hot pixels and nebulae left out)
 	HFR   float64 // median half flux radius in pixels of the original frame; 0 without stars
 }
 
@@ -38,15 +38,21 @@ func MeasureFile(name string) (Result, error) {
 }
 
 // Measure finds the stars of an image (colour channels are averaged).
+// Saturated stars count as stars but, as in Siril, not for the size: their
+// clipped top makes them look bigger than they are.
 func Measure(img *fits.Image) Result {
 	found := find(img)
 	if len(found) == 0 {
 		return Result{}
 	}
+	sized := unsaturated(found)
+	if len(sized) == 0 {
+		sized = found
+	}
 	// the size is taken from the brighter half: the faintest stars are
 	// mostly noise
-	sort.Slice(found, func(i, j int) bool { return found[i].Flux > found[j].Flux })
-	bright := found[:max(1, (len(found)+1)/2)]
+	sort.Slice(sized, func(i, j int) bool { return sized[i].Flux > sized[j].Flux })
+	bright := sized[:max(1, (len(sized)+1)/2)]
 	hfrs := make([]float64, len(bright))
 	for i, s := range bright {
 		hfrs[i] = s.HFR
@@ -55,9 +61,21 @@ func Measure(img *fits.Image) Result {
 	return Result{Stars: len(found), HFR: hfrs[len(hfrs)/2]}
 }
 
+// unsaturated returns the stars that are not saturated.
+func unsaturated(found []Star) []Star {
+	var out []Star
+	for _, s := range found {
+		if !s.Saturated {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // Star is a star found: its centre and HFR in pixels of the original frame.
 type Star struct {
 	X, Y, HFR, Flux float64
+	Saturated       bool // its top is clipped: the HFR is too big
 }
 
 // find returns the stars of an image (colour channels are averaged).
@@ -75,7 +93,7 @@ func find(img *fits.Image) []Star {
 		}
 	}
 	bin := float64(max(img.Binning, 1))
-	found := measure(lum, w, h)
+	found := measure(lum, w, h, saturation(img))
 	for i := range found {
 		s := &found[i]
 		// the centre of a preview pixel
@@ -109,14 +127,84 @@ const (
 	detectSigma = 5    // a star pixel is this many noise sigmas above the background
 	minPixels   = 3    // smaller spots are hot pixels or noise
 	maxPixels   = 2500 // bigger ones are nebulae, galaxies or bloated bright stars
-	saturated   = 0.97 // a peak this bright (of the full range) is clipped
 	maxStars    = 30000
 )
 
+// Saturation as Siril tells it (star_finder.c), in parts of the range from
+// the background to the brightest sample of the frame: a star whose centre
+// and its neighbours are above satLevel of it, and flat within satFlat of
+// it, is saturated (a plateau). A smaller clipped core is no plateau: Siril
+// finds it by the fitted profile rising above the range, here by the
+// brightest pixel of the star within satTop of the brightest sample.
+const (
+	satLevel = 0.7
+	satFlat  = 0.1
+	satTop   = 0.02
+)
+
+// saturation returns the test of a star by the pixels (of the preview) of
+// its centre and its brightest one: saturated in some channel. The level
+// of saturation is the brightest sample of the whole frame (img.Max), so a
+// sensor that clips below the top of its 16 bits is caught too.
+func saturation(img *fits.Image) func(centre, brightest int) bool {
+	w, h, ch := img.Width, img.Height, img.Channels
+	// per channel c: the levels of satLevel, satFlat and satTop
+	type limit struct {
+		c                 int
+		level, flat, clip float32
+	}
+	var lims []limit
+	for c := 0; c < ch; c++ {
+		v := make([]float32, 0, len(img.Data)/ch)
+		top := float32(0)
+		for i := c; i < len(img.Data); i += ch {
+			v = append(v, img.Data[i])
+			top = max(top, img.Data[i])
+		}
+		if c < len(img.Max) && img.Max[c] > 0 {
+			top = img.Max[c]
+		}
+		bg, _ := background(v)
+		if dyn := top - bg; dyn > 0 {
+			lims = append(lims, limit{c: c, level: bg + satLevel*dyn, flat: satFlat * dyn, clip: top - satTop*dyn})
+		}
+	}
+	return func(p, brightest int) bool {
+		x, y := p%w, p/w
+		for _, l := range lims {
+			c := l.c
+			if img.Data[brightest*ch+c] >= l.clip {
+				return true
+			}
+			v := img.Data[p*ch+c]
+			var sum float32
+			low := v
+			n := 0
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					xx, yy := x+dx, y+dy
+					if dx == 0 && dy == 0 || xx < 0 || yy < 0 || xx >= w || yy >= h {
+						continue
+					}
+					q := img.Data[(yy*w+xx)*ch+c]
+					sum += q
+					low = min(low, q)
+					n++
+				}
+			}
+			if n > 0 && sum/float32(n) >= l.level && v-low <= l.flat {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 var errTooBig = errors.New("too big")
 
-// measure returns the stars of d, in its pixels.
-func measure(d []float32, w, h int) []Star {
+// measure returns the stars of d, in its pixels; sat tells a saturated
+// star by the pixel of its centre and its brightest one (nil: none are).
+func measure(d []float32, w, h int, sat func(centre, brightest int) bool) []Star {
 	if w < 32 || h < 32 {
 		return nil
 	}
@@ -138,6 +226,7 @@ func measure(d []float32, w, h int) []Star {
 		stack = append(stack[:0], start)
 		seen[start] = true
 		var n int
+		top := start // the brightest pixel
 		var peak, sum, sx, sy float64
 		minX, maxX, minY, maxY := w, -1, h, -1
 		for len(stack) > 0 {
@@ -149,7 +238,9 @@ func measure(d []float32, w, h int) []Star {
 			sum += f
 			sx += f * float64(x)
 			sy += f * float64(y)
-			peak = math.Max(peak, float64(d[p]))
+			if float64(d[p]) > peak {
+				peak, top = float64(d[p]), p
+			}
 			minX, maxX = min(minX, x), max(maxX, x)
 			minY, maxY = min(minY, y), max(maxY, y)
 			for _, q := range [4]int{p - 1, p + 1, p - w, p + w} {
@@ -163,7 +254,7 @@ func measure(d []float32, w, h int) []Star {
 				stack = append(stack, q)
 			}
 		}
-		if n < minPixels || n > maxPixels || peak >= saturated || sum <= 0 {
+		if n < minPixels || n > maxPixels || sum <= 0 {
 			continue
 		}
 		// elongated streaks (satellites, planes) are not stars
@@ -182,7 +273,7 @@ func measure(d []float32, w, h int) []Star {
 			continue // a brighter patch of the background, not a star
 		}
 		if v, ok := hfrAt(d, w, bg, cx, cy, r); ok {
-			found = append(found, Star{X: cx, Y: cy, HFR: v, Flux: sum})
+			found = append(found, Star{X: cx, Y: cy, HFR: v, Flux: sum, Saturated: sat != nil && sat(int(cy+0.5)*w+int(cx+0.5), top)})
 			if len(found) >= maxStars {
 				break
 			}

@@ -12,10 +12,12 @@ import (
 // Tilt of the sensor, measured as Siril's "tilt" command does: the stars of
 // the four quarters of the frame are compared. A tilted sensor (or a bent
 // focuser) leaves stars of one side bigger than of the other. Sizes are
-// HFR in pixels of the original frame (FWHM is about twice the HFR).
+// HFR in pixels of the original frame. The HFR is the flux weighted mean
+// radius: FWHM is about 1.5 times it for real stars (Moffat profile), 1.9
+// times for a Gaussian.
 type Tilt struct {
-	Stars int     `json:"stars"`
-	HFR   float64 `json:"hfr"` // of all stars
+	Stars int     `json:"stars"` // saturated ones too; they are left out of the sizes
+	HFR   float64 `json:"hfr"`   // of all stars
 	// Corners: top left, top right, bottom left, bottom right, as shown
 	Corners [4]float64 `json:"corners"`
 	Counts  [4]int     `json:"counts"` // stars of each quarter
@@ -50,8 +52,10 @@ func MeasureTilt(img *fits.Image) (Tilt, error) {
 	b := float64(max(img.Binning, 1))
 	w, h := float64(img.Width)*b, float64(img.Height)*b
 	t := Tilt{Width: int(w), Height: int(h)}
-	stars := find(img)
-	t.Stars = len(stars)
+	found := find(img)
+	t.Stars = len(found)
+	// saturated stars count, but their size is not a size (as in Measure)
+	stars := unsaturated(found)
 	cx, cy := w/2, h/2
 	r := math.Hypot(cx, cy)
 	var all, centre, edge []float64
