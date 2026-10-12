@@ -65,3 +65,53 @@ func TestMeasure(t *testing.T) {
 		t.Errorf("binned: %.2f", b.HFR)
 	}
 }
+
+// A sensor that clips below the top of its range (0.94 here) leaves bright
+// stars flat topped: they count as stars, but not for the size, as in Siril.
+func TestSaturated(t *testing.T) {
+	const w, h, sigma = 800, 600, 1.5
+	draw := func(clip float32) *fits.Image {
+		rnd := rand.New(rand.NewSource(3))
+		d := make([]float32, w*h)
+		for i := range d {
+			d[i] = float32(0.05 + rnd.NormFloat64()*0.002)
+		}
+		for s := 0; s < 120; s++ {
+			cx, cy := 40+rnd.Float64()*(w-80), 40+rnd.Float64()*(h-80)
+			amp := 0.05 + 0.4*rnd.Float64()
+			if s%4 == 0 {
+				amp = 3 + 5*rnd.Float64() // far brighter than the sensor holds
+			}
+			for y := int(cy) - 12; y <= int(cy)+12; y++ {
+				for x := int(cx) - 12; x <= int(cx)+12; x++ {
+					dx, dy := float64(x)-cx, float64(y)-cy
+					d[y*w+x] += float32(amp * math.Exp(-(dx*dx+dy*dy)/(2*sigma*sigma)))
+				}
+			}
+		}
+		for i, v := range d {
+			d[i] = min(v, clip)
+		}
+		return &fits.Image{Width: w, Height: h, Channels: 1, Data: d, Binning: 1, Max: []float32{clip}}
+	}
+	faint := Measure(draw(100)) // nothing clipped: the size of the faint stars
+	clipped := draw(0.94)
+	found := find(clipped)
+	sat := len(found) - len(unsaturated(found))
+	if sat < 25 || sat > 32 {
+		t.Errorf("%d stars saturated of 30 drawn so", sat)
+	}
+	got := Measure(clipped)
+	if got.Stars < 110 {
+		t.Errorf("%d stars: saturated stars must count", got.Stars)
+	}
+	want := sigma * math.Sqrt(math.Pi/2)
+	if math.Abs(got.HFR-want)/want > 0.15 {
+		t.Errorf("HFR %.2f with saturated stars, want about %.2f (unclipped bright stars: %.2f)", got.HFR, want, faint.HFR)
+	}
+	// without the maximum of the frame, that of the image itself is taken
+	clipped.Max = nil
+	if n := len(find(clipped)) - len(unsaturated(find(clipped))); n != sat {
+		t.Errorf("without Max: %d saturated, with: %d", n, sat)
+	}
+}

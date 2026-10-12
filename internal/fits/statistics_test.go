@@ -198,3 +198,51 @@ func TestStretchedChannels(t *testing.T) {
 		t.Fatal("black points of linked channels")
 	}
 }
+
+// Max is the brightest sample of the whole frame, normalised as the
+// preview, though binning lowers the peaks of the preview.
+func TestPreviewMax(t *testing.T) {
+	const w, h = 64, 48
+	vals := make([]uint16, w*h)
+	for i := range vals {
+		vals[i] = 1000
+	}
+	vals[10*w+21] = 60000 // green of RGGB (odd column, even row)
+	vals[11*w+21] = 50000 // blue (odd column, odd row)
+	be32 := make([]byte, 0, w*h*4)
+	for _, v := range vals {
+		x := uint32(int32(v) - 32768)
+		be32 = append(be32, byte(x>>24), byte(x>>16), byte(x>>8), byte(x))
+	}
+	for _, c := range []struct {
+		name  string
+		cards []string
+		data  []byte
+		want  []float32
+	}{
+		{"mono16", []string{"BITPIX = 16", "BZERO = 32768"}, u16(vals), []float32{60000. / 65535}},
+		{"rggb16", []string{"BITPIX = 16", "BZERO = 32768", "BAYERPAT = 'RGGB'"}, u16(vals), []float32{1000. / 65535, 60000. / 65535, 50000. / 65535}},
+		{"int32", []string{"BITPIX = 32"}, be32, []float32{float32((60000 - 32768 + 2147483648.) / 4294967295.)}},
+	} {
+		cards := append([]string{"SIMPLE = T", "NAXIS = 2", "NAXIS1 = 64", "NAXIS2 = 48"}, c.cards...)
+		im, err := Preview(bytes.NewReader(makeFITS(cards, c.data)), 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if im.Binning < 2 || len(im.Max) != len(c.want) {
+			t.Fatalf("%s: binning %d, max %v", c.name, im.Binning, im.Max)
+		}
+		for i := range c.want {
+			if math.Abs(float64(im.Max[i]-c.want[i])) > 1e-6 {
+				t.Errorf("%s: max of channel %d is %v, want %v", c.name, i, im.Max[i], c.want[i])
+			}
+		}
+		var top float32
+		for _, v := range im.Data {
+			top = max(top, v)
+		}
+		if top >= im.Max[len(im.Max)-1] && c.name != "rggb16" {
+			t.Errorf("%s: the preview keeps the peak %v: the test does not bin", c.name, top)
+		}
+	}
+}
