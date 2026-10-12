@@ -86,7 +86,12 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("архив больше %d МБ", agentLogsMax>>20)
 	}
 	if err == nil {
-		_, err = zip.OpenReader(tmp.Name()) // a whole zip, not a broken upload
+		// a whole zip, not a broken upload; closed at once, or Windows
+		// refuses the rename below
+		var zr *zip.ReadCloser
+		if zr, err = zip.OpenReader(tmp.Name()); err == nil {
+			zr.Close()
+		}
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
