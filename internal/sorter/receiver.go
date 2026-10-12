@@ -23,6 +23,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/stars"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 // A receiver of this project (asiair-receiver) as the input: its received
@@ -644,4 +645,57 @@ func remoteFrame(r *Receiver, f RemoteFile, cards []Card) Frame {
 	fr.Path, fr.Size, fr.Src, fr.MTime, fr.Cards = f.Path, f.Size, r, f.MTime, cards
 	fr.Measured, fr.HFR, fr.Stars = f.Measured, f.HFR, f.Stars
 	return fr
+}
+
+// SorterUpdate asks the receiver which sorter program it keeps for the
+// sorters (downloaded with its own update). Version is "" when none, and
+// an old receiver without it answers with an error.
+func (r *Receiver) SorterUpdate(ctx context.Context) (protocol.UpdateOffer, error) {
+	var o protocol.UpdateOffer
+	resp, err := r.get(ctx, "/ui/api/sorter", nil, nil)
+	if err != nil {
+		return o, err
+	}
+	defer resp.Body.Close()
+	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&o)
+	return o, err
+}
+
+// NewSorter reports whether the sorter offered is worth installing: a newer
+// version with other code than the running one. A sorter built by hand
+// ("dev") is never replaced.
+func NewSorter(o protocol.UpdateOffer) bool {
+	if !update.Valid(protocol.Version) || !update.Newer(o.Version, protocol.Version) {
+		return false
+	}
+	return o.Build == "" || o.Build != protocol.Build
+}
+
+// DownloadSorter saves the sorter program the receiver keeps to dst,
+// checking its size and checksum against the offer.
+func (r *Receiver) DownloadSorter(ctx context.Context, o protocol.UpdateOffer, dst string, progress func(done, total int64)) error {
+	resp, err := r.get(ctx, "/ui/sorter.exe", nil, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var body io.Reader = resp.Body
+	if progress != nil {
+		body = &countReader{r: body, total: o.Size, f: progress}
+	}
+	_, err = update.Save(body, dst, o.Size, o.SHA256)
+	return err
+}
+
+type countReader struct {
+	r           io.Reader
+	done, total int64
+	f           func(done, total int64)
+}
+
+func (c *countReader) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	c.done += int64(n)
+	c.f(c.done, c.total)
+	return n, err
 }

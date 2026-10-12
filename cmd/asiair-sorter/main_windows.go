@@ -35,8 +35,10 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/stars"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/update"
 )
 
 // The .syso resource files next to this file carry the application icon and
@@ -47,6 +49,14 @@ import (
 const plannerTab = 3
 
 const title = "ASIAIR Sorter — раскладка кадров для Siril"
+
+// windowTitle is the title with the version of a release build.
+func windowTitle() string {
+	if update.Valid(protocol.Version) {
+		return title + " — v" + protocol.Version
+	}
+	return title
+}
 
 // receiverLogin is what is kept of a receiver: its certificate and the
 // login (the password itself is not kept).
@@ -160,6 +170,7 @@ type window struct {
 	offline                    bool   // the receiver was not reached: the output is shown, nothing laid out
 	busy                       bool
 	cancel                     context.CancelFunc
+	askedUpdate                string // the version of the sorter offered already
 	previewGen                 atomic.Int64
 	previews                   previewCache
 	btnPlay                    *walk.PushButton
@@ -222,7 +233,7 @@ func main() {
 
 	err := MainWindow{
 		AssignTo: &w.mw,
-		Title:    title,
+		Title:    windowTitle(),
 		Size:     Size{Width: 1280, Height: 840},
 		MinSize:  Size{Width: 800, Height: 500},
 		Layout:   VBox{},
@@ -449,6 +460,7 @@ func main() {
 	w.speedChanged()
 	w.inputChanged()
 	w.pl.init()
+	cleanupUpdate()
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
 			w.cancel()
@@ -638,9 +650,10 @@ func (w *window) scan() {
 		var errs []error
 		var fatal error
 		var skipped []sorter.RemoteFile
+		var upd *sorterUpdate
 		offline := false
 		if remote {
-			frames, skipped, errs, fatal = w.scanReceiver(ctx, s, only, password, code, say)
+			frames, skipped, errs, fatal, upd = w.scanReceiver(ctx, s, only, password, code, say)
 			if fatal != nil && ctx.Err() == nil && s.Out != "" {
 				// what was downloaded before can be looked at without the receiver
 				say("Приёмник недоступен, читаю уже скачанное в выходной каталог…")
@@ -725,17 +738,19 @@ func (w *window) scan() {
 				msg += " Проверьте список и вкладку «Структура», затем «Разложить»."
 			}
 			w.setStatus(msg)
+			w.offerUpdate(upd)
 		})
 	}()
 }
 
 // scanReceiver reads the frames of the receiver in the input, plus the
 // library already in the output. fatal is set when nothing could be read.
-func (w *window) scanReceiver(ctx context.Context, s settings, only sorter.Folders, password, code string, say func(string)) (frames []sorter.Frame, skipped []sorter.RemoteFile, errs []error, fatal error) {
+// upd is a newer sorter the receiver keeps, if any.
+func (w *window) scanReceiver(ctx context.Context, s settings, only sorter.Folders, password, code string, say func(string)) (frames []sorter.Frame, skipped []sorter.RemoteFile, errs []error, fatal error, upd *sorterUpdate) {
 	say("Подключаюсь к приёмнику…")
 	r, err := w.connect(ctx, s.In, password, code)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, err, nil
 	}
 	cache := sorter.LoadHeaderCache(filepath.Join(configDir(), "headers.json"))
 	progress := func(done, total int) {
@@ -746,21 +761,22 @@ func (w *window) scanReceiver(ctx context.Context, s settings, only sorter.Folde
 		// the login kept is over (or was never made)
 		w.setLogin(s.In, func(l *receiverLogin) { l.Session = "" })
 		if password == "" {
-			return nil, nil, nil, sorter.ErrLogin
+			return nil, nil, nil, sorter.ErrLogin, nil
 		}
 		if err := r.Login(ctx, password, code); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, err, nil
 		}
 		w.setLogin(s.In, func(l *receiverLogin) { l.Session = r.Session() })
 		frames, skipped, errs = sorter.ScanReceiverOnly(ctx, r, cache, only, progress)
 	}
 	if len(frames) == 0 && len(errs) > 0 {
-		return nil, nil, nil, errs[0]
+		return nil, nil, nil, errs[0], nil
 	}
 	cache.Save(r.Base())
+	upd = checkUpdate(ctx, r)
 	say("Читаю библиотеку в выходном каталоге…")
 	lib, e := sorter.ScanLibrary(s.Out, nil)
-	return append(frames, lib...), skipped, append(errs, e...), nil
+	return append(frames, lib...), skipped, append(errs, e...), nil, upd
 }
 
 func (w *window) apply() {

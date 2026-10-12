@@ -28,6 +28,7 @@ const DefaultRepo = "arbalet1985/asiair_transmit_photo"
 const (
 	AgentAsset    = "asiair-agent.exe"
 	ReceiverAsset = "asiair-receiver.exe"
+	SorterAsset   = "asiair-sorter.exe"
 	// BuildsAsset maps each program of a release to its build (see
 	// protocol.Build): a program whose build is the same as the running one
 	// has not changed in that release.
