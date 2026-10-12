@@ -70,6 +70,7 @@ type Server struct {
 
 	speed      speedLog      // the agent speed of the last hours, for the chart
 	quality    *quality      // stars and HFR of the received Light frames
+	sats       *satState     // orbits of the satellites, for the tracks on the frames
 	thumbs     *thumbCache   // gallery thumbnails
 	thumbSem   chan struct{} // thumbnails made at once
 	cleanupNow chan struct{} // run the ASIAIR cleanup at once (setting changed)
@@ -125,6 +126,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	s.updater = newUpdater(s)
 	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
 	s.quality = newQuality(filepath.Join(cfg.DataDir, "quality.json"))
+	s.sats = newSatState(filepath.Join(cfg.DataDir, "satellites"))
 	s.thumbs, s.thumbSem = newThumbCache(), make(chan struct{}, 2)
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
@@ -182,7 +184,13 @@ func (s *Server) Run(ctx context.Context) error {
 		s.qualityWorker(qctx)
 	}()
 	defer func() { qstop(); <-qdone }() // it saves the measurements
-	defer s.speed.save()                // the chart history survives a restart
+	sdone := make(chan struct{})
+	go func() {
+		defer close(sdone)
+		s.satelliteWorker(qctx)
+	}()
+	defer func() { qstop(); <-sdone }()
+	defer s.speed.save() // the chart history survives a restart
 	if s.cfg.TailscaleOn {
 		if err := s.startTailscale(); err != nil {
 			log.Printf("Приёмник: Tailscale не запущен: %v", err)
@@ -610,6 +618,7 @@ type uiState struct {
 	Tailscale     tsInfo                          `json:"tailscale"`
 	Network       netInfo                         `json:"network"`
 	RemoteAccess  remoteInfo                      `json:"remote_access"`
+	Satellites    satInfo                         `json:"satellites"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -629,6 +638,8 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		if f.Local && measurable(f.Path) {
 			if e, ok := s.quality.get(f.Path, f.Size, f.MTime); ok && e.Err == "" {
 				f.Measured, f.HFR, f.Stars = true, math.Round(e.HFR*100)/100, e.Stars
+				f.Tracks, f.SatTold, f.SatAge, f.SatErr = uiTracks(e)
+				f.FlipRows = e.Flip
 			}
 		}
 	}
@@ -667,6 +678,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Tailscale:     s.tailscaleInfo(),
 		Network:       s.netInfo(),
 		RemoteAccess:  s.remoteInfo(r),
+		Satellites:    s.satInfo(),
 	}
 	writeJSON(w, out)
 }

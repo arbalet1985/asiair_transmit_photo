@@ -41,6 +41,13 @@ type uiFile struct {
 	Measured bool    `json:"q,omitempty"`
 	HFR      float64 `json:"hfr,omitempty"`
 	Stars    int     `json:"stars,omitempty"`
+	// the tracks on it and the satellites that left them (SatTold: looked
+	// for, with orbits SatAge days from the frame)
+	Tracks   []uiTrack `json:"tracks,omitempty"`
+	SatTold  bool      `json:"sat_told,omitempty"`
+	SatAge   float64   `json:"sat_age,omitempty"`
+	SatErr   string    `json:"sat_err,omitempty"`
+	FlipRows bool      `json:"flip,omitempty"`
 }
 
 // uiTotals summarise the transfer of everything the agent transfers.
