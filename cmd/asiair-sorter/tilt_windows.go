@@ -118,7 +118,7 @@ func (w *window) showTilt(t *stars.Tilt, note string) {
 	}
 	if info != "" {
 		setLong(w.previewInfo, info)
-		w.header.SetText(head)
+		w.header.SetText(w.withTracks(head))
 	}
 	w.zoom.cw.Invalidate()
 }

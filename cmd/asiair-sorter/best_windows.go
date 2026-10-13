@@ -19,8 +19,9 @@ import (
 )
 
 // measureStars measures in the background the stars of the light frames of
-// the layout the receiver has not measured (frames on disk); the table
-// shows them as they come.
+// the layout the receiver has not measured (frames on disk) and finds the
+// tracks of satellites on them; then it tells the satellites by their
+// orbits. The table shows them as they come.
 func (w *window) measureStars() {
 	if w.measureCancel != nil {
 		w.measureCancel()
@@ -39,14 +40,17 @@ func (w *window) measureStars() {
 		w.qualityCache = sorter.LoadQualityCache(filepath.Join(configDir(), "stars.json"))
 	}
 	cache := w.qualityCache
+	site := w.satSite()
 	ctx, cancel := context.WithCancel(context.Background())
 	w.measureCancel = cancel
 	total := len(frames)
 	var mu sync.Mutex
-	var pending []sorter.Measurement
-	done, finished := 0, false
+	var pending, all []sorter.Measurement
+	seen := map[*sorter.Frame]bool{} // measured
+	finished := false
+	identifying := false // the stars are measured, the satellites are told
 	// apply shows the measurements so far, on the window's thread
-	apply := func(final bool) {
+	apply := func(final bool, report string) {
 		mu.Lock()
 		got := pending
 		pending = nil
@@ -57,20 +61,28 @@ func (w *window) measureStars() {
 			}
 			changed := map[*sorter.Frame]bool{}
 			for _, m := range got {
-				m.Frame.Measured, m.Frame.HFR, m.Frame.Stars = true, m.HFR, m.Stars
-				changed[m.Frame] = true
+				m.Apply()
+				changed[m.Frame], seen[m.Frame] = true, true
 			}
-			done += len(got)
+			done := len(seen)
 			w.measureLeft = total - done
 			w.model.measured(changed)
+			w.tracksChanged(changed)
 			switch {
 			case final:
 				finished = true
 				w.measureLeft = 0
 				w.measureCancel = nil
-				w.setStatus(fmt.Sprintf("Звёзды оценены на кадрах: %d из %d (HFR и «Звёзд» в таблице).", done, total))
-			case !w.busy:
-				w.setStatus(fmt.Sprintf("Оцениваю звёзды на кадрах (HFR): %d из %d…", done, total))
+				t := fmt.Sprintf("Звёзды оценены на кадрах: %d из %d (HFR и «Звёзд» в таблице).", done, total)
+				if report != "" {
+					t += " " + report
+				}
+				w.setStatus(t)
+			case w.busy:
+			case identifying:
+				w.setStatus(fmt.Sprintf("Звёзды оценены на кадрах: %d из %d. Опознаю спутники по трекам на кадрах…", done, total))
+			default:
+				w.setStatus(fmt.Sprintf("Оцениваю звёзды и ищу треки спутников на кадрах: %d из %d…", done, total))
 			}
 		})
 	}
@@ -88,7 +100,7 @@ func (w *window) measureStars() {
 			for {
 				select {
 				case <-tick.C:
-					apply(false)
+					apply(false, "")
 				case <-stop:
 					return
 				}
@@ -97,14 +109,28 @@ func (w *window) measureStars() {
 		sorter.MeasureFrames(ctx, frames, paths, cache, func(m sorter.Measurement) {
 			mu.Lock()
 			pending = append(pending, m)
+			all = append(all, m)
 			mu.Unlock()
 		})
+		var rep sorter.SatReport
+		if ctx.Err() == nil {
+			apply(false, "") // the stars first: the satellites may wait for the catalogue
+			w.mw.Synchronize(func() { identifying = true })
+			rep = sorter.IdentifySatellites(ctx, all, cache, satCatalog(), site, func(m sorter.Measurement) {
+				mu.Lock()
+				pending = append(pending, m)
+				mu.Unlock()
+			})
+			if rep.CatalogErr != "" {
+				log.Printf("Каталог орбит спутников: %s", rep.CatalogErr)
+			}
+		}
 		close(stop)
 		if err := cache.Save(); err != nil {
 			log.Printf("Оценки звёзд не сохранены: %v", err)
 		}
 		if ctx.Err() == nil {
-			apply(true)
+			apply(true, rep.Text())
 		}
 	}()
 }
