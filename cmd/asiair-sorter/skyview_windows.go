@@ -25,9 +25,13 @@ type skyView struct {
 	drag   int // what the mouse drags: dragNode, …
 	node   int // the horizon point dragged
 	zone   int // the zone dragged
-	corner int // 0: Az1/Alt1, 1: Az2/Alt1, 2: Az1/Alt2, 3: Az2/Alt2
+	corner int // 0: Az1/Alt1, 1: Az2/Alt1, 2: Az1/Alt2, 3: Az2/Alt2; of a polygon: the vertex
 	start  planner.Point
 	orig   planner.Zone
+
+	// the polygon being drawn (Ctrl + clicks) and the mouse over the sky
+	poly  []planner.Point
+	hover *planner.Point
 
 	bgKey string
 	bg    *walk.Bitmap
@@ -262,6 +266,7 @@ func (v *skyView) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
 	for _, z := range p.state.Sky.Zones {
 		v.zoneOutline(canvas, z, walk.RGB(230, 90, 90))
 	}
+	v.paintPoly(canvas)
 
 	// the night: paths of the targets, thick where they are shot
 	if !p.dusk.IsZero() {
@@ -414,12 +419,67 @@ func (v *skyView) track(canvas *walk.Canvas, pn walk.Pen, a, b time.Time, step t
 	flush()
 }
 
+// segments draws segments of the strip with the pen.
+func (v *skyView) segments(canvas *walk.Canvas, pn walk.Pen, segs [][2]planner.Point) {
+	for _, s := range segs {
+		xa, ya := v.xy(s[0].Az, s[0].Alt)
+		xb, yb := v.xy(s[1].Az, s[1].Alt)
+		_, _, x1, _ := v.area()
+		if s[0].Az >= 360 {
+			xa = x1
+		}
+		if s[1].Az >= 360 {
+			xb = x1
+		}
+		canvas.DrawLinePixels(pn, walk.Point{X: xa, Y: ya}, walk.Point{X: xb, Y: yb})
+	}
+}
+
+// square draws a handle at a point of the sky.
+func (v *skyView) square(canvas *walk.Canvas, pt planner.Point, r int, c walk.Color) {
+	x, y := v.xy(pt.Az, pt.Alt)
+	if b, err := walk.NewSolidColorBrush(c); err == nil {
+		canvas.FillRectanglePixels(b, walk.Rectangle{X: x - r, Y: y - r, Width: 2*r + 1, Height: 2*r + 1})
+		b.Dispose()
+	}
+}
+
+// paintPoly draws the polygon being drawn: its edges, the line to the
+// mouse, the first vertex bigger (a click on it closes the polygon).
+func (v *skyView) paintPoly(canvas *walk.Canvas) {
+	if len(v.poly) == 0 {
+		return
+	}
+	pts := v.poly
+	if v.hover != nil {
+		pts = append(append([]planner.Point(nil), pts...), *v.hover)
+	}
+	if pn, err := walk.NewCosmeticPen(walk.PenDash, walk.RGB(255, 128, 128)); err == nil {
+		v.segments(canvas, pn, planner.Segments(pts, false))
+		pn.Dispose()
+	}
+	for i, pt := range v.poly {
+		r := v.px(3)
+		if i == 0 {
+			r = v.px(5)
+		}
+		v.square(canvas, pt, r, walk.RGB(255, 128, 128))
+	}
+}
+
 func (v *skyView) zoneOutline(canvas *walk.Canvas, z planner.Zone, c walk.Color) {
 	pn, err := walk.NewCosmeticPen(walk.PenSolid, c)
 	if err != nil {
 		return
 	}
 	defer pn.Dispose()
+	if z.Polygon() {
+		v.segments(canvas, pn, z.Outline())
+		for _, pt := range z.Poly {
+			v.square(canvas, pt, v.px(2), c)
+		}
+		return
+	}
 	rect := func(a1, a2 float64) {
 		xa, ya := v.xy(a1, z.Alt2)
 		xb, yb := v.xy(a2, z.Alt1)
@@ -460,8 +520,29 @@ func (v *skyView) nodeAt(x, y int) int {
 	return -1
 }
 
-func corners(z planner.Zone) [4]planner.Point {
-	return [4]planner.Point{{Az: z.Az1, Alt: z.Alt1}, {Az: z.Az2, Alt: z.Alt1}, {Az: z.Az1, Alt: z.Alt2}, {Az: z.Az2, Alt: z.Alt2}}
+// corners: the handles of a zone: the corners of a box, the vertices of a
+// polygon.
+func corners(z planner.Zone) []planner.Point {
+	if z.Polygon() {
+		return z.Poly
+	}
+	return []planner.Point{{Az: z.Az1, Alt: z.Alt1}, {Az: z.Az2, Alt: z.Alt1}, {Az: z.Az1, Alt: z.Alt2}, {Az: z.Az2, Alt: z.Alt2}}
+}
+
+// polyDone ends drawing a polygon: kept as a zone with three vertices or
+// more, else dropped.
+func (v *skyView) polyDone() {
+	poly := v.poly
+	v.poly, v.hover = nil, nil
+	if len(poly) >= 3 {
+		z := planner.Zone{Poly: poly}
+		z.Fit()
+		v.p.state.Sky.Zones = append(v.p.state.Sky.Zones, z)
+		v.p.state.SkySet = true
+		v.p.skyChanged()
+		return
+	}
+	v.invalidate()
 }
 
 func (v *skyView) mouseDown(x, y int, b walk.MouseButton) {
@@ -469,7 +550,43 @@ func (v *skyView) mouseDown(x, y int, b walk.MouseButton) {
 	sky := &p.state.Sky
 	pt := v.azAlt(x, y)
 	v.drag = dragNone
+	// a polygon being drawn: the right button closes it (or drops it with
+	// fewer than three vertices), a click on the first vertex closes it,
+	// any other click adds a vertex
+	if v.poly != nil {
+		if b == walk.RightButton || len(v.poly) >= 3 && v.near(x, y, v.poly[0].Az, v.poly[0].Alt) {
+			v.polyDone()
+			return
+		}
+		if b == walk.LeftButton {
+			v.poly = append(v.poly, planner.Point{Az: pt.Az, Alt: math.Max(pt.Alt, 0)})
+			v.invalidate()
+		}
+		return
+	}
+	if b == walk.LeftButton && walk.ModifiersDown()&walk.ModControl != 0 {
+		v.poly = []planner.Point{{Az: pt.Az, Alt: math.Max(pt.Alt, 0)}}
+		v.invalidate()
+		return
+	}
 	if b == walk.RightButton {
+		// a vertex of a polygon (it keeps three at least)
+		for i := range sky.Zones {
+			z := &sky.Zones[i]
+			if !z.Polygon() || len(z.Poly) <= 3 {
+				continue
+			}
+			for k, c := range z.Poly {
+				if v.near(x, y, c.Az, c.Alt) {
+					z.Poly = append(append([]planner.Point(nil), z.Poly[:k]...), z.Poly[k+1:]...)
+					z.Auto = false
+					z.Fit()
+					p.state.SkySet = true
+					p.skyChanged()
+					return
+				}
+			}
+		}
 		if i := v.nodeAt(x, y); i >= 0 {
 			sky.Horizon = append(sky.Horizon[:i], sky.Horizon[i+1:]...)
 		} else if i := zoneAt(sky.Zones, pt); i >= 0 {
@@ -506,6 +623,7 @@ func (v *skyView) mouseDown(x, y int, b walk.MouseButton) {
 	}
 	if i := zoneAt(sky.Zones, pt); i >= 0 {
 		v.drag, v.zone, v.orig = dragZone, i, sky.Zones[i]
+		v.orig.Poly = append([]planner.Point(nil), sky.Zones[i].Poly...) // not shared with the zone moved
 		return
 	}
 	if i := zoneAt(p.guess.Maybe, pt); i >= 0 {
@@ -533,6 +651,13 @@ func zoneAt(zs []planner.Zone, pt planner.Point) int {
 }
 
 func (v *skyView) mouseMove(x, y int, b walk.MouseButton) {
+	if v.poly != nil {
+		pt := v.azAlt(x, y)
+		pt.Alt = math.Max(pt.Alt, 0)
+		v.hover = &pt
+		v.invalidate()
+		return
+	}
 	if v.drag == dragNone {
 		return
 	}
@@ -555,6 +680,12 @@ func (v *skyView) mouseMove(x, y int, b walk.MouseButton) {
 		z.Alt1, z.Alt2 = math.Min(v.start.Alt, pt.Alt), math.Max(v.start.Alt, pt.Alt)
 	case dragCorner:
 		z := &sky.Zones[v.zone]
+		if z.Polygon() {
+			z.Poly[v.corner] = planner.Point{Az: pt.Az, Alt: pt.Alt}
+			z.Auto = false
+			z.Fit()
+			break
+		}
 		if v.corner%2 == 0 {
 			z.Az1 = pt.Az
 		} else {
@@ -569,6 +700,14 @@ func (v *skyView) mouseMove(x, y int, b walk.MouseButton) {
 	case dragZone:
 		z := &sky.Zones[v.zone]
 		daz, dalt := pt.Az-v.start.Az, pt.Alt-v.start.Alt
+		if z.Polygon() {
+			for k, q := range v.orig.Poly {
+				z.Poly[k] = planner.Point{Az: math.Mod(q.Az+daz+720, 360), Alt: q.Alt + dalt}
+			}
+			z.Auto = false
+			z.Fit()
+			break
+		}
 		z.Az1, z.Az2 = math.Mod(v.orig.Az1+daz+360, 360), math.Mod(v.orig.Az2+daz+360, 360)
 		z.Alt1, z.Alt2 = v.orig.Alt1+dalt, v.orig.Alt2+dalt
 		z.Auto = false
@@ -581,7 +720,7 @@ func (v *skyView) mouseUp(int, int, walk.MouseButton) {
 		return
 	}
 	sky := &v.p.state.Sky
-	if v.drag == dragCorner || v.drag == dragNewZone {
+	if (v.drag == dragCorner || v.drag == dragNewZone) && !sky.Zones[v.zone].Polygon() {
 		z := &sky.Zones[v.zone]
 		if z.Alt1 > z.Alt2 {
 			z.Alt1, z.Alt2 = z.Alt2, z.Alt1

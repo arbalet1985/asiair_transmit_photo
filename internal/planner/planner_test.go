@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"reflect"
@@ -656,5 +657,51 @@ func TestOnceFillsIdle(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A polygon zone across the north: inside and outside, its box for the
+// older programs, its edges cut at the north.
+func TestPolygonZone(t *testing.T) {
+	z := Zone{Poly: []Point{{Az: 350, Alt: 40}, {Az: 10, Alt: 40}, {Az: 0, Alt: 60}}}
+	for _, c := range []struct {
+		az, alt float64
+		in      bool
+	}{{0, 45, true}, {355, 41, true}, {5, 41, true}, {359.9, 59, true}, {180, 45, false}, {0, 39, false}, {15, 45, false}, {345, 45, false}, {5, 55, false}} {
+		if z.Contains(c.az, c.alt) != c.in {
+			t.Errorf("%v,%v: inside %v", c.az, c.alt, !c.in)
+		}
+	}
+	z.Fit()
+	if z.Az1 != 350 || z.Az2 != 10 || z.Alt1 != 40 || z.Alt2 != 60 {
+		t.Fatalf("box %+v", z)
+	}
+	out := z.Outline()
+	if len(out) != 4 { // the bottom edge crosses the north: cut in two
+		t.Fatalf("outline %v", out)
+	}
+	for _, s := range out {
+		for _, p := range s {
+			if p.Az < 0 || p.Az > 360 {
+				t.Fatalf("outside the strip: %v", out)
+			}
+		}
+	}
+	// the sky closes it
+	sky := Sky{Zones: []Zone{z}}
+	if sky.Visible(0, 45) || !sky.Visible(90, 45) {
+		t.Fatal("visible")
+	}
+	// a zone of an older program (a box) still works, and a polygon saved
+	// reads back
+	b, _ := json.Marshal(z)
+	var back Zone
+	if err := json.Unmarshal(b, &back); err != nil || !back.Polygon() || !back.Contains(0, 45) {
+		t.Fatalf("%s %+v", b, back)
+	}
+	var old Zone
+	json.Unmarshal([]byte(`{"az1":100,"az2":120,"alt1":20,"alt2":30}`), &old)
+	if old.Polygon() || !old.Contains(110, 25) {
+		t.Fatalf("%+v", old)
 	}
 }

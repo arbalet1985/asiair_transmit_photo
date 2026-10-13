@@ -267,7 +267,9 @@ func (p *plannerUI) page() TabPage {
 						CustomWidget{AssignTo: &p.sky.cw, PaintPixels: p.sky.paint, StretchFactor: 1, DoubleBuffering: true, InvalidatesOnResize: true,
 							MinSize: Size{Width: 300, Height: 200}, OnMouseDown: p.sky.mouseDown, OnMouseMove: p.sky.mouseMove, OnMouseUp: p.sky.mouseUp,
 							ToolTipText: "Горизонт: тащите точки; щелчок — новая точка; правая кнопка — удалить точку или зону.\n" +
-								"Закрытые зоны (провода): Shift + протянуть — новая; тащить — сдвинуть, за угол — изменить;\n" +
+								"Закрытые зоны (провода): Shift + протянуть — новый прямоугольник; тащить — сдвинуть, за угол или вершину — изменить;\n" +
+								"Ctrl + щелчок — новый многоугольник: щелчками вершины, замкнуть щелчком по первой вершине или правой кнопкой;\n" +
+								"правая кнопка по вершине многоугольника — удалить вершину;\n" +
 								"щелчок по бледной «возможной» зоне — принять её."},
 						Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
 							PushButton{AssignTo: &p.btnPlay, Text: "▶", MaxSize: Size{Width: 32}, OnClicked: func() { p.setPlay(!p.playing) },
