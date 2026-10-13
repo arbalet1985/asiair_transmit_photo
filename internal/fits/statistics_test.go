@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -244,5 +245,49 @@ func TestPreviewMax(t *testing.T) {
 		if top >= im.Max[len(im.Max)-1] && c.name != "rggb16" {
 			t.Errorf("%s: the preview keeps the peak %v: the test does not bin", c.name, top)
 		}
+	}
+}
+
+// The samples at the level of saturation are counted, in 16-bit and in
+// other data.
+func TestStatsSaturated(t *testing.T) {
+	const w, h = 100, 80
+	vals := make([]uint16, w*h)
+	var fl bytes.Buffer
+	for i := range vals {
+		vals[i] = 1000
+		switch {
+		case i < 37:
+			vals[i] = 65535
+		case i < 40:
+			vals[i] = 65000 // above 99% of the range too
+		case i < 45:
+			vals[i] = 60000 // bright, not saturated
+		}
+		x := math.Float32bits(float32(vals[i]))
+		fl.Write([]byte{byte(x >> 24), byte(x >> 16), byte(x >> 8), byte(x)})
+	}
+	im, err := Preview(bytes.NewReader(makeFITS([]string{"SIMPLE = T", "BITPIX = 16", "NAXIS = 2", "NAXIS1 = 100", "NAXIS2 = 80", "BZERO = 32768"}, u16(vals))), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := im.Stats[0]; st.Saturated != 40 || st.Saturation < 64000 || st.Saturation > 65000 {
+		t.Fatalf("%+v", st)
+	}
+	if tb := StatsTable(im.Stats); !strings.Contains(tb, "saturated") || !strings.Contains(tb, "40 (0.50%)") {
+		t.Fatal(tb)
+	}
+	// float data: the level from the header
+	im, err = Preview(bytes.NewReader(makeFITS([]string{"SIMPLE = T", "BITPIX = -32", "NAXIS = 2", "NAXIS1 = 100", "NAXIS2 = 80", "DATAMAX = 65535"}, fl.Bytes())), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := im.Stats[0]; st.Saturated != 37 || st.Saturation != 65535 {
+		t.Fatalf("%+v", st)
+	}
+	// float data without a level: no row
+	im, _ = Preview(bytes.NewReader(makeFITS([]string{"SIMPLE = T", "BITPIX = -32", "NAXIS = 2", "NAXIS1 = 100", "NAXIS2 = 80"}, fl.Bytes())), 50)
+	if st := im.Stats[0]; st.Saturation != 0 || strings.Contains(StatsTable(im.Stats), "saturated") {
+		t.Fatalf("%+v", st)
 	}
 }

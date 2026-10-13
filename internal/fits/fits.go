@@ -190,7 +190,7 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 		usePlanes = 1 // ignore extra planes of a mono cube
 	}
 	if bitpix == 16 && step <= 256 { // the sum of a preview pixel fits 32 bits
-		return preview16(br, img, w, ht, usePlanes, isBayer, pattern, bscale, bzero)
+		return preview16(br, img, w, ht, usePlanes, isBayer, pattern, bscale, bzero, saturation(h, bitpix, bscale, bzero))
 	}
 	sum := make([]float32, ow*oh*channels)
 	cnt := make([]float32, ow*oh*channels)
@@ -198,6 +198,9 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 	row := make([]byte, w*bpp)
 	vals := make([]float64, w)
 	acc := make([]momentAcc, channels)
+	for c := range acc {
+		acc[c].sat = saturation(h, bitpix, bscale, bzero)
+	}
 	for p := 0; p < usePlanes; p++ {
 		for y := 0; y < ht; y++ {
 			if _, err := io.ReadFull(br, row); err != nil {
@@ -255,7 +258,7 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 // samples are binned as integers and counted in a histogram per channel
 // for the statistics. The data is read whole and worked on in bands of
 // rows at once.
-func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, pattern [2][2]int, bscale, bzero float64) (*Image, error) {
+func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, pattern [2][2]int, bscale, bzero, sat float64) (*Image, error) {
 	ow, oh, ch, step := img.Width, img.Height, img.Channels, img.Binning
 	data := make([]byte, w*ht*2*planes)
 	if _, err := io.ReadFull(br, data); err != nil {
@@ -366,7 +369,7 @@ func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, patter
 	}
 	img.Data = d
 	for c, name := range channelNames(ch) {
-		img.Stats = append(img.Stats, histStats(name, hist[c], bscale, bzero))
+		img.Stats = append(img.Stats, histStats(name, hist[c], bscale, bzero, sat))
 		img.Max = append(img.Max, histTop(hist[c], bscale < 0))
 	}
 	return img, nil

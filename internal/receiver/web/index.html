@@ -4328,8 +4328,17 @@ function statsRows(st, only) {
   const rows = [["count", c => String(c.count)], ["mean", c => num(c.mean)], ["median", c => med(c, c.median)],
     ["avgDev", c => med(c, c.avgdev)], ["MAD", c => med(c, c.mad)], ["stdDev", c => num(c.stddev)],
     ["minimum", c => num(c.min)], ["maximum", c => num(c.max)]];
+  // the samples at or above the level of saturation, and their share
+  const satText = c => {
+    if (!c.saturated || !c.count) return "0";
+    const p = 100 * c.saturated / c.count;
+    return `${c.saturated} (${p >= 1 ? p.toFixed(1) : p >= 0.01 ? p.toFixed(2) : "<0.01"}%)`;
+  };
+  if (st[0].saturation > 0) rows.push(["saturated", satText,
+    `Пикселей не ниже уровня насыщения ${num(st[0].saturation)} (SATURATE/DATAMAX заголовка или 99% диапазона), в скобках — доля от count`]);
   return [el("tr", {}, el("th", { textContent: st[0].no_median ? "" : "ADU" }), ...st.map(c => el("th", { textContent: c.name }))),
-    ...rows.filter(([name]) => !only || only.includes(name)).map(([name, get]) => el("tr", {}, el("td", { textContent: name }), ...st.map(c => el("td", { textContent: get(c) }))))];
+    ...rows.filter(([name]) => !only || only.includes(name)).map(([name, get, tip]) =>
+      el("tr", tip ? { title: tip } : {}, el("td", { textContent: name }), ...st.map(c => el("td", { textContent: get(c) }))))];
 }
 function updateSel() {
   const f = V.list[V.idx];
