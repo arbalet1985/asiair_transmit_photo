@@ -668,7 +668,7 @@
         <button class="primary" id="upInstall">Обновить сейчас</button>
       </div>
       <label style="display:block;margin-top:8px"><input type="checkbox" id="upAuto"> Устанавливать обновления автоматически</label>
-      <div class="hint">Приёмник раз в 6 часов проверяет релизы на GitHub. Новую версию он ставит себе сам и перезапускается (служба — через 30 секунд), а агенту передаёт её при следующей связи: агент обновляется и перезапускается тоже сам. Передача снимков после перезапуска продолжается с того же места.</div>
+      <div class="hint">Приёмник раз в 6 часов проверяет релизы на GitHub. Новую версию он ставит себе сам и перезапускается (служба — через 30 секунд), а агенту передаёт её при следующей связи: агент-служба обновляется и перезапускается сам, агент со значком в трее спрашивает — в его окне появляется кнопка «Обновить до …». Передача снимков после перезапуска продолжается с того же места.</div>
       <details id="upTokenBox" style="margin-top:8px">
         <summary class="muted">Токен GitHub — только для обновлений из приватной копии репозитория</summary>
         <div class="field" style="margin-top:6px">
@@ -1733,7 +1733,7 @@ function renderUpdate(u, a) {
   $("upAgent").textContent = !av ? "агент ещё не выходил на связь"
     : ver(av) + (!state.agent_online ? " (на момент последней связи)" : "") +
       (a.update && state.agent_online ? " — " + a.update
-        : agentNew ? ` — доступна v${u.agent && newer(u.agent, u.latest || "") ? u.agent : u.latest}, агент обновится при следующей связи`
+        : agentNew ? ` — доступна v${u.agent && newer(u.agent, u.latest || "") ? u.agent : u.latest}: агент-служба обновится при следующей связи, агент в трее предложит кнопку «Обновить»`
         : !checked || av === "dev" ? ""
         : newer(u.latest, av) ? `${none} (в v${u.latest} агент не менялся)` : `${none}, это последняя версия`);
   const seen = state.last_seen && !state.last_seen.startsWith("0001");
