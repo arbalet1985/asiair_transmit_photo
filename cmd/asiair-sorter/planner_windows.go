@@ -16,6 +16,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/planner"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/weather"
 )
 
 // The planner: the sky of the observatory guessed from the frames taken
@@ -65,6 +66,8 @@ type plannerUI struct {
 	timeSlider                            *walk.Slider
 	btnPlay                               *walk.PushButton
 	timeLabel, skyInfo, planInfo          *walk.Label
+	wxView                                *walk.CustomWidget // the forecast of the clouds
+	wxInfo                                *walk.Label
 
 	sky   *skyView
 	state plannerSettings // site, sky, targets (the parameters live in the fields)
@@ -79,6 +82,12 @@ type plannerUI struct {
 	playGen    int
 	syncing    bool // the slider is moved by the program
 	ready      bool
+	// the forecast held, its error, the site it was asked for and when
+	wx     *weather.Forecast
+	wxErr  string
+	wxKey  string
+	wxAt   time.Time
+	wxBusy bool
 }
 
 func newPlanner(w *window, s plannerSettings) *plannerUI {
@@ -272,6 +281,10 @@ func (p *plannerUI) page() TabPage {
 								ToolTipText: "Угадать горизонт и закрытые зоны заново по кадрам последнего «Просмотреть кадры»;\nточки и зоны, поставленные или поправленные руками, остаются"},
 							PushButton{Text: "Сбросить", OnClicked: p.resetSky, ToolTipText: "Ровный горизонт на высоте «Не ниже», без зон"},
 						}},
+						CustomWidget{AssignTo: &p.wxView, PaintPixels: p.paintWeather, DoubleBuffering: true, InvalidatesOnResize: true, Visible: false,
+							MinSize: Size{Height: 40}, MaxSize: Size{Height: 40},
+							ToolTipText: "Прогноз облачности Open-Meteo по часам: чем темнее, тем облачнее; линия — время анимации"},
+						Label{AssignTo: &p.wxInfo, EllipsisMode: EllipsisEnd},
 						Label{AssignTo: &p.skyInfo, EllipsisMode: EllipsisEnd, TextColor: gray},
 					}},
 				}},
@@ -396,6 +409,7 @@ func (p *plannerUI) paramsChanged() {
 		setLong(p.skyInfo, fmt.Sprintf("Ночь %s – %s (%s), Луна %s, освещена на %d%%.", dusk.In(prm.Zone).Format("15:04"),
 			dawn.In(prm.Zone).Format("15:04"), planner.Hours(dawn.Sub(dusk).Seconds()), phaseName(&m), int(math.Round(m.Illum*100))))
 	}
+	p.weatherNeeded()
 	if p.plan != nil {
 		p.makePlan()
 		return
@@ -761,6 +775,9 @@ func (p *plannerUI) setTime(t time.Time) {
 		p.timeLabel.SetText("")
 	}
 	p.sky.invalidate()
+	if p.wxView != nil {
+		p.wxView.Invalidate()
+	}
 }
 
 func (p *plannerUI) sliderMoved() {

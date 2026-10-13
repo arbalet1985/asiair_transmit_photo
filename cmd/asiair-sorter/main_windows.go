@@ -366,6 +366,9 @@ func main() {
 							if w.rightPane != nil {
 								w.rightPane.SetVisible(w.tabs.CurrentIndex() != plannerTab)
 							}
+							if w.pl != nil {
+								w.pl.weatherNeeded()
+							}
 						},
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{

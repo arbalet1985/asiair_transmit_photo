@@ -223,6 +223,13 @@
   .chart .empty { fill: var(--muted); font-size: 13px; }
   .chart svg { touch-action: pan-y; cursor: crosshair; user-select: none; -webkit-user-select: none; }
   .chart.night { height: auto; }
+  .chart.wx { height: 46px; margin-top: 2px; }
+  .chart.wx svg { cursor: default; }
+  .chart .wxbar { fill: var(--muted); }
+  .chart .wxbase { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .chart .wxnow { stroke: var(--text); stroke-width: 2; }
+  .chart .wxlight { fill: var(--text); font-size: 11px; }
+  .chart .wxdark { fill: var(--panel); font-size: 11px; }
   .chart .nline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; opacity: .7; }
   .chart .npt { fill: var(--accent); cursor: pointer; }
   .chart .npt.bad { fill: var(--warn); }
@@ -544,6 +551,8 @@
         <button id="plGuess" title="Угадать горизонт и зоны заново по полученным кадрам; точки и зоны, поставленные или поправленные руками, остаются">Горизонт по кадрам</button>
         <button id="plReset" title="Ровный горизонт на высоте «не ниже», без зон">Сбросить</button>
       </div>
+      <div class="chart wx" id="plWx" hidden></div>
+      <div class="line muted" id="plWxInfo"></div>
       <div class="line muted" id="plInfo"></div>
       <div class="hint" id="plEditHint" hidden>Горизонт — жёлтая линия: тащите точки, касание вне точки добавляет новую. Закрытые зоны (провода) — красная штриховка: тащите зону или её угол; «новая зона» (или Shift) — протянуть прямоугольник; «удалить» (или правая кнопка) — точку или зону; касание бледной «возможной» зоны принимает её.</div>
       <h2 style="margin-top:14px">Объекты</h2>
@@ -3292,6 +3301,60 @@ async function plMakePlan() {
   plRenderTargets();
   plRenderSteps();
   plSetTime(PL.t);
+  if (pl) plWeather(pl);
+}
+
+// ---- the forecast of the clouds (Open-Meteo), asked again only for another
+// night or after half an hour: the receiver keeps it and asks Open-Meteo a
+// few times a day at most
+let plWx = null, plWxKey = "", plWxAt = 0;
+async function plWeather(pl) {
+  const key = pl.dusk + "|" + pl.dawn + "|" + pl.tz;
+  if (key !== plWxKey || Date.now() - plWxAt > 30 * 60e3) {
+    plWxKey = key; plWxAt = Date.now();
+    try {
+      const r = await fetch(`/ui/api/weather?from=${pl.dusk}&to=${pl.dawn}&tz=${pl.tz}`);
+      plWx = r.ok ? await r.json() : { error: (await r.text()).trim(), hours: [] };
+    } catch (e) { plWx = { error: e.message, hours: [] }; }
+  }
+  plDrawWx();
+}
+function plDrawWx() {
+  const pl = PL.plan, box = $("plWx"), info = $("plWxInfo");
+  if (!pl || !plWx) { box.hidden = true; info.textContent = ""; return; }
+  const hours = plWx.hours || [];
+  const at = plWx.fetched ? ` (прогноз Open-Meteo от ${new Date(plWx.fetched).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })})` : "";
+  if (!hours.length) {
+    box.hidden = true;
+    info.textContent = plWx.error ? "Прогноз облачности не получен: " + plWx.error : "Прогноза на эту ночь нет: Open-Meteo даёт его на 7 дней вперёд.";
+    return;
+  }
+  info.textContent = "Облачность: " + plWx.text + (plWx.clear ? ` Ясного неба ${fmtHours(plWx.clear * 3600)}.` : " Ясного неба нет.") + at +
+    (plWx.error ? ` Обновить не удалось: ${plWx.error}.` : "");
+  box.hidden = false;
+  const W = box.clientWidth || 600, H = 46, L = 0, T = 2, BH = 24;
+  const span = pl.dawn - pl.dusk, x = t => L + (Math.min(Math.max(t, pl.dusk), pl.dawn) - pl.dusk) / span * W;
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Прогноз облачности на ночь" });
+  svg.append(mk("rect", { x: 0, y: T, width: W, height: BH, class: "wxbase" }));
+  const axis = mk("g", { class: "axis" });
+  for (const h of hours) {
+    const x0 = x(h.t), x1 = x(h.t + 3600e3);
+    if (x1 <= x0) continue;
+    const r = mk("rect", { x: x0, y: T, width: x1 - x0 + 0.5, height: BH, class: "wxbar", "fill-opacity": (h.cloud / 100).toFixed(2) });
+    r.append(mk("title", {}, `${plHM(h.t)}: облачность ${h.cloud}% (нижняя ${h.low}, средняя ${h.mid}, верхняя ${h.high}), ` +
+      `ветер ${h.wind.toFixed(0)} м/с (порывы ${h.gust.toFixed(0)}), влажность ${h.hum}%, ${h.temp.toFixed(0)}°C` + (h.precip >= 30 ? `, осадки ${h.precip}%` : "")));
+    svg.append(r);
+    if (x1 - x0 > 26) svg.append(mk("text", { x: (x0 + x1) / 2, y: T + BH / 2 + 4, "text-anchor": "middle", class: h.cloud > 50 ? "wxdark" : "wxlight" }, h.cloud + "%"));
+  }
+  // round hours of the observatory clock under the bar
+  const step = span > 8 * 3600e3 ? 2 * 3600e3 : 3600e3, tz = plTZ() * 3600e3;
+  for (let t = Math.ceil((pl.dusk + tz) / step) * step - tz; t <= pl.dawn; t += step)
+    axis.append(mk("text", { x: x(t), y: H - 4, "text-anchor": "middle" }, plHM(t)));
+  svg.append(axis);
+  if (PL.t >= pl.dusk && PL.t <= pl.dawn) svg.append(mk("line", { x1: x(PL.t), x2: x(PL.t), y1: T - 2, y2: T + BH + 2, class: "wxnow" }));
+  box.replaceChildren(svg);
 }
 function fmtHours(sec) {
   const m = Math.round(sec / 60);
@@ -3410,6 +3473,7 @@ function plSetTime(t) {
     $("plTimeLabel").textContent = "";
   }
   plDraw();
+  plDrawWx();
 }
 function plStepAt(t) {
   const pl = PL.plan;
