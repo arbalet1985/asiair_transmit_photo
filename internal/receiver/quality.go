@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,15 @@ type qualityEntry struct {
 	NoSky bool      `json:"nosky,omitempty"`
 	// V: the version of the measurement; an older one is measured again
 	V int `json:"v,omitempty"`
+	// Bg: the median of the frame (the sky background, ADU); Round, Angle,
+	// Aligned: the shape of the stars (stars.Result); Sat: the pixels at
+	// the level of saturation, SatPct: their share of the frame, percent
+	Bg      float64 `json:"bg,omitempty"`
+	Round   float64 `json:"round,omitempty"`
+	Angle   float64 `json:"angle,omitempty"`
+	Aligned float64 `json:"aligned,omitempty"`
+	Sat     int64   `json:"sat,omitempty"`
+	SatPct  float64 `json:"satpct,omitempty"`
 	// Tracks: the straight tracks on the frame (satellites, planes,
 	// meteors) found by version TV of the search; Start: the start of the
 	// exposure (unix ms); Flip: the rows of the file go bottom up
@@ -46,8 +56,9 @@ type qualityEntry struct {
 }
 
 // qualityVersion: 2 takes the background of each star around it, 3 tells
-// saturated stars as Siril does (counted, but not for the HFR).
-const qualityVersion = 3
+// saturated stars as Siril does (counted, but not for the HFR), 4 adds the
+// background, the shape of the stars, the saturated pixels and the time.
+const qualityVersion = 4
 
 // quality keeps the star measurements of the received Light frames in
 // quality.json in the data folder. A background worker measures new frames
@@ -156,13 +167,37 @@ func measureFrame(local string) qualityEntry {
 	}
 	r := stars.Measure(img)
 	e.HFR, e.Stars = r.HFR, r.Stars
+	e.Round, e.Angle, e.Aligned = round3(r.Round), math.Round(r.Angle), round3(r.Aligned)
+	e.Bg, e.Sat, e.SatPct = frameLevels(img.Stats)
 	w, _ := fits.ReadWCS(img.Header, filepath.Base(local))
 	e.Tracks = tracksOf(satellites.FindStreaks(img), w)
-	if len(e.Tracks) > 0 {
-		e.Start = frameStart(img.Header)
-		e.Flip = strings.EqualFold(img.Header.Get("ROWORDER"), "BOTTOM-UP")
-	}
+	e.Start = frameStart(img.Header)
+	e.Flip = strings.EqualFold(img.Header.Get("ROWORDER"), "BOTTOM-UP")
 	return e
+}
+
+func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+// frameLevels: the background of a frame (the mean of the medians of its
+// channels), its saturated pixels and their share, percent.
+func frameLevels(st []fits.ChannelStats) (bg float64, sat int64, pct float64) {
+	var n int64
+	for _, c := range st {
+		if c.NoMedian {
+			bg += c.Mean
+		} else {
+			bg += c.Median
+		}
+		sat += c.Saturated
+		n += c.Count
+	}
+	if len(st) > 0 {
+		bg = math.Round(bg / float64(len(st)))
+	}
+	if n > 0 {
+		pct = math.Round(1e6*float64(sat)/float64(n)) / 1e4
+	}
+	return bg, sat, pct
 }
 
 // measurable: Light frames in FITS.
@@ -230,6 +265,11 @@ func (s *Server) measurePending(ctx context.Context) int {
 		}
 		e := measureFrame(store.Local(f.Path))
 		e.Size, e.MTime = f.Size, f.ModTime.UnixNano()
+		if old, ok := s.quality.get(f.Path, f.Size, f.ModTime); ok && old.TV == trackVersion && e.TV == trackVersion {
+			// measured again for the rest: the tracks are the same, so
+			// are the satellites told for them
+			e.Tracks, e.Sats, e.SatCat, e.SatCatT, e.SatErr = old.Tracks, old.Sats, old.SatCat, old.SatCatT, old.SatErr
+		}
 		e.Sky, e.NoSky = readSky(store.Local(f.Path), f.Path)
 		s.quality.set(f.Path, e)
 		if len(e.Tracks) > 0 {

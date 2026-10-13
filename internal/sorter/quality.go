@@ -30,6 +30,11 @@ type qualityEntry struct {
 	Stars int     `json:"stars,omitempty"`
 	// V: the version of the measurement; an older one is measured again
 	V int `json:"v,omitempty"`
+	// the shape of the stars, the saturated pixels and their share (percent)
+	Round   float64 `json:"round,omitempty"`
+	Aligned float64 `json:"aligned,omitempty"`
+	SatPx   int64   `json:"sat,omitempty"`
+	SatPct  float64 `json:"satpct,omitempty"`
 	// Tracks: the straight tracks on the frame found by version TV of the
 	// search, Start: the start of the exposure (unix ms), Flip: the rows of
 	// the file go bottom up; the objects that left them were told with the
@@ -44,8 +49,8 @@ type qualityEntry struct {
 }
 
 // qualityVersion: 1 tells saturated stars as Siril does (counted, but not
-// for the HFR).
-const qualityVersion = 1
+// for the HFR), 2 adds the shape of the stars and the saturated pixels.
+const qualityVersion = 2
 
 // LoadQualityCache reads the cache file ("" = keep in memory only).
 func LoadQualityCache(file string) *QualityCache {
@@ -85,11 +90,14 @@ func (c *QualityCache) Save() error {
 
 // Measurement is the stars and the tracks of one frame.
 type Measurement struct {
-	Frame  *Frame
-	HFR    float64
-	Stars  int
-	Tracks []Track // with the static ones
-	Flip   bool
+	Frame          *Frame
+	HFR            float64
+	Stars          int
+	Tracks         []Track // with the static ones
+	Flip           bool
+	Round, Aligned float64
+	SatPx          int64
+	SatPct         float64
 
 	path, key      string // the file read and its key in the cache
 	start          int64
@@ -98,12 +106,14 @@ type Measurement struct {
 }
 
 func (m Measurement) entry() qualityEntry {
-	return qualityEntry{HFR: m.HFR, Stars: m.Stars, V: qualityVersion, Tracks: m.Tracks, TV: trackVersion,
+	return qualityEntry{HFR: m.HFR, Stars: m.Stars, V: qualityVersion, Round: m.Round, Aligned: m.Aligned, SatPx: m.SatPx, SatPct: m.SatPct,
+		Tracks: m.Tracks, TV: trackVersion,
 		Start: m.start, Flip: m.Flip, SatCat: m.satCat, SatCatT: m.satCatT, SatErr: m.satErr}
 }
 
 func (m *Measurement) fromEntry(e qualityEntry) {
 	m.HFR, m.Stars, m.Tracks, m.Flip = e.HFR, e.Stars, e.Tracks, e.Flip
+	m.Round, m.Aligned, m.SatPx, m.SatPct = e.Round, e.Aligned, e.SatPx, e.SatPct
 	m.start, m.satCat, m.satCatT, m.satErr = e.Start, e.SatCat, e.SatCatT, e.SatErr
 }
 
@@ -121,6 +131,7 @@ func (m Measurement) moving() bool {
 func (m Measurement) Apply() {
 	f := m.Frame
 	f.Measured, f.HFR, f.Stars = true, m.HFR, m.Stars
+	f.Round, f.Aligned, f.SatPx, f.SatPct = m.Round, m.Aligned, m.SatPx, m.SatPct
 	f.Tracks = nil
 	for _, t := range m.Tracks {
 		if !t.Static {
@@ -244,7 +255,16 @@ func measureFile(p string) (qualityEntry, error) {
 		return qualityEntry{}, err
 	}
 	r := stars.Measure(img)
-	e := qualityEntry{HFR: r.HFR, Stars: r.Stars, V: qualityVersion, TV: trackVersion}
+	e := qualityEntry{HFR: r.HFR, Stars: r.Stars, V: qualityVersion, TV: trackVersion,
+		Round: math.Round(r.Round*1000) / 1000, Aligned: math.Round(r.Aligned*1000) / 1000}
+	var n int64
+	for _, c := range img.Stats {
+		e.SatPx += c.Saturated
+		n += c.Count
+	}
+	if n > 0 {
+		e.SatPct = math.Round(1e6*float64(e.SatPx)/float64(n)) / 1e4
+	}
 	w, _ := fits.ReadWCS(img.Header, filepath.Base(p))
 	e.Tracks = tracksOf(satellites.FindStreaks(img), w)
 	if len(e.Tracks) > 0 {

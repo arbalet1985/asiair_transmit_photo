@@ -640,6 +640,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		if f.Local && measurable(f.Path) {
 			if e, ok := s.quality.get(f.Path, f.Size, f.MTime); ok && e.Err == "" {
 				f.Measured, f.HFR, f.Stars = true, math.Round(e.HFR*100)/100, e.Stars
+				f.Bg, f.Round, f.Angle, f.Aligned, f.SatPx, f.SatPct, f.Start = e.Bg, e.Round, e.Angle, e.Aligned, e.Sat, e.SatPct, e.Start
 				f.Tracks, f.SatTold, f.SatAge, f.SatErr = uiTracks(e)
 				f.FlipRows = e.Flip
 			}

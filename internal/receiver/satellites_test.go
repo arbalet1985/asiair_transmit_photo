@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
@@ -153,6 +154,31 @@ func TestMeasureTracks(t *testing.T) {
 	tr := e.Tracks[0]
 	if math.Hypot(tr.X0-300, tr.Y0-900) > 30 && math.Hypot(tr.X1-300, tr.Y1-900) > 30 {
 		t.Fatalf("track %+v", tr)
+	}
+	// the background is kept for the graphs of the night
+	if math.Abs(e.Bg-2000) > 5 || e.V != qualityVersion {
+		t.Fatalf("background %v, version %d", e.Bg, e.V)
+	}
+
+	// measured again by a newer version: the satellites told stay
+	e.V = qualityVersion - 1
+	e.Sats, e.SatCat, e.SatCatT = []satEntry{{T: 0, Name: "X", NORAD: 1}}, "catalog-20261009-1200.tle.gz", 1
+	s.quality.set(rel, e)
+	if n := s.measurePending(context.Background()); n != 1 {
+		t.Fatalf("measured again %d", n)
+	}
+	e, _ = s.quality.get(rel, st.Size(), st.ModTime())
+	if e.V != qualityVersion || len(e.Sats) != 1 || e.SatCat == "" {
+		t.Fatalf("%+v", e)
+	}
+}
+
+func TestFrameLevels(t *testing.T) {
+	bg, sat, pct := frameLevels([]fits.ChannelStats{
+		{Count: 1000, Median: 1000, Saturated: 5}, {Count: 1000, Median: 1200, Saturated: 15},
+		{Count: 1000, Mean: 1400, NoMedian: true}})
+	if bg != 1200 || sat != 20 || math.Abs(pct-0.6667) > 1e-3 {
+		t.Fatal(bg, sat, pct)
 	}
 }
 

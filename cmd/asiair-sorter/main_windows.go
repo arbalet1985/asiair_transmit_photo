@@ -66,20 +66,25 @@ type receiverLogin struct {
 }
 
 type settings struct {
-	In              string                   `json:"in"`
-	Out             string                   `json:"out"`
-	Mode            int                      `json:"mode"`
-	FillCalibration bool                     `json:"fill_calibration"`
-	BlinkSpeed      int                      `json:"blink_speed,omitempty"` // half frames per second
-	ShowMoon        bool                     `json:"show_moon,omitempty"`
-	ShowTilt        bool                     `json:"show_tilt,omitempty"`
-	HideTracks      bool                     `json:"hide_tracks,omitempty"` // the tracks of satellites are not drawn on the preview
-	ShowHist        bool                     `json:"show_hist,omitempty"`
-	HistMode        int                      `json:"hist_mode,omitempty"`
-	LinkedChannels  bool                     `json:"linked_channels,omitempty"` // the colour channels stretched together
-	BestPercent     float64                  `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
-	Receivers       map[string]receiverLogin `json:"receivers,omitempty"`
-	Planner         plannerSettings          `json:"planner"`
+	In              string  `json:"in"`
+	Out             string  `json:"out"`
+	Mode            int     `json:"mode"`
+	FillCalibration bool    `json:"fill_calibration"`
+	BlinkSpeed      int     `json:"blink_speed,omitempty"` // half frames per second
+	ShowMoon        bool    `json:"show_moon,omitempty"`
+	ShowTilt        bool    `json:"show_tilt,omitempty"`
+	HideTracks      bool    `json:"hide_tracks,omitempty"` // the tracks of satellites are not drawn on the preview
+	ShowHist        bool    `json:"show_hist,omitempty"`
+	HistMode        int     `json:"hist_mode,omitempty"`
+	LinkedChannels  bool    `json:"linked_channels,omitempty"` // the colour channels stretched together
+	BestPercent     float64 `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
+	// frames left out of the pick: stretched stars, too much saturated
+	BestRoundOn  bool                     `json:"best_round_on,omitempty"`
+	BestMinRound float64                  `json:"best_min_round,omitempty"`
+	BestSatOn    bool                     `json:"best_sat_on,omitempty"`
+	BestMaxSat   float64                  `json:"best_max_sat,omitempty"`
+	Receivers    map[string]receiverLogin `json:"receivers,omitempty"`
+	Planner      plannerSettings          `json:"planner"`
 	// Folders: for each input (receiverKey) the folders synchronised; none = all
 	Folders map[string][]string `json:"folders,omitempty"`
 }

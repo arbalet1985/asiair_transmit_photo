@@ -41,6 +41,15 @@ type uiFile struct {
 	Measured bool    `json:"q,omitempty"`
 	HFR      float64 `json:"hfr,omitempty"`
 	Stars    int     `json:"stars,omitempty"`
+	// the background (ADU), the shape of the stars, the saturated pixels
+	// and their share (percent), the start of the exposure (unix ms)
+	Bg      float64 `json:"bg,omitempty"`
+	Round   float64 `json:"round,omitempty"`
+	Angle   float64 `json:"angle,omitempty"`
+	Aligned float64 `json:"aligned,omitempty"`
+	SatPx   int64   `json:"sat_px,omitempty"`
+	SatPct  float64 `json:"sat_pct,omitempty"`
+	Start   int64   `json:"start,omitempty"`
 	// the tracks on it and the satellites that left them (SatTold: looked
 	// for, with orbits SatAge days from the frame)
 	Tracks   []uiTrack `json:"tracks,omitempty"`

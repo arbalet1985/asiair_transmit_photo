@@ -115,3 +115,51 @@ func TestSaturated(t *testing.T) {
 		t.Errorf("without Max: %d saturated, with: %d", n, sat)
 	}
 }
+
+// shaped draws n Gaussian stars stretched sx × sy pixels (sigmas) along
+// angle (radians from the rows), all the same way, or each its own way.
+func shaped(n int, sx, sy, angle float64, random bool, seed int64) *fits.Image {
+	const w, h = 800, 600
+	rnd := rand.New(rand.NewSource(seed))
+	d := make([]float32, w*h)
+	for i := range d {
+		d[i] = float32(0.05 + rnd.NormFloat64()*0.002)
+	}
+	for s := 0; s < n; s++ {
+		cx, cy := 30+rnd.Float64()*(w-60), 30+rnd.Float64()*(h-60)
+		amp := 0.05 + 0.3*rnd.Float64()
+		a := angle
+		if random {
+			a = rnd.Float64() * math.Pi
+		}
+		ca, sa := math.Cos(a), math.Sin(a)
+		for y := int(cy) - 15; y <= int(cy)+15; y++ {
+			for x := int(cx) - 15; x <= int(cx)+15; x++ {
+				dx, dy := float64(x)-cx, float64(y)-cy
+				u, v := dx*ca+dy*sa, -dx*sa+dy*ca
+				d[y*w+x] += float32(amp * math.Exp(-u*u/(2*sx*sx)-v*v/(2*sy*sy)))
+			}
+		}
+	}
+	return &fits.Image{Width: w, Height: h, Channels: 1, Data: d, Binning: 1}
+}
+
+// Round stars are told round; stars trailed one way (wind, guiding) are
+// told stretched, with the direction; stars stretched every way (optics)
+// are told not aligned.
+func TestRoundness(t *testing.T) {
+	round := Measure(shaped(120, 2, 2, 0, false, 1))
+	if round.Round < 0.9 {
+		t.Errorf("round stars: %+v", round)
+	}
+	trail := Measure(shaped(120, 3.2, 2, 30*math.Pi/180, false, 1))
+	if trail.Round > 0.75 || trail.Round < 0.5 || math.Abs(trail.Angle-30) > 5 || trail.Aligned < 0.7 {
+		t.Errorf("trailed stars: %+v", trail)
+	}
+	t.Logf("round %+v\ntrail %+v", round, trail)
+	optics := Measure(shaped(120, 3.2, 2, 0, true, 1))
+	t.Logf("optics %+v", optics)
+	if optics.Round > 0.75 || optics.Aligned > 0.45 {
+		t.Errorf("stretched every way: %+v", optics)
+	}
+}
