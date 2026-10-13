@@ -526,6 +526,8 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/sorter", s.handleUISorterUpdate)
 	mux.HandleFunc("/ui/sorter.exe", s.handleUISorterFile)
+	mux.HandleFunc("/ui/api/satcats", s.handleUISatCatalogs)
+	mux.HandleFunc("/ui/satcat", s.handleUISatCatalog)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
 	mux.HandleFunc("/ui/api/delpause", s.handleUIDeletePause)
 	mux.HandleFunc("/ui/api/fetch", s.handleUIFetch)

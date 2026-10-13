@@ -421,3 +421,44 @@ func uiTracks(e qualityEntry) (tr []uiTrack, told bool, age float64, err string)
 	}
 	return tr, e.SatCat != "", age, e.SatErr
 }
+
+// SatCatalog is a catalogue of orbits kept here, as the sorters see it.
+type SatCatalog struct {
+	Name string    `json:"name"`
+	Time time.Time `json:"time"` // downloaded
+}
+
+// handleUISatCatalogs lists the catalogues of orbits kept, for the sorters
+// (they tell the satellites of frames on their disk with them).
+func (s *Server) handleUISatCatalogs(w http.ResponseWriter, r *http.Request) {
+	out := []SatCatalog{}
+	for _, c := range s.sats.store.Catalogs() {
+		out = append(out, SatCatalog{Name: filepath.Base(c.Path), Time: c.Time})
+	}
+	writeJSON(w, out)
+}
+
+// handleUISatCatalog sends a catalogue of orbits by its name.
+func (s *Server) handleUISatCatalog(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	for _, c := range s.sats.store.Catalogs() {
+		if filepath.Base(c.Path) != name {
+			continue
+		}
+		f, err := os.Open(c.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+		st, err := f.Stat()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		http.ServeContent(w, r, name, st.ModTime(), f)
+		return
+	}
+	http.Error(w, "нет такого каталога орбит", http.StatusNotFound)
+}

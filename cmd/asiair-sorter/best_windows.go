@@ -41,6 +41,13 @@ func (w *window) measureStars() {
 	}
 	cache := w.qualityCache
 	site := w.satSite()
+	cat := satCatalog()
+	for _, it := range l.Items {
+		if it.Frame.Src != nil {
+			cat.Source = it.Frame.Src // the catalogues of orbits the receiver gathered
+			break
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w.measureCancel = cancel
 	total := len(frames)
@@ -116,7 +123,7 @@ func (w *window) measureStars() {
 		if ctx.Err() == nil {
 			apply(false, "") // the stars first: the satellites may wait for the catalogue
 			w.mw.Synchronize(func() { identifying = true })
-			rep = sorter.IdentifySatellites(ctx, all, cache, satCatalog(), site, func(m sorter.Measurement) {
+			rep = sorter.IdentifySatellites(ctx, all, cache, cat, site, func(m sorter.Measurement) {
 				mu.Lock()
 				pending = append(pending, m)
 				mu.Unlock()

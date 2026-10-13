@@ -706,3 +706,35 @@ func (c *countReader) Read(b []byte) (int, error) {
 	c.f(c.done, c.total)
 	return n, err
 }
+
+// RemoteCatalog is a catalogue of orbits the receiver keeps.
+type RemoteCatalog struct {
+	Name string    `json:"name"`
+	Time time.Time `json:"time"`
+}
+
+// SatCatalogs lists the catalogues of orbits the receiver keeps (an old
+// receiver without them answers with an error).
+func (r *Receiver) SatCatalogs(ctx context.Context) ([]RemoteCatalog, error) {
+	resp, err := r.get(ctx, "/ui/api/satcats", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []RemoteCatalog
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("ответ приёмника не прочитан: %w", err)
+	}
+	return out, nil
+}
+
+// FetchSatCatalog writes the catalogue of orbits name of the receiver to w.
+func (r *Receiver) FetchSatCatalog(ctx context.Context, name string, w io.Writer) error {
+	resp, err := r.get(ctx, "/ui/satcat", url.Values{"name": {name}}, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(w, io.LimitReader(resp.Body, 64<<20))
+	return err
+}

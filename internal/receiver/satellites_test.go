@@ -6,12 +6,16 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
 // the header of a frame of M 31 with its plate solution, as ASIAIR writes it
@@ -174,5 +178,36 @@ func TestStaticTracks(t *testing.T) {
 	}
 	if tr, _, _, _ := uiTracks(a); len(tr) != 1 || tr[0].RA0 != 10.0 {
 		t.Fatalf("page: %+v", tr)
+	}
+}
+
+// A sorter lists the catalogues of orbits kept here and copies one.
+func TestSatCatalogsForSorter(t *testing.T) {
+	s, _ := newTestServer(t)
+	when := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	p, err := s.sats.store.Save([]byte(tankTLE), when)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := httptest.NewServer(s.uiHandler())
+	defer ui.Close()
+	r, err := sorter.NewReceiver(ui.URL+"/", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	list, err := r.SatCatalogs(ctx)
+	if err != nil || len(list) != 1 || list[0].Name != filepath.Base(p) || !list[0].Time.Equal(when) {
+		t.Fatalf("%v %+v", err, list)
+	}
+	var b bytes.Buffer
+	if err := r.FetchSatCatalog(ctx, list[0].Name, &b); err != nil {
+		t.Fatal(err)
+	}
+	if want, _ := os.ReadFile(p); !bytes.Equal(b.Bytes(), want) {
+		t.Fatal("the catalogue differs")
+	}
+	if err := r.FetchSatCatalog(ctx, "../receiver.yaml", io.Discard); err == nil {
+		t.Fatal("a file outside the catalogues was sent")
 	}
 }

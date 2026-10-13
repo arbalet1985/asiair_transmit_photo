@@ -3,6 +3,7 @@ package sorter
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -91,9 +92,19 @@ func frameStart(h *fits.Header) int64 {
 }
 
 // SatCatalog keeps the catalogues of orbits downloaded from CelesTrak, one
-// a day at most, in a folder (as the receiver does).
+// a day at most, in a folder (as the receiver does). With Source, the
+// catalogues the receiver has gathered are copied from it first: the
+// nearest one to each frame, and CelesTrak is asked only when the
+// receiver has no fresh one either.
 type SatCatalog struct {
-	store satellites.Store
+	store  satellites.Store
+	Source CatalogSource
+}
+
+// CatalogSource gives catalogues of orbits kept elsewhere: a receiver.
+type CatalogSource interface {
+	SatCatalogs(ctx context.Context) ([]RemoteCatalog, error)
+	FetchSatCatalog(ctx context.Context, name string, w io.Writer) error
 }
 
 const (
@@ -146,6 +157,91 @@ func (c *SatCatalog) refresh(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// copyNearest copies from the source the catalogues nearer the frames of
+// ms than any kept here (by satBetter, when one is kept), and the newest
+// one when it is fresh, so CelesTrak is not asked; it returns how many it
+// copied. An unreachable or old receiver is passed over.
+func (c *SatCatalog) copyNearest(ctx context.Context, ms []*Measurement) int {
+	lctx, cancel := context.WithTimeout(ctx, time.Minute)
+	remote, err := c.Source.SatCatalogs(lctx)
+	cancel()
+	if err != nil || len(remote) == 0 {
+		return 0
+	}
+	local := map[string]bool{}
+	all := c.store.Catalogs()
+	for _, x := range all {
+		local[filepath.Base(x.Path)] = true
+	}
+	want := map[string]bool{}
+	for _, m := range ms {
+		start := time.UnixMilli(m.start)
+		best := -1
+		for i, x := range remote {
+			if !local[x.Name] && (best < 0 || absDur(x.Time.Sub(start)) < absDur(remote[best].Time.Sub(start))) {
+				best = i
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		mine, ok := c.store.Nearest(start)
+		if !ok || absDur(remote[best].Time.Sub(start)) < absDur(mine.Time.Sub(start))-satBetter {
+			want[remote[best].Name] = true
+		}
+	}
+	// the newest of the receiver, when it is fresh: no download of our own
+	newest := remote[0]
+	for _, x := range remote {
+		if x.Time.After(newest.Time) {
+			newest = x
+		}
+	}
+	if !local[newest.Name] && c.due(time.Now()) && time.Since(newest.Time) < satRefresh {
+		want[newest.Name] = true
+	}
+	n := 0
+	for name := range want {
+		if ctx.Err() != nil {
+			break
+		}
+		if err := c.copy(ctx, name); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// copy copies one catalogue of the source into the folder.
+func (c *SatCatalog) copy(ctx context.Context, name string) error {
+	if filepath.Base(name) != name || !strings.HasPrefix(name, "catalog-") || !strings.HasSuffix(name, ".tle.gz") {
+		return fmt.Errorf("имя каталога орбит %q", name)
+	}
+	if err := os.MkdirAll(c.store.Dir, 0o755); err != nil {
+		return err
+	}
+	dst := filepath.Join(c.store.Dir, name)
+	tmp := dst + ".part"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	fctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	err = c.Source.FetchSatCatalog(fctx, name, f)
+	cancel()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		_, err = satellites.Load(tmp) // a whole, readable catalogue
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
 // SatReport tells how the identification went.
 type SatReport struct {
 	Frames     int    // frames with tracks looked at
@@ -153,6 +249,7 @@ type SatReport struct {
 	Found      int    // satellites found on them
 	Static     int    // tracks found fixed in the sky (not satellites)
 	Downloaded int    // objects in the catalogue downloaded now, 0: none
+	Copied     int    // catalogues copied from the receiver now
 	CatalogErr string // the download failed
 	Catalogs   int    // catalogues kept
 }
@@ -168,6 +265,9 @@ func (r SatReport) Text() string {
 	}
 	if r.Static > 0 {
 		t += fmt.Sprintf(", неподвижных (туманность, галактика) %d", r.Static)
+	}
+	if r.Copied > 0 {
+		t += fmt.Sprintf("; каталогов орбит взято с приёмника: %d", r.Copied)
 	}
 	if r.Downloaded > 0 {
 		t += fmt.Sprintf("; скачан каталог орбит CelesTrak: %d объектов", r.Downloaded)
@@ -261,6 +361,17 @@ func IdentifySatellites(ctx context.Context, ms []Measurement, cache *QualityCac
 			out = append(out, m)
 		}
 		return out
+	}
+	if cat.Source != nil {
+		var told []*Measurement
+		for _, m := range with {
+			if m.start != 0 && m.moving() {
+				told = append(told, m)
+			}
+		}
+		if len(told) > 0 {
+			rep.Copied = cat.copyNearest(ctx, told)
+		}
 	}
 	if len(pending()) > 0 {
 		n, err := cat.refresh(ctx)
