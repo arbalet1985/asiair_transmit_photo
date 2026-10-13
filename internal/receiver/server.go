@@ -27,6 +27,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/weather"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/wire"
 )
 
@@ -68,12 +69,13 @@ type Server struct {
 
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
-	speed      speedLog      // the agent speed of the last hours, for the chart
-	quality    *quality      // stars and HFR of the received Light frames
-	sats       *satState     // orbits of the satellites, for the tracks on the frames
-	thumbs     *thumbCache   // gallery thumbnails
-	thumbSem   chan struct{} // thumbnails made at once
-	cleanupNow chan struct{} // run the ASIAIR cleanup at once (setting changed)
+	speed      speedLog       // the agent speed of the last hours, for the chart
+	quality    *quality       // stars and HFR of the received Light frames
+	sats       *satState      // orbits of the satellites, for the tracks on the frames
+	weather    *weather.Cache // the forecast of the clouds for the planner
+	thumbs     *thumbCache    // gallery thumbnails
+	thumbSem   chan struct{}  // thumbnails made at once
+	cleanupNow chan struct{}  // run the ASIAIR cleanup at once (setting changed)
 
 	// Firewall manages the Windows firewall rule (set by the program).
 	Firewall Firewall
@@ -127,6 +129,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
 	s.quality = newQuality(filepath.Join(cfg.DataDir, "quality.json"))
 	s.sats = newSatState(filepath.Join(cfg.DataDir, "satellites"))
+	s.weather = &weather.Cache{File: filepath.Join(cfg.DataDir, "weather.json"), UserAgent: "asiair-receiver/" + protocol.Version}
 	s.thumbs, s.thumbSem = newThumbCache(), make(chan struct{}, 2)
 	if !cfg.DisableTLS {
 		cert, fp, err := loadOrCreateCert(cfg.TLSCert, cfg.TLSKey, cfg.DataDir)
@@ -518,6 +521,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/site", s.handleUISite)
 	mux.HandleFunc("/ui/api/planner", s.handleUIPlanner)
 	mux.HandleFunc("/ui/api/plan", s.handleUIPlan)
+	mux.HandleFunc("/ui/api/weather", s.handleUIWeather)
 	mux.HandleFunc("/ui/api/catalog", s.handleUICatalog)
 	mux.HandleFunc("/ui/api/open", s.handleUIOpen)
 	mux.HandleFunc("/ui/api/tilt", s.handleUITilt)
