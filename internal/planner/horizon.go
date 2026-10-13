@@ -58,23 +58,142 @@ func (h Horizon) At(az float64) float64 {
 
 // Zone is a closed part of the sky above the horizon (wires, a pole, a
 // roof): azimuths from Az1 eastwards to Az2 (through the north when
-// Az1 > Az2), altitudes from Alt1 to Alt2.
+// Az1 > Az2), altitudes from Alt1 to Alt2; or, drawn by hand, a polygon
+// (Poly, three vertices or more, edges straight on the strip of azimuth and
+// altitude), whose bounding box is then kept in Az1…Alt2 for the programs
+// that know only boxes.
 type Zone struct {
 	Az1  float64 `json:"az1"`
 	Az2  float64 `json:"az2"`
 	Alt1 float64 `json:"alt1"`
 	Alt2 float64 `json:"alt2"`
+	// Poly: the vertices of a polygon zone
+	Poly []Point `json:"poly,omitempty"`
 	// Auto: guessed from the frames (a gap in a series); a zone drawn,
 	// changed or accepted by hand is not, and the sky guessed again keeps it
 	Auto bool `json:"auto,omitempty"`
 }
 
+// Polygon tells a zone drawn as a polygon.
+func (z Zone) Polygon() bool { return len(z.Poly) >= 3 }
+
 // Contains tells a point inside the zone.
 func (z Zone) Contains(az, alt float64) bool {
+	if z.Polygon() {
+		u := unwrap(z.Poly)
+		az = normAz(az)
+		for _, k := range [...]float64{-360, 0, 360} {
+			if inPolygon(u, az+k, alt) {
+				return true
+			}
+		}
+		return false
+	}
 	if alt < math.Min(z.Alt1, z.Alt2) || alt > math.Max(z.Alt1, z.Alt2) {
 		return false
 	}
 	return normAz(az-z.Az1) <= normAz(z.Az2-z.Az1)
+}
+
+// unwrap: the vertices with the azimuths running on from the first, no
+// jump over 180° between neighbours (a polygon across the north).
+func unwrap(p []Point) []Point {
+	out := make([]Point, len(p))
+	for i, q := range p {
+		out[i] = q
+		if i > 0 {
+			out[i].Az = out[i-1].Az + wrap180(q.Az-out[i-1].Az)
+		}
+	}
+	return out
+}
+
+// inPolygon: the even-odd rule.
+func inPolygon(p []Point, az, alt float64) bool {
+	in := false
+	for i, j := 0, len(p)-1; i < len(p); j, i = i, i+1 {
+		a, b := p[i], p[j]
+		if (a.Alt > alt) != (b.Alt > alt) && az < a.Az+(alt-a.Alt)*(b.Az-a.Az)/(b.Alt-a.Alt) {
+			in = !in
+		}
+	}
+	return in
+}
+
+// Fit puts the bounding box of a polygon zone in Az1…Alt2 (azimuths in
+// 0..360, through the north when the polygon crosses it).
+func (z *Zone) Fit() {
+	if !z.Polygon() {
+		return
+	}
+	u := unwrap(z.Poly)
+	lo, hi := u[0].Az, u[0].Az
+	z.Alt1, z.Alt2 = u[0].Alt, u[0].Alt
+	for _, q := range u {
+		lo, hi = math.Min(lo, q.Az), math.Max(hi, q.Az)
+		z.Alt1, z.Alt2 = math.Min(z.Alt1, q.Alt), math.Max(z.Alt2, q.Alt)
+	}
+	if hi-lo >= 360 {
+		z.Az1, z.Az2 = 0, 360
+		return
+	}
+	z.Az1, z.Az2 = normAz(lo), normAz(hi)
+}
+
+// Outline: the edges of a polygon zone as segments on the strip, azimuths
+// in 0..360 (an edge across the north is cut in two).
+func (z Zone) Outline() [][2]Point {
+	if !z.Polygon() {
+		return nil
+	}
+	return Segments(z.Poly, true)
+}
+
+// Segments: the edges of a broken line (closed: back to the first point)
+// as segments on the strip, azimuths in 0..360; each edge goes the short
+// way, across the north when that is shorter.
+func Segments(pts []Point, closed bool) [][2]Point {
+	u := unwrap(pts)
+	n := len(u) - 1
+	if closed {
+		n = len(u)
+	}
+	var out [][2]Point
+	for i := 0; i < n; i++ {
+		a, b := u[i], u[(i+1)%len(u)]
+		b.Az = a.Az + wrap180(b.Az-a.Az)
+		for _, k := range [...]float64{-360, 0, 360} {
+			p, q := Point{Az: a.Az + k, Alt: a.Alt}, Point{Az: b.Az + k, Alt: b.Alt}
+			if s, ok := clipAz(p, q); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// clipAz cuts a segment to the azimuths 0..360.
+func clipAz(p, q Point) ([2]Point, bool) {
+	t0, t1 := 0.0, 1.0
+	d := q.Az - p.Az
+	for _, lim := range [...]struct{ v, sign float64 }{{0, 1}, {360, -1}} {
+		// keep sign*(az - v) >= 0
+		f := lim.sign * (p.Az - lim.v)
+		g := lim.sign * d
+		switch {
+		case g == 0 && f < 0:
+			return [2]Point{}, false
+		case g > 0:
+			t0 = math.Max(t0, -f/g)
+		case g < 0:
+			t1 = math.Min(t1, -f/g)
+		}
+	}
+	if t0 >= t1 {
+		return [2]Point{}, false
+	}
+	at := func(t float64) Point { return Point{Az: p.Az + d*t, Alt: p.Alt + (q.Alt-p.Alt)*t} }
+	return [2]Point{at(t0), at(t1)}, true
 }
 
 // Sky is what the observatory sees.
