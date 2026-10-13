@@ -33,6 +33,7 @@ const (
 	colCamera
 	colHFR
 	colStars
+	colRound
 	colSats
 	colMoon
 	colFile
@@ -47,7 +48,7 @@ var columns = []struct {
 }{
 	{"Тип", 70, false}, {"Объект", 110, false}, {"Ночь", 80, false}, {"Фильтр", 55, false},
 	{"Выдержка", 70, true}, {"Гейн", 45, true}, {"Темп.", 45, true}, {"Камера", 120, false},
-	{"HFR", 45, true}, {"Звёзд", 50, true}, {"Спутники", 110, false}, {"Луна", 45, true},
+	{"HFR", 45, true}, {"Звёзд", 50, true}, {"Округл.", 55, true}, {"Спутники", 110, false}, {"Луна", 45, true},
 	{"Файл", 280, false}, {"В папке", 110, true}, {"Куда", 360, false},
 }
 
@@ -141,6 +142,11 @@ func (m *frameModel) cell(r row, col int) string {
 			return ""
 		}
 		return strconv.Itoa(f.Stars)
+	case colRound:
+		if !f.Measured || f.Round <= 0 {
+			return ""
+		}
+		return strings.Replace(strconv.FormatFloat(f.Round, 'f', 2, 64), ".", ",", 1)
 	case colSats:
 		return f.TracksText()
 	case colMoon:
@@ -183,6 +189,11 @@ func (m *frameModel) num(r row, col int) (float64, bool) {
 			return -1, true
 		}
 		return float64(r.f.Stars), true
+	case colRound:
+		if !r.f.Measured || r.f.Round <= 0 {
+			return 2, true // not measured: last
+		}
+		return r.f.Round, true
 	case colMoon:
 		return r.moon, true
 	case colTemp:

@@ -75,6 +75,13 @@ type Frame struct {
 	Measured bool
 	HFR      float64
 	Stars    int
+	// the shape of the stars (stars.Result: roundness, the share stretched
+	// one way) and the saturated pixels of the frame with their share
+	// (percent); 0 when not measured
+	Round   float64
+	Aligned float64
+	SatPx   int64
+	SatPct  float64
 	// the straight tracks on a light frame (satellites, planes, meteors;
 	// not the ones fixed in the sky) and the objects that left them: told
 	// by the receiver or by the sorter (IdentifySatellites). SatTold: the

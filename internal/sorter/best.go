@@ -32,6 +32,11 @@ type BestQuery struct {
 	Filter   string  // "" = lights without a filter
 	Sessions []int   // numbers of the sessions (nights); none = all
 	Percent  float64 // share of the best frames to keep, 0..100
+	// frames left out before the pick: stars rounder than MinRound only
+	// (0: all taken), at most MaxSatPct percent of the frame saturated
+	// (0: all taken)
+	MinRound  float64
+	MaxSatPct float64
 }
 
 // BestPick is the result of Layout.Best.
@@ -39,6 +44,8 @@ type BestPick struct {
 	Keep       []*Item // the best frames, best first
 	All        int     // frames of the sessions chosen
 	Unmeasured int     // of them without stars measured: not picked
+	Elongated  int     // left out: stars stretched (BestQuery.MinRound)
+	Saturated  int     // left out: too much saturated (BestQuery.MaxSatPct)
 	// Score of the worst frame kept (lower is better), Nmax the most
 	// stars on a frame
 	Threshold float64
@@ -89,8 +96,17 @@ func (l *Layout) Best(q BestQuery) BestPick {
 				continue
 			}
 			p.All++
-			if !it.Frame.Measured || it.Frame.Stars == 0 || it.Frame.HFR <= 0 {
+			f := it.Frame
+			if !f.Measured || f.Stars == 0 || f.HFR <= 0 {
 				p.Unmeasured++
+				continue
+			}
+			if q.MinRound > 0 && f.Round > 0 && f.Round < q.MinRound {
+				p.Elongated++
+				continue
+			}
+			if q.MaxSatPct > 0 && f.SatPct > q.MaxSatPct {
+				p.Saturated++
 				continue
 			}
 			items = append(items, it)
@@ -254,6 +270,12 @@ func (p BestPick) Text(q BestQuery, kept map[*Group]int) string {
 	fmt.Fprintf(&b, "Взято кадров: %d из %d (порог оценки %.2f)", len(p.Keep), p.All, p.Threshold)
 	if p.Unmeasured > 0 {
 		fmt.Fprintf(&b, ", без оценки звёзд и не взяты: %d", p.Unmeasured)
+	}
+	if p.Elongated > 0 {
+		fmt.Fprintf(&b, ", не взяты с вытянутыми звёздами (округлость ниже %s): %d", ruFloat(q.MinRound, 2), p.Elongated)
+	}
+	if p.Saturated > 0 {
+		fmt.Fprintf(&b, ", не взяты с пересветом больше %s%% кадра: %d", ruFloat(q.MaxSatPct, 2), p.Saturated)
 	}
 	b.WriteString("\r\n\r\nСессии:\r\n")
 	for _, g := range p.Sessions {

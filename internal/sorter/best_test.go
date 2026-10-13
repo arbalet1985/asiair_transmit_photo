@@ -160,3 +160,45 @@ func TestRemoteQuality(t *testing.T) {
 		t.Fatalf("%+v", fr)
 	}
 }
+
+// Frames with stretched stars or too much saturated are left out when asked.
+func TestBestLeavesOut(t *testing.T) {
+	frames := bestFrames()
+	for i := range frames {
+		frames[i].Round = 0.9
+	}
+	frames[0].Round = 0.6  // HFR 2.0, 100 stars: the best one, but trailed
+	frames[1].SatPct = 0.5 // HFR 2.1: much saturated
+	frames[4].Round = 0    // not measured for the shape: taken
+	l := Plan(frames)
+	q := BestQuery{Object: "Objects/M 31", Filter: "Ha", Percent: 100}
+	if p := l.Best(q); len(p.Keep) != 5 || p.Elongated != 0 || p.Saturated != 0 {
+		t.Fatalf("nothing left out unless asked: %+v", p)
+	}
+	q.MinRound, q.MaxSatPct = 0.8, 0.1
+	p := l.Best(q)
+	if len(p.Keep) != 3 || p.Elongated != 1 || p.Saturated != 1 {
+		t.Fatalf("%+v", p)
+	}
+	for _, it := range p.Keep {
+		if it.Frame.Round == 0.6 || it.Frame.SatPct == 0.5 {
+			t.Fatalf("kept %+v", it.Frame)
+		}
+	}
+	if s := p.Text(q, nil); !strings.Contains(s, "округлость ниже 0,80): 1") || !strings.Contains(s, "больше 0,10% кадра: 1") {
+		t.Fatal(s)
+	}
+}
+
+// The shape of the stars and the saturated pixels the receiver measured
+// reach the frame.
+func TestRemoteShape(t *testing.T) {
+	var f RemoteFile
+	if err := json.Unmarshal([]byte(`{"path":"Udisk/Light_M 31_0001.fit","size":10,"q":true,"hfr":2,"stars":9,"round":0.71,"aligned":0.8,"sat_px":120,"sat_pct":0.002}`), &f); err != nil {
+		t.Fatal(err)
+	}
+	fr := remoteFrame(&Receiver{}, f, nil)
+	if fr.Round != 0.71 || fr.Aligned != 0.8 || fr.SatPx != 120 || fr.SatPct != 0.002 {
+		t.Fatalf("%+v", fr)
+	}
+}

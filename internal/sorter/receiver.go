@@ -243,6 +243,10 @@ type RemoteFile struct {
 	Measured bool    `json:"q,omitempty"`
 	HFR      float64 `json:"hfr,omitempty"`
 	Stars    int     `json:"stars,omitempty"`
+	Round    float64 `json:"round,omitempty"`
+	Aligned  float64 `json:"aligned,omitempty"`
+	SatPx    int64   `json:"sat_px,omitempty"`
+	SatPct   float64 `json:"sat_pct,omitempty"`
 	// the tracks on it and the satellites that left them
 	Tracks  []Track `json:"tracks,omitempty"`
 	SatTold bool    `json:"sat_told,omitempty"`
@@ -650,6 +654,7 @@ func remoteFrame(r *Receiver, f RemoteFile, cards []Card) Frame {
 	fr := describe(func(k string) string { return m[k] }, f.Path, f.MTime)
 	fr.Path, fr.Size, fr.Src, fr.MTime, fr.Cards = f.Path, f.Size, r, f.MTime, cards
 	fr.Measured, fr.HFR, fr.Stars = f.Measured, f.HFR, f.Stars
+	fr.Round, fr.Aligned, fr.SatPx, fr.SatPct = f.Round, f.Aligned, f.SatPx, f.SatPct
 	fr.Tracks, fr.SatTold, fr.SatAge, fr.SatErr, fr.FlipRows = f.Tracks, f.SatTold, f.SatAge, f.SatErr, f.Flip
 	return fr
 }

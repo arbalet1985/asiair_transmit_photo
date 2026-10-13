@@ -222,6 +222,13 @@
   .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
   .chart .empty { fill: var(--muted); font-size: 13px; }
   .chart svg { touch-action: pan-y; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+  .chart.night { height: auto; }
+  .chart .nline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; opacity: .7; }
+  .chart .npt { fill: var(--accent); cursor: pointer; }
+  .chart .npt.bad { fill: var(--warn); }
+  .chart .ntitle { fill: var(--text); font-size: 12px; font-weight: 600; }
+  .chart .nband { fill: color-mix(in srgb, var(--warn) 12%, transparent); }
+  td.chartbtn button { padding: 0 6px; }
   .chart .sel { fill: color-mix(in srgb, var(--accent) 18%, transparent); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; }
   .chart .limitnote { fill: var(--muted); font-size: 11px; }
   .chartbtns { display: inline-flex; gap: 2px; }
@@ -475,9 +482,14 @@
         <label><input type="checkbox" id="summaryAll"> все ночи</label>
       </div>
       <div class="tablewrap"><table class="summary">
-        <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>HFR</th><th>Получено</th></tr></thead>
+        <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>HFR</th><th>Получено</th><th></th></tr></thead>
         <tbody id="summaryBody"></tbody>
       </table></div>
+      <div id="nightBox" hidden>
+        <div class="toolbar"><b id="nightTitle"></b><span class="spacer"></span><button id="nightClose" title="Закрыть графики">✕</button></div>
+        <div class="chart night" id="nightChart"></div>
+        <div class="hint">Каждая точка — кадр, по времени съёмки (часы обсерватории); щелчок открывает кадр. Оранжевые — кадры с ⚠. <b>Облака и дымка</b>: число звёзд проваливается, фон часто растёт. <b>Роса</b>: HFR медленно растёт, звёзд всё меньше. <b>Фокус уплыл</b> (остыл телескоп): HFR растёт ступенькой или плавно, после автофокуса падает. <b>Ветер и гидирование</b>: округлость падает на отдельных кадрах. <b>Луна, рассвет, засветка</b>: фон растёт, звёзд меньше. Округлость — короткая ось звезды к длинной, как в Siril: 1 — круглые, ниже 0,8 — заметно вытянуты.</div>
+      </div>
       <div class="line" id="summaryTotals"></div>
       <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
     </div>
@@ -2187,7 +2199,8 @@ function qualityGroups() {
   qualMap = new Map();
   for (const [g, fs] of groups) {
     if (fs.length < 5) continue; // too few to tell what is normal
-    qualMap.set(g, { hfr: median(fs.filter(f => f.stars > 0).map(f => f.hfr)), stars: median(fs.map(f => f.stars)) });
+    qualMap.set(g, { hfr: median(fs.filter(f => f.stars > 0).map(f => f.hfr)), stars: median(fs.map(f => f.stars)),
+      round: median(fs.filter(f => f.round > 0).map(f => f.round)) });
   }
   qualKey = key;
   return qualMap;
@@ -2199,6 +2212,8 @@ function judge(f) {
   if (!m) return { bad: false };
   if (m.stars > 0 && f.stars < 0.6 * m.stars) return { bad: true, why: `мало звёзд: ${f.stars} при обычных ${m.stars} — облака, дымка, роса?` };
   if (m.hfr > 0 && f.hfr > 1.3 * m.hfr) return { bad: true, why: `звёзды крупнее обычного: HFR ${f.hfr.toFixed(2)} при ${m.hfr.toFixed(2)} — фокус, ветер, гидирование?` };
+  if (m.round > 0 && f.round > 0 && f.round < Math.min(0.8, m.round - 0.08))
+    return { bad: true, why: `звёзды вытянуты: округлость ${f.round.toFixed(2)} при обычной ${m.round.toFixed(2)}` + (f.aligned >= 0.6 ? " — все в одну сторону: ветер или гидирование?" : "") };
   return { bad: false };
 }
 function qualityTag(f) {
@@ -2231,6 +2246,17 @@ function trackText(f, t) {
   if (f.sat_told) return "не опознан: самолёт, метеор или объекта нет в открытом каталоге";
   const c = state.satellites || {};
   return "опознание — после загрузки каталога орбит" + (c.error ? ` (не скачан: ${c.error})` : "");
+}
+// the shape of the stars of a frame in words: the roundness and, when they
+// are stretched mostly one way, which way on the frame as shown
+function shapeText(f) {
+  let t = `округлость ${f.round.toFixed(2)}` + (f.round >= 0.9 ? " — круглые" : f.round >= 0.8 ? " — почти круглые" : " — вытянуты");
+  if (f.round < 0.9 && f.aligned >= 0.6) {
+    const a = f.flip ? (180 - f.angle) % 180 : f.angle; // from the rows as shown, toward the bottom
+    const dir = a < 22.5 || a >= 157.5 ? "по горизонтали ↔" : a < 67.5 ? "по диагонали ↘" : a < 112.5 ? "по вертикали ↕" : "по диагонали ↗";
+    t += `, большинство в одну сторону — ${dir} (${Math.round(a)}°): ветер, гидирование или перекладка`;
+  } else if (f.round < 0.9) t += " в разные стороны — оптика (кома, тилт, края поля)";
+  return t;
 }
 function qualitySummary(fs) {
   if (!fs.length) return "—";
@@ -2637,17 +2663,111 @@ function renderSummary() {
     tr.append(td(r.night.key !== prev ? r.night.label : ""), td(r.object || "—"), td(kindLabel[r.kind] || r.kind),
       td(String(r.n), "num"), td([...r.exps].sort((a, b) => a - b).map(fmtExp).join(", ") || "—", "num"),
       td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(qualitySummary(r.q || []), "num"), td(r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
+    const cb = el("td", { className: "chartbtn" });
+    if (r.kind === "light" && r.q && r.q.length >= 2) {
+      const b = el("button", { textContent: "📈", title: "Графики ночи: HFR, звёзды, фон, округлость звёзд по времени" });
+      b.onclick = e => { e.stopPropagation(); nightSel = { night: r.night.key, object: r.object, label: r.night.label }; drawNight(); };
+      cb.append(b);
+    }
+    tr.append(cb);
     tr.title = "Показать эти кадры в списке файлов";
     tr.onclick = () => showGroup(r);
     prev = r.night.key;
     body.append(tr);
   }
-  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 9, className: "muted", textContent: "Кадров с типом в имени (Light, Dark, Flat, Bias) пока нет." })));
+  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 10, className: "muted", textContent: "Кадров с типом в имени (Light, Dark, Flat, Bias) пока нет." })));
   $("summaryInfo").textContent = nights.length ? `ночей: ${nights.length}` + (shown.length < nights.length ? `, показаны последние ${shown.length}` : "") : "";
   const tot = [...objects].sort((a, b) => b[1].total - a[1].total)
     .map(([o, v]) => `${o || "без имени"}: ${v.n} Light, ${fmtExp(v.total)} за ${v.nights.size} ноч${v.nights.size === 1 ? "ь" : v.nights.size < 5 ? "и" : "ей"}`);
   $("summaryTotals").textContent = tot.length ? "Всего по объектам — " + tot.join(" · ") : "";
+  drawNight();
 }
+
+// ---------- the night of an object, frame by frame ----------
+let nightSel = null; // {night, object, label}
+$("nightClose").onclick = () => { nightSel = null; drawNight(); };
+// the measured light frames of the night and object chosen, by time
+function nightFrames() {
+  if (!nightSel) return [];
+  const out = [];
+  for (const f of state.files) {
+    if (!f.q) continue;
+    const i = infoOf(f);
+    if (i.kind !== "light" || i.night.key !== nightSel.night || i.object !== nightSel.object || !i.when) continue;
+    out.push({ f, t: i.when.getTime() });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+function drawNight() {
+  const pts = nightFrames(), box = $("nightBox");
+  box.hidden = !nightSel || pts.length < 2;
+  if (box.hidden) return;
+  $("nightTitle").textContent = `${nightSel.object || "без имени"} — ночь ${nightSel.label}: ${pts.length} кадр.`;
+  const chart = $("nightChart"), W = chart.clientWidth || 600;
+  const strips = [
+    { name: "HFR, px", get: f => f.stars > 0 ? f.hfr : null, fmt: v => v.toFixed(2) },
+    { name: "Звёзд", get: f => f.stars, fmt: v => String(Math.round(v)) },
+    { name: "Фон, ADU", get: f => f.bg || null, fmt: v => String(Math.round(v)) },
+    { name: "Округлость", get: f => f.round || null, fmt: v => v.toFixed(2), lo: 0.5, hi: 1 },
+  ];
+  const L = 56, R = 10, SH = 86, GAP = 22, T = 16, B = 22;
+  const H = T + strips.length * (SH + GAP) - GAP + B, pw = W - L - R;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t, span = Math.max(t1 - t0, 60e3);
+  const x = t => L + (t - t0) / span * pw;
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Графики ночи по кадрам" });
+  svg.style.height = H + "px";
+  chart.style.height = H + "px";
+  const grid = mk("g", { class: "grid" }), axis = mk("g", { class: "axis" });
+  svg.append(grid, axis);
+  // a break in the line where frames pause (a meridian flip, clouds)
+  const gaps = pts.slice(1).map((p, i) => p.t - pts[i].t).sort((a, b) => a - b);
+  const brk = 3 * (gaps[gaps.length >> 1] || 60e3);
+  const files = pts.map(p => p.f);
+  strips.forEach((st, k) => {
+    const top = T + k * (SH + GAP), vals = pts.map(p => st.get(p.f)).filter(v => v != null && isFinite(v));
+    if (!vals.length) return;
+    let lo = st.lo != null ? Math.min(st.lo, ...vals) : Math.min(...vals), hi = st.hi != null ? st.hi : Math.max(...vals);
+    if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.08; lo -= st.lo != null ? 0 : pad; hi += st.hi != null ? 0 : pad;
+    const y = v => top + SH - (v - lo) / (hi - lo) * SH;
+    svg.append(mk("text", { x: L, y: top - 4, class: "ntitle" }, st.name));
+    for (const v of [lo + (hi - lo) * 0.1, (lo + hi) / 2, hi - (hi - lo) * 0.1]) {
+      grid.append(mk("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+      axis.append(mk("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, st.fmt(v)));
+    }
+    let d = "", prev = null;
+    for (const p of pts) {
+      const v = st.get(p.f);
+      if (v == null) { prev = null; continue; }
+      d += `${prev == null || p.t - prev > brk ? "M" : "L"}${x(p.t).toFixed(1)},${y(v).toFixed(1)}`;
+      prev = p.t;
+    }
+    svg.append(mk("path", { d, class: "nline" }));
+    for (const p of pts) {
+      const v = st.get(p.f);
+      if (v == null) continue;
+      const j = judge(p.f), when = new Date(p.t);
+      const c = mk("circle", { cx: x(p.t), cy: y(v), r: 3, class: "npt" + (j && j.bad ? " bad" : "") });
+      c.append(mk("title", {}, `${hm(when)} · ${p.f.name}\nHFR ${p.f.hfr ? p.f.hfr.toFixed(2) : "—"} · звёзд ${p.f.stars}` +
+        (p.f.bg ? ` · фон ${Math.round(p.f.bg)}` : "") + (p.f.round ? ` · округлость ${p.f.round.toFixed(2)}` : "") + (j && j.bad ? "\n⚠ " + j.why : "")));
+      c.onclick = () => openViewer(p.f.path, files);
+      svg.append(c);
+    }
+  });
+  // time: round observatory times under the last strip
+  const steps = [5, 10, 15, 30, 60, 120, 180].map(m => m * 60e3);
+  const tick = steps.find(v => span / v <= Math.max(3, Math.floor(pw / 70))) || 360 * 60e3;
+  const yb = T + strips.length * (SH + GAP) - GAP;
+  for (let t = Math.ceil(t0 / tick) * tick; t <= t1; t += tick) {
+    grid.append(mk("line", { x1: x(t), x2: x(t), y1: T, y2: yb }));
+    axis.append(mk("text", { x: x(t), y: yb + 16, "text-anchor": "middle" }, hm(new Date(t))));
+  }
+  chart.replaceChildren(svg);
+}
+// hours and minutes of a time held in the UTC fields (observatory clock)
+function hm(d) { return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
 $("summaryAll").onchange = () => { summaryKey = ""; renderSummary(); };
 $("summaryHead").addEventListener("click", () => { summaryKey = ""; setTimeout(renderSummary); });
 
@@ -4298,6 +4418,9 @@ function showInfo(f, meta) {
   const cur = state.files.find(x => x.path === f.path) || f;
   if (cur.q) {
     add("Звёзды", `${cur.stars}, HFR ${cur.hfr ? cur.hfr.toFixed(2) : "—"} px`);
+    if (cur.round) add("Форма звёзд", shapeText(cur));
+    if (cur.bg) add("Фон неба", `${Math.round(cur.bg)} ADU (медиана кадра)`);
+    if (cur.sat_px != null || cur.bg) add("Пересвечено", cur.sat_px ? `${cur.sat_px} пикс. (${cur.sat_pct >= 0.01 ? cur.sat_pct.toFixed(2) : "<0,01"}% кадра)` : "нет");
     const j = judge(cur);
     if (j && j.bad) add("Качество", "⚠ " + j.why);
     (cur.tracks || []).forEach((t, i) => add(cur.tracks.length > 1 ? `Трек ${i + 1}` : "Трек", trackText(cur, t)));

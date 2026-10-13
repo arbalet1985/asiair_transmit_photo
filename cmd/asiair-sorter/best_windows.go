@@ -275,10 +275,20 @@ func (w *window) bestDialog() {
 	}
 	w.mu.Lock()
 	percent := w.saved.BestPercent
+	roundOn, minRound := w.saved.BestRoundOn, w.saved.BestMinRound
+	satOn, maxSat := w.saved.BestSatOn, w.saved.BestMaxSat
 	w.mu.Unlock()
 	if percent <= 0 || percent > 100 {
 		percent = 30
 	}
+	if minRound <= 0 || minRound >= 1 {
+		minRound = 0.8
+	}
+	if maxSat <= 0 {
+		maxSat = 0.1
+	}
+	var roundBox, satBox *walk.CheckBox
+	var roundEdit, satEdit *walk.NumberEdit
 
 	var dlg *walk.Dialog
 	var ok, cancel *walk.PushButton
@@ -289,6 +299,12 @@ func (w *window) bestDialog() {
 	object, filter := objects[cur], ""
 	query := func() sorter.BestQuery {
 		q := sorter.BestQuery{Object: object, Filter: filter, Percent: percent}
+		if roundOn {
+			q.MinRound = minRound
+		}
+		if satOn {
+			q.MaxSatPct = maxSat
+		}
 		for _, r := range m.rows {
 			if r.on {
 				q.Sessions = append(q.Sessions, r.n)
@@ -310,6 +326,12 @@ func (w *window) bestDialog() {
 		t := fmt.Sprintf("Будет взято кадров: %d из %d", len(p.Keep), p.All)
 		if p.Unmeasured > 0 {
 			t += fmt.Sprintf("; без оценки звёзд (не берутся): %d", p.Unmeasured)
+		}
+		if p.Elongated > 0 {
+			t += fmt.Sprintf("; с вытянутыми звёздами (не берутся): %d", p.Elongated)
+		}
+		if p.Saturated > 0 {
+			t += fmt.Sprintf("; с пересветом (не берутся): %d", p.Saturated)
 		}
 		if w.measureLeft > 0 {
 			t += fmt.Sprintf(". Ещё оцениваются: %d — подождите", w.measureLeft)
@@ -339,6 +361,8 @@ func (w *window) bestDialog() {
 		percent = pctEdit.Value()
 		w.mu.Lock()
 		w.saved.BestPercent = percent
+		w.saved.BestRoundOn, w.saved.BestMinRound = roundOn, minRound
+		w.saved.BestSatOn, w.saved.BestMaxSat = satOn, maxSat
 		w.mu.Unlock()
 		dlg.Accept()
 	}
@@ -393,6 +417,28 @@ func (w *window) bestDialog() {
 						m.PublishRowsReset()
 						update()
 					}},
+					HSpacer{},
+				},
+			},
+			Composite{
+				Layout: HBox{MarginsZero: true},
+				Children: []Widget{
+					CheckBox{AssignTo: &roundBox, Text: "Не брать кадры с вытянутыми звёздами: округлость ниже", Checked: roundOn,
+						ToolTipText:      "Округлость — короткая ось звезды к длинной, как в Siril: 1 — круглые. Вытянутые звёзды — ветер, гидирование, перекладка",
+						OnCheckedChanged: func() { roundOn = roundBox.Checked(); update() }},
+					NumberEdit{AssignTo: &roundEdit, Value: minRound, MinValue: 0.3, MaxValue: 0.99, Decimals: 2, Increment: 0.05, MaxSize: Size{Width: 60},
+						OnValueChanged: func() { minRound = roundEdit.Value(); update() }},
+					HSpacer{},
+				},
+			},
+			Composite{
+				Layout: HBox{MarginsZero: true},
+				Children: []Widget{
+					CheckBox{AssignTo: &satBox, Text: "Не брать кадры, где пересвечено больше, % кадра:", Checked: satOn,
+						ToolTipText:      "Доля пикселей кадра на уровне насыщения (строка saturated статистики). Единицы пикселей — ядра ярких звёзд, это нормально",
+						OnCheckedChanged: func() { satOn = satBox.Checked(); update() }},
+					NumberEdit{AssignTo: &satEdit, Value: maxSat, MinValue: 0.001, MaxValue: 100, Decimals: 3, Increment: 0.01, MaxSize: Size{Width: 70},
+						OnValueChanged: func() { maxSat = satEdit.Value(); update() }},
 					HSpacer{},
 				},
 			},
