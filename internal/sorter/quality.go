@@ -4,16 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/satellites"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/stars"
 )
 
-// QualityCache keeps the stars measured on frames on disk, so a frame is
-// measured once. Entries are keyed by path, size and time of the file.
+// QualityCache keeps the stars and the tracks found on frames on disk (and
+// the satellites told for them), so a frame is measured once. Entries are
+// keyed by path, size and time of the file.
 type QualityCache struct {
 	mu   sync.Mutex
 	file string
@@ -25,6 +30,17 @@ type qualityEntry struct {
 	Stars int     `json:"stars,omitempty"`
 	// V: the version of the measurement; an older one is measured again
 	V int `json:"v,omitempty"`
+	// Tracks: the straight tracks on the frame found by version TV of the
+	// search, Start: the start of the exposure (unix ms), Flip: the rows of
+	// the file go bottom up; the objects that left them were told with the
+	// catalogue of orbits SatCat downloaded at SatCatT (unix ms)
+	Tracks  []Track `json:"tracks,omitempty"`
+	TV      int     `json:"tv,omitempty"`
+	Start   int64   `json:"start,omitempty"`
+	Flip    bool    `json:"flip,omitempty"`
+	SatCat  string  `json:"satcat,omitempty"`
+	SatCatT int64   `json:"satcatt,omitempty"`
+	SatErr  string  `json:"saterr,omitempty"`
 }
 
 // qualityVersion: 1 tells saturated stars as Siril does (counted, but not
@@ -67,11 +83,64 @@ func (c *QualityCache) Save() error {
 	return os.Rename(tmp, c.file)
 }
 
-// Measurement is the stars of one frame.
+// Measurement is the stars and the tracks of one frame.
 type Measurement struct {
-	Frame *Frame
-	HFR   float64
-	Stars int
+	Frame  *Frame
+	HFR    float64
+	Stars  int
+	Tracks []Track // with the static ones
+	Flip   bool
+
+	path, key      string // the file read and its key in the cache
+	start          int64
+	satCat, satErr string
+	satCatT        int64
+}
+
+func (m Measurement) entry() qualityEntry {
+	return qualityEntry{HFR: m.HFR, Stars: m.Stars, V: qualityVersion, Tracks: m.Tracks, TV: trackVersion,
+		Start: m.start, Flip: m.Flip, SatCat: m.satCat, SatCatT: m.satCatT, SatErr: m.satErr}
+}
+
+func (m *Measurement) fromEntry(e qualityEntry) {
+	m.HFR, m.Stars, m.Tracks, m.Flip = e.HFR, e.Stars, e.Tracks, e.Flip
+	m.start, m.satCat, m.satCatT, m.satErr = e.Start, e.SatCat, e.SatCatT, e.SatErr
+}
+
+// moving: some track is not fixed in the sky.
+func (m Measurement) moving() bool {
+	for _, t := range m.Tracks {
+		if !t.Static {
+			return true
+		}
+	}
+	return false
+}
+
+// Apply gives the frame its measurement (on the window's thread).
+func (m Measurement) Apply() {
+	f := m.Frame
+	f.Measured, f.HFR, f.Stars = true, m.HFR, m.Stars
+	f.Tracks = nil
+	for _, t := range m.Tracks {
+		if !t.Static {
+			f.Tracks = append(f.Tracks, t)
+		}
+	}
+	f.SatTold, f.SatErr, f.FlipRows, f.SatAge = m.satCat != "", m.satErr, m.Flip, 0
+	if m.satCat != "" && m.start != 0 {
+		f.SatAge = math.Round(math.Abs(float64(m.satCatT-m.start))/864e5*10) / 10
+	}
+}
+
+// put keeps a measurement in the cache.
+func (c *QualityCache) put(m Measurement) {
+	if c == nil || m.key == "" {
+		return
+	}
+	c.mu.Lock()
+	c.m[m.key] = m.entry()
+	c.mu.Unlock()
 }
 
 // ToMeasure lists the light frames of the layout without stars measured
@@ -144,23 +213,43 @@ func measureOne(f *Frame, p string, cache *QualityCache) (Measurement, bool) {
 	if err != nil {
 		return Measurement{}, false
 	}
-	k := qualityKey(p, st)
+	m := Measurement{Frame: f, path: p, key: qualityKey(p, st)}
 	if cache != nil {
 		cache.mu.Lock()
-		e, ok := cache.m[k]
+		e, ok := cache.m[m.key]
 		cache.mu.Unlock()
-		if ok && e.V == qualityVersion {
-			return Measurement{f, e.HFR, e.Stars}, true
+		if ok && e.V == qualityVersion && e.TV == trackVersion {
+			m.fromEntry(e)
+			return m, true
 		}
 	}
-	r, err := stars.MeasureFile(p)
+	e, err := measureFile(p)
 	if err != nil {
 		return Measurement{}, false
 	}
-	if cache != nil {
-		cache.mu.Lock()
-		cache.m[k] = qualityEntry{r.HFR, r.Stars, qualityVersion}
-		cache.mu.Unlock()
+	m.fromEntry(e)
+	cache.put(m)
+	return m, true
+}
+
+// measureFile finds the stars and the tracks of a frame, reading it once.
+func measureFile(p string) (qualityEntry, error) {
+	fh, err := os.Open(p)
+	if err != nil {
+		return qualityEntry{}, err
 	}
-	return Measurement{f, r.HFR, r.Stars}, true
+	defer fh.Close()
+	img, err := fits.Preview(fh, stars.MaxWidth)
+	if err != nil {
+		return qualityEntry{}, err
+	}
+	r := stars.Measure(img)
+	e := qualityEntry{HFR: r.HFR, Stars: r.Stars, V: qualityVersion, TV: trackVersion}
+	w, _ := fits.ReadWCS(img.Header, filepath.Base(p))
+	e.Tracks = tracksOf(satellites.FindStreaks(img), w)
+	if len(e.Tracks) > 0 {
+		e.Start = frameStart(img.Header)
+		e.Flip = strings.EqualFold(img.Header.Get("ROWORDER"), "BOTTOM-UP")
+	}
+	return e, nil
 }

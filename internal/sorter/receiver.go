@@ -243,6 +243,12 @@ type RemoteFile struct {
 	Measured bool    `json:"q,omitempty"`
 	HFR      float64 `json:"hfr,omitempty"`
 	Stars    int     `json:"stars,omitempty"`
+	// the tracks on it and the satellites that left them
+	Tracks  []Track `json:"tracks,omitempty"`
+	SatTold bool    `json:"sat_told,omitempty"`
+	SatAge  float64 `json:"sat_age,omitempty"`
+	SatErr  string  `json:"sat_err,omitempty"`
+	Flip    bool    `json:"flip,omitempty"`
 }
 
 // deleteCmd is a delete request queued on the receiver's page.
@@ -644,6 +650,7 @@ func remoteFrame(r *Receiver, f RemoteFile, cards []Card) Frame {
 	fr := describe(func(k string) string { return m[k] }, f.Path, f.MTime)
 	fr.Path, fr.Size, fr.Src, fr.MTime, fr.Cards = f.Path, f.Size, r, f.MTime, cards
 	fr.Measured, fr.HFR, fr.Stars = f.Measured, f.HFR, f.Stars
+	fr.Tracks, fr.SatTold, fr.SatAge, fr.SatErr, fr.FlipRows = f.Tracks, f.SatTold, f.SatAge, f.SatErr, f.Flip
 	return fr
 }
 

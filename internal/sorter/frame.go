@@ -75,6 +75,16 @@ type Frame struct {
 	Measured bool
 	HFR      float64
 	Stars    int
+	// the straight tracks on a light frame (satellites, planes, meteors;
+	// not the ones fixed in the sky) and the objects that left them: told
+	// by the receiver or by the sorter (IdentifySatellites). SatTold: the
+	// objects were looked for, with orbits SatAge days from the frame;
+	// FlipRows: the rows of the file go bottom up (the tracks are in them)
+	Tracks   []Track
+	SatTold  bool
+	SatAge   float64
+	SatErr   string
+	FlipRows bool
 }
 
 // IsFITS tells FITS files by their extension.

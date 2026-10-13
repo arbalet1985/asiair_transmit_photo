@@ -73,6 +73,7 @@ type settings struct {
 	BlinkSpeed      int                      `json:"blink_speed,omitempty"` // half frames per second
 	ShowMoon        bool                     `json:"show_moon,omitempty"`
 	ShowTilt        bool                     `json:"show_tilt,omitempty"`
+	HideTracks      bool                     `json:"hide_tracks,omitempty"` // the tracks of satellites are not drawn on the preview
 	ShowHist        bool                     `json:"show_hist,omitempty"`
 	HistMode        int                      `json:"hist_mode,omitempty"`
 	LinkedChannels  bool                     `json:"linked_channels,omitempty"` // the colour channels stretched together
@@ -182,6 +183,7 @@ type window struct {
 	previewPending             bool      // the selected frame is being read
 	moonBox                    *walk.CheckBox
 	tiltBox                    *walk.CheckBox
+	satBox                     *walk.CheckBox
 	histBox                    *walk.CheckBox
 	linkedBox                  *walk.CheckBox
 	histView                   *walk.CustomWidget
@@ -425,6 +427,8 @@ func main() {
 										ToolTipText: "Растяжка цветного кадра: всех каналов вместе (цвета как на матрице) или каждого отдельно (фон серый), как в приёмнике"},
 									CheckBox{AssignTo: &w.tiltBox, Text: "Тилт", Checked: s.ShowTilt, OnCheckedChanged: w.tiltToggled,
 										ToolTipText: "Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, не во время блинка"},
+									CheckBox{AssignTo: &w.satBox, Text: "Спутники", Checked: !s.HideTracks, OnCheckedChanged: w.satsToggled,
+										ToolTipText: "Треки спутников (самолётов, метеоров) на кадре и какой спутник их оставил — по каталогу орбит CelesTrak, как в приёмнике"},
 									HSpacer{},
 								},
 							},
@@ -455,6 +459,7 @@ func main() {
 	w.zoom.overlay = func(c *walk.Canvas, x0, y0, dw, dh float64) {
 		w.paintTilt(c, x0, y0, dw, dh)
 		w.paintProbe(c, x0, y0, dw, dh)
+		w.paintTracks(c, x0, y0, dw, dh)
 	}
 	w.zoom.onPoint = w.probeAt
 	w.speedChanged()
@@ -1185,7 +1190,7 @@ func (w *window) showPreview() {
 			w.hist = p.hist
 			w.histView.Invalidate()
 			setLong(w.previewInfo, p.info)
-			w.header.SetText(p.head)
+			w.header.SetText(w.withTracks(p.head))
 			if p.err == nil {
 				w.measureTilt(i)
 			}
