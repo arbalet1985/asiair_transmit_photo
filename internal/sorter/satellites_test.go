@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/satellites"
 )
 
 // the header of a frame of M 31 with its plate solution, as ASIAIR writes it
@@ -208,5 +211,69 @@ func TestSatReport(t *testing.T) {
 	r := SatReport{Frames: 3, Told: 2, Found: 1, CatalogErr: "нет сети"}
 	if s := r.Text(); !strings.Contains(s, "не скачан (нет сети) — спутники не опознаны") {
 		t.Fatal(s)
+	}
+}
+
+// fakeSource gives the catalogues of a folder, as a receiver does.
+type fakeSource struct {
+	store   satellites.Store
+	fetched []string
+}
+
+func (f *fakeSource) SatCatalogs(context.Context) ([]RemoteCatalog, error) {
+	var out []RemoteCatalog
+	for _, c := range f.store.Catalogs() {
+		out = append(out, RemoteCatalog{Name: filepath.Base(c.Path), Time: c.Time})
+	}
+	return out, nil
+}
+
+func (f *fakeSource) FetchSatCatalog(_ context.Context, name string, w io.Writer) error {
+	f.fetched = append(f.fetched, name)
+	b, err := os.ReadFile(filepath.Join(f.store.Dir, name))
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
+}
+
+// The catalogues the receiver gathered are copied: the one nearest the
+// frame, and its fresh newest one instead of a download from CelesTrak.
+func TestSatCatalogsFromReceiver(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "Light_M 31_30.0s_Bin1_533MC_uvir_gain101_20261009-205557_246deg_-10.0C_0021.fit")
+	writeSatFITS(t, p, m31Cards, nil)
+	start := time.Date(2026, 10, 9, 15, 55, 25, 0, time.UTC)
+	src := &fakeSource{store: satellites.Store{Dir: filepath.Join(dir, "receiver"), Keep: 60}}
+	near, _ := src.store.Save([]byte(tankTLE), start.Add(time.Hour))
+	src.store.Save([]byte(tankTLE), start.Add(-10*24*time.Hour))
+	fresh, _ := src.store.Save([]byte(tankTLE), time.Now().Add(-time.Hour))
+
+	cat := NewSatCatalog(filepath.Join(dir, "satellites"))
+	cat.Source = src
+	// one of our own, far from the frame: the frame was told with it
+	far, _ := cat.store.Save([]byte(tankTLE), start.Add(-20*24*time.Hour))
+	m := Measurement{Frame: &Frame{Kind: Light}, path: p, key: "k", start: start.UnixMilli(),
+		Tracks: []Track{{X0: 107.9, Y0: 2203.4, X1: 424.0, Y1: 1698.2}}, satCat: filepath.Base(far), satCatT: start.Add(-20 * 24 * time.Hour).UnixMilli()}
+	cache := LoadQualityCache("")
+	var got []Measurement
+	rep := IdentifySatellites(context.Background(), []Measurement{m}, cache, cat, nil, func(m Measurement) { got = append(got, m) })
+	if rep.Copied != 2 || rep.Downloaded != 0 || rep.CatalogErr != "" || rep.Told != 1 {
+		t.Fatalf("%+v, fetched %v", rep, src.fetched)
+	}
+	if len(got) != 1 || got[0].satCat != filepath.Base(near) || got[0].Tracks[0].Sat == nil {
+		t.Fatalf("%+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(cat.store.Dir, filepath.Base(fresh))); err != nil {
+		t.Fatal("the fresh catalogue of the receiver was not copied")
+	}
+	if !strings.Contains(rep.Text(), "каталогов орбит взято с приёмника: 2") {
+		t.Fatal(rep.Text())
+	}
+	// nothing more to copy
+	src.fetched = nil
+	if rep = IdentifySatellites(context.Background(), got, cache, cat, nil, func(Measurement) {}); rep.Copied != 0 || rep.Told != 0 || len(src.fetched) != 0 {
+		t.Fatalf("%+v %v", rep, src.fetched)
 	}
 }
