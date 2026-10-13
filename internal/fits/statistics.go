@@ -23,6 +23,10 @@ type ChannelStats struct {
 	Max    float64 `json:"max"`
 	// NoMedian: floating point data; Median, AvgDev and MAD are not known.
 	NoMedian bool `json:"no_median,omitempty"`
+	// Saturated: samples at or above the level Saturation, counted as
+	// saturated as in the measurement of an area (0: the level is unknown)
+	Saturation float64 `json:"saturation,omitempty"`
+	Saturated  int64   `json:"saturated,omitempty"`
 }
 
 func channelNames(channels int) []string {
@@ -33,9 +37,10 @@ func channelNames(channels int) []string {
 }
 
 // histStats: the statistics from a histogram of 16-bit samples u, whose
-// value is bzero + bscale*(u-32768).
-func histStats(name string, hist []uint32, bscale, bzero float64) ChannelStats {
-	st := ChannelStats{Name: name}
+// value is bzero + bscale*(u-32768); sat: the level counted as saturated
+// (0: unknown).
+func histStats(name string, hist []uint32, bscale, bzero, sat float64) ChannelStats {
+	st := ChannelStats{Name: name, Saturation: sat}
 	var n int64
 	var sum float64
 	lo, hi := -1, -1
@@ -82,6 +87,11 @@ func histStats(name string, hist []uint32, bscale, bzero float64) ChannelStats {
 		st.StdDev = scale * math.Sqrt(ss/float64(n-1))
 	}
 	st.Min, st.Max = val(float64(lo)), val(float64(hi))
+	if sat > 0 && bscale > 0 {
+		for u := hi; u >= lo && val(float64(u)) >= sat; u-- {
+			st.Saturated += int64(hist[u])
+		}
+	}
 	if bscale < 0 {
 		st.Min, st.Max = st.Max, st.Min
 	}
@@ -99,14 +109,20 @@ func histMedian(hist []uint32, n int64) int {
 	return len(hist) - 1
 }
 
-// momentAcc: count, mean, deviation and range of other data (one channel).
+// momentAcc: count, mean, deviation and range of other data (one channel),
+// and the samples at or above sat (0: unknown).
 type momentAcc struct {
 	n        int64
 	mean, m2 float64 // Welford
 	min, max float64
+	sat      float64
+	nsat     int64
 }
 
 func (a *momentAcc) add(v float64) {
+	if a.sat > 0 && v >= a.sat {
+		a.nsat++
+	}
 	if a.n == 0 {
 		a.min, a.max = v, v
 	}
@@ -119,7 +135,8 @@ func (a *momentAcc) add(v float64) {
 }
 
 func (a *momentAcc) stats(name string) ChannelStats {
-	st := ChannelStats{Name: name, Count: a.n, Mean: a.mean, Min: a.min, Max: a.max, NoMedian: true}
+	st := ChannelStats{Name: name, Count: a.n, Mean: a.mean, Min: a.min, Max: a.max, NoMedian: true,
+		Saturation: a.sat, Saturated: a.nsat}
 	if a.n > 1 {
 		st.StdDev = math.Sqrt(a.m2 / float64(a.n-1))
 	}
@@ -157,6 +174,12 @@ func StatsTable(st []ChannelStats) string {
 		{"minimum", func(c ChannelStats) string { return num(c.Min) }},
 		{"maximum", func(c ChannelStats) string { return num(c.Max) }},
 	}
+	if st[0].Saturation > 0 {
+		rows = append(rows, struct {
+			name string
+			get  func(ChannelStats) string
+		}{"saturated", func(c ChannelStats) string { return SaturatedText(c) }})
+	}
 	var b strings.Builder
 	for _, r := range rows {
 		fmt.Fprintf(&b, "%-8s", r.name)
@@ -165,7 +188,25 @@ func StatsTable(st []ChannelStats) string {
 		}
 		b.WriteString("\r\n")
 	}
+	if st[0].Saturation > 0 {
+		fmt.Fprintf(&b, "saturated — пикселей не ниже уровня насыщения %s (доля от count)\r\n", num(st[0].Saturation))
+	}
 	return b.String()
+}
+
+// SaturatedText: the samples counted as saturated and their share.
+func SaturatedText(c ChannelStats) string {
+	if c.Saturated == 0 || c.Count == 0 {
+		return "0"
+	}
+	p := 100 * float64(c.Saturated) / float64(c.Count)
+	switch {
+	case p >= 1:
+		return fmt.Sprintf("%d (%.1f%%)", c.Saturated, p)
+	case p >= 0.01:
+		return fmt.Sprintf("%d (%.2f%%)", c.Saturated, p)
+	}
+	return fmt.Sprintf("%d (<0.01%%)", c.Saturated)
 }
 
 func medianOr(c ChannelStats, v float64, num func(float64) string) string {
