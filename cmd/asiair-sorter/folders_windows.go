@@ -214,7 +214,7 @@ func (w *window) folderDialog(in string, dirs []sorter.Folder) {
 		w.setChosenFolders(in, on)
 		dlg.Accept()
 	}
-	_, err := Dialog{
+	err := Dialog{
 		AssignTo:      &dlg,
 		Title:         "Какие папки синхронизировать",
 		DefaultButton: &ok,
@@ -242,12 +242,13 @@ func (w *window) folderDialog(in string, dirs []sorter.Folder) {
 				},
 			},
 		},
-	}.Run(w.mw)
+	}.Create(w.mw)
 	if err != nil {
 		w.warn(err.Error())
 		return
 	}
-	if dlg.Result() == walk.DlgCmdOK {
+	copyMenu(tv, nil)
+	if dlg.Run() == walk.DlgCmdOK {
 		w.showFolders()
 		w.foldersChanged()
 		w.setStatus("Выбор папок сохранён — нажмите «Просмотреть кадры».")
