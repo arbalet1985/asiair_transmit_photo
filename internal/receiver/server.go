@@ -510,6 +510,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/remote", s.handleUIRemote)
 	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
+	mux.HandleFunc("/ui/api/delete_local", s.handleUIDeleteLocal)
 	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
@@ -743,6 +744,52 @@ func (s *Server) handleUIDelete(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Приёмник: поставлено в очередь на удаление: %d папк(и) целиком", nd)
 	}
 	writeJSON(w, map[string]int{"queued": n + nd})
+}
+
+// handleUIDeleteLocal deletes the copies here of files no longer on the
+// ASIAIR (those still there are deleted with a command, so that the agent
+// does not send them again).
+func (s *Server) handleUIDeleteLocal(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	snap := s.state.Snapshot()
+	onAsiair := make(map[string]bool, len(snap.Inventory))
+	for _, f := range snap.Inventory {
+		onAsiair[f.Path] = true
+	}
+	store := s.getStore()
+	n := 0
+	errs := []string{}
+	for _, p := range req.Paths {
+		cp, err := CleanPath(p)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if onAsiair[cp] {
+			errs = append(errs, cp+": есть на ASIAIR — удаляется командой")
+			continue
+		}
+		if err := store.Remove(cp); err != nil {
+			errs = append(errs, cp+": "+err.Error())
+			continue
+		}
+		n++
+		if len(req.Paths) <= 20 {
+			log.Printf("Приёмник: удалена копия на этом компьютере (на ASIAIR файла нет): %s", cp)
+		}
+	}
+	if len(req.Paths) > 20 {
+		log.Printf("Приёмник: удалено копий на этом компьютере (на ASIAIR файлов нет): %d", n)
+	}
+	for _, e := range errs {
+		log.Printf("Приёмник: копия не удалена: %s", e)
+	}
+	writeJSON(w, map[string]any{"deleted": n, "errors": errs})
 }
 
 func (s *Server) handleUIRate(w http.ResponseWriter, r *http.Request) {

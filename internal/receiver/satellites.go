@@ -55,7 +55,7 @@ type satEntry struct {
 
 // trackVersion: the version of the track search; frames searched by an
 // older one are searched again.
-const trackVersion = 2
+const trackVersion = 3
 
 // tracksOf converts the tracks found; w (may be nil) places them in the sky.
 func tracksOf(st []satellites.Streak, w *fits.WCS) []trackEntry {
@@ -265,7 +265,7 @@ func (s *Server) identifyPending(ctx context.Context) int {
 	var jobs []job
 	s.quality.mu.Lock()
 	for p, e := range s.quality.m {
-		if len(e.Tracks) == 0 || e.TV < trackVersion || e.Start == 0 {
+		if len(e.Tracks) == 0 || e.Start == 0 {
 			continue
 		}
 		start := time.UnixMilli(e.Start)

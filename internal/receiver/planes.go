@@ -163,7 +163,7 @@ func (s *Server) tellPlanes(ctx context.Context) int {
 	var jobs []job
 	s.quality.mu.Lock()
 	for k, e := range s.quality.m {
-		if e.PlanesDone || e.Start == 0 || e.TV < trackVersion || e.SatCat == "" {
+		if e.PlanesDone || e.Start == 0 || e.SatCat == "" {
 			continue
 		}
 		if len(untold(e)) > 0 {

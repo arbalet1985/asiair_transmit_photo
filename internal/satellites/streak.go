@@ -341,6 +341,10 @@ func collinear(a, b line) bool {
 const (
 	joinOffset = 3   // binned pixels: the ends of the pieces of a track lie this close to its line
 	joinGap    = 100 // binned pixels: the longest gap between them
+	// between long pieces the gap may be as long as the shorter piece (a
+	// satellite fading, crossing another track): both lying within
+	// joinOffset of one line over the whole length is proof enough
+	joinGapMax = 250
 )
 
 // joinPieces joins the pieces of one track found apart: a faint track breaks
@@ -393,7 +397,7 @@ func joined(a, b line) (line, bool) {
 	}
 	a0, a1 := math.Min(along(p[0]), along(p[1])), math.Max(along(p[0]), along(p[1]))
 	b0, b1 := math.Min(along(p[2]), along(p[3])), math.Max(along(p[2]), along(p[3]))
-	if math.Max(b0-a1, a0-b1) > joinGap {
+	if math.Max(b0-a1, a0-b1) > math.Max(joinGap, math.Min(joinGapMax, math.Min(a1-a0, b1-b0))) {
 		return line{}, false
 	}
 	// the line again over the pixels of both: the ends of a short piece are

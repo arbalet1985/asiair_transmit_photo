@@ -78,6 +78,7 @@ type frameModel struct {
 	walk.SorterBase
 	all, rows []row
 	kind      string                // shown kind, "" = all, "?" = unknown
+	tracks    string                // by the tracks (trackFilters), "" = all
 	only      map[*sorter.Item]bool // the frames of a line of the summary, nil = all
 	words     []string              // the filter: every word is somewhere in the row
 	object    string                // the object chosen (normObject), "" = all
@@ -355,6 +356,9 @@ func (m *frameModel) filter() {
 			continue
 		}
 		if len(m.words) > 0 && !m.matches(r) {
+			continue
+		}
+		if m.tracks != "" && !tracksMatch(r.f, m.tracks) {
 			continue
 		}
 		m.rows = append(m.rows, r)

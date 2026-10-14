@@ -277,3 +277,17 @@ func TestSatCatalogsFromReceiver(t *testing.T) {
 		t.Fatalf("%+v %v", rep, src.fetched)
 	}
 }
+
+func TestPlaneFromReceiver(t *testing.T) {
+	var tr Track
+	if err := json.Unmarshal([]byte(`{"x0":1,"y0":2,"x1":3,"y1":4,"plane":{"icao":"4ca7b3","call":"AFL1234","km":12.5,"alt":40.2,"altm":10500,"cross":0.1}}`), &tr); err != nil {
+		t.Fatal(err)
+	}
+	f := &Frame{Tracks: []Track{tr, {}}, SatTold: true}
+	if got := f.TracksText(); got != "✈ AFL1234, ?" {
+		t.Fatalf("%q", got)
+	}
+	if !strings.Contains(f.TrackText(tr), "самолёт AFL1234 (ICAO 4ca7b3): высота 10500 м") {
+		t.Fatal(f.TrackText(tr))
+	}
+}

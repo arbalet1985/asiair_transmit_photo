@@ -87,6 +87,10 @@ type settings struct {
 	Planner      plannerSettings          `json:"planner"`
 	// Folders: for each input (receiverKey) the folders synchronised; none = all
 	Folders map[string][]string `json:"folders,omitempty"`
+	// the login of space-track.org: the orbits of the past; the password
+	// encrypted by Windows for this computer (config.Seal)
+	SpaceTrackUser string `json:"spacetrack_user,omitempty"`
+	SpaceTrackPass string `json:"spacetrack_pass,omitempty"`
 }
 
 func configDir() string {
@@ -141,6 +145,7 @@ type window struct {
 	foldersInfo                *walk.Label
 	loginRow                   *walk.Composite
 	modeBox, kindBox           *walk.ComboBox
+	trackBox                   *walk.ComboBox
 	objBox                     *walk.ComboBox // the object: a list with a quick search
 	objList                    []string       // the objects of the frames shown in objBox
 	objBusy                    bool           // objBox is being refilled: ignore its events
@@ -206,6 +211,12 @@ type window struct {
 	saved settings
 }
 
+// trackFilters: the frames shown by their tracks (frameModel.tracks).
+var trackFilters = []struct{ label, mode string }{
+	{"Со спутниками и без", ""}, {"Со спутниками", "with"}, {"Без спутников", "without"},
+	{"С самолётами", "planes"}, {"С неопознанными треками", "unknown"},
+}
+
 var kindFilters = []struct{ label, kind string }{
 	{"Все кадры", ""}, {"Light", sorter.Light}, {"Flat", sorter.Flat}, {"Dark", sorter.Dark},
 	{"Bias", sorter.Bias}, {"Dark Flat", sorter.DarkFlat}, {"Тип не распознан", "?"},
@@ -216,9 +227,12 @@ func main() {
 	s := loadSettings()
 	w.saved = s
 	w.pl = newPlanner(w, s.Planner)
-	var kinds []string
+	var kinds, trackModes []string
 	for _, k := range kindFilters {
 		kinds = append(kinds, k.label)
+	}
+	for _, t := range trackFilters {
+		trackModes = append(trackModes, t.label)
 	}
 	var cols []TableViewColumn
 	for _, c := range columns {
@@ -339,6 +353,12 @@ func main() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
 						w.filterChanged()
 					}},
+					ComboBox{AssignTo: &w.trackBox, Model: trackModes, CurrentIndex: 0,
+						ToolTipText: "Light-кадры по трекам: со спутниками (самолётами, метеорами), без них (только уже проверенные кадры), с самолётами или с треками, которые не удалось опознать",
+						OnCurrentIndexChanged: func() {
+							w.model.tracks = trackFilters[w.trackBox.CurrentIndex()].mode
+							w.filterChanged()
+						}},
 					Label{Text: "Объект:"},
 					ComboBox{AssignTo: &w.objBox, Editable: true, Model: []string{allObjects}, CurrentIndex: 0,
 						MinSize: Size{Width: 130}, MaxSize: Size{Width: 200},
@@ -437,6 +457,8 @@ func main() {
 										ToolTipText: "Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, не во время блинка"},
 									CheckBox{AssignTo: &w.satBox, Text: "Спутники", Checked: !s.HideTracks, OnCheckedChanged: w.satsToggled,
 										ToolTipText: "Треки спутников (самолётов, метеоров) на кадре и какой спутник их оставил — по каталогу орбит CelesTrak, как в приёмнике"},
+									PushButton{Text: "Space-Track…", OnClicked: w.spaceTrackDialog,
+										ToolTipText: "Вход на space-track.org: архив орбит для старых кадров, снятых, когда свежего каталога CelesTrak не было"},
 									HSpacer{},
 								},
 							},
