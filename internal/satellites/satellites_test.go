@@ -261,6 +261,74 @@ func TestFindStreaks(t *testing.T) {
 	}
 }
 
+// blob adds an elliptical gaussian (a galaxy), long along ang (radians).
+func blob(img *fits.Image, cx, cy, amp, sLong, sShort, ang float64) {
+	c, s := math.Cos(ang), math.Sin(ang)
+	r := int(4 * sLong)
+	for y := int(cy) - r; y <= int(cy)+r; y++ {
+		for x := int(cx) - r; x <= int(cx)+r; x++ {
+			if x < 0 || y < 0 || x >= img.Width || y >= img.Height {
+				continue
+			}
+			dx, dy := float64(x)-cx, float64(y)-cy
+			u, v := dx*c+dy*s, -dx*s+dy*c
+			img.Data[y*img.Width+x] += float32(amp * math.Exp(-(sq(u/sLong)+sq(v/sShort))/2))
+		}
+	}
+}
+
+// A slanted track from edge to edge through a galaxy: one group of pixels
+// with it, too wide as a whole; a long galaxy alone is no track.
+func TestStreakThroughGalaxy(t *testing.T) {
+	img := synthImage(false)
+	if st := func() []Streak { blob(img, 700, 400, 0.05, 120, 25, 0.5); return FindStreaks(img) }(); len(st) != 0 {
+		t.Fatalf("tracks on a galaxy: %+v", st)
+	}
+	// from the bottom edge (600,999) to the right one (1499,300)
+	for t := 0.0; t <= 1; t += 0.0005 {
+		blob(img, 600+899*t, 999-699*t, 0.01, 1.2, 1.2, 0)
+	}
+	blob(img, 600+899*0.45, 999-699*0.45, 0.05, 12, 12, 0)
+	st := FindStreaks(img)
+	if len(st) != 1 {
+		t.Fatalf("%d tracks: %+v", len(st), st)
+	}
+	s := st[0]
+	a, b := [2]float64{s.X0, s.Y0}, [2]float64{s.X1, s.Y1}
+	if a[0] > b[0] {
+		a, b = b, a
+	}
+	// in pixels of the frame (binned by 2)
+	if math.Hypot(a[0]-1200, a[1]-1998) > 40 || math.Hypot(b[0]-2998, b[1]-600) > 40 || !s.Edge0 || !s.Edge1 {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// A faint track hidden by the noise over a long stretch is one track, its
+// ends where it really ends.
+func TestBrokenStreak(t *testing.T) {
+	img := synthImage(false)
+	// from (100,550) to (1100,580), nothing from 40% to 55% of it
+	for t := 0.0; t <= 1; t += 0.0005 {
+		if t < 0.4 || t > 0.55 {
+			blob(img, 100+1000*t, 550+30*t, 0.0012, 1.2, 1.2, 0)
+		}
+	}
+	st := FindStreaks(img)
+	if len(st) != 1 {
+		t.Fatalf("%d tracks: %+v", len(st), st)
+	}
+	s := st[0]
+	a, b := [2]float64{s.X0, s.Y0}, [2]float64{s.X1, s.Y1}
+	if a[0] > b[0] {
+		a, b = b, a
+	}
+	// in pixels of the frame (binned by 2)
+	if math.Hypot(a[0]-200, a[1]-1100) > 40 || math.Hypot(b[0]-2200, b[1]-1160) > 40 {
+		t.Fatalf("%+v", s)
+	}
+}
+
 func TestMerge(t *testing.T) {
 	c := sgp4Cases[0]
 	older := strings.Replace(c.l1, "26285.19178549", "26280.19178549", 1)

@@ -55,7 +55,7 @@ type satEntry struct {
 
 // trackVersion: the version of the track search; frames searched by an
 // older one are searched again.
-const trackVersion = 1
+const trackVersion = 2
 
 // tracksOf converts the tracks found; w (may be nil) places them in the sky.
 func tracksOf(st []satellites.Streak, w *fits.WCS) []trackEntry {
