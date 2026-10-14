@@ -801,6 +801,12 @@
         <option value="good">Хорошие кадры</option>
         <option value="unmeasured">Ещё не оценены</option>
       </select>
+      <select id="fSats" title="Прямые треки на Light-кадрах: спутники, самолёты, метеоры (ищутся заодно с оценкой по звёздам)">
+        <option value="">Со спутниками и без</option>
+        <option value="with">Кадры со спутниками</option>
+        <option value="without">Кадры без спутников</option>
+        <option value="unknown">С неопознанными треками</option>
+      </select>
       <select id="fType" title="Тип файлов"><option value="">Все типы</option></select>
       <select id="fPhase" title="Освещённость Луны в момент съёмки">
         <option value="">Любая фаза Луны</option>
@@ -1099,7 +1105,7 @@ function shareLabel(sh) {
 // day boundaries in local time; "по" includes the whole day
 const dayStart = d => d ? new Date(d + "T00:00:00").getTime() : null;
 const dayEnd = d => d ? new Date(d + "T00:00:00").getTime() + 86400000 : null;
-const filterIds = ["filter", "show", "fShare", "fNight", "fObject", "fKind", "fType", "fQuality", "fPhase", "fMoonAlt", "fFrom", "fTo"];
+const filterIds = ["filter", "show", "fShare", "fNight", "fObject", "fKind", "fType", "fQuality", "fSats", "fPhase", "fMoonAlt", "fFrom", "fTo"];
 function saveFilters() {
   const v = {};
   for (const id of filterIds) v[id] = $(id).value;
@@ -1116,7 +1122,7 @@ function loadFilters() {
   $("showFiltered").checked = !!v.showFiltered;
 }
 function filtersActive() {
-  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fNight").value || $("fObject").value || $("fKind").value || $("fType").value || $("fQuality").value || $("fPhase").value || $("fMoonAlt").value || $("fFrom").value || $("fTo").value);
+  return !!($("filter").value.trim() || $("show").value !== "all" || $("fShare").value || $("fNight").value || $("fObject").value || $("fKind").value || $("fType").value || $("fQuality").value || $("fSats").value || $("fPhase").value || $("fMoonAlt").value || $("fFrom").value || $("fTo").value);
 }
 // fill the storage and type lists from the files, with counts
 function renderFilterOptions() {
@@ -1168,6 +1174,7 @@ function renderFiltersSummary(shown) {
   if ($("fObject").value) parts.push($("fObject").value);
   if ($("fKind").value) parts.push($("fKind").selectedOptions[0].textContent.split(" — ")[0]);
   if ($("fQuality").value) parts.push($("fQuality").selectedOptions[0].textContent);
+  if ($("fSats").value) parts.push($("fSats").selectedOptions[0].textContent);
   if ($("fType").value) parts.push($("fType").selectedOptions[0].textContent.split(" — ")[0]);
   if ($("fPhase").value) parts.push($("fPhase").selectedOptions[0].textContent);
   if ($("fMoonAlt").value) parts.push($("fMoonAlt").selectedOptions[0].textContent);
@@ -1186,7 +1193,7 @@ function visibleFiles() {
   const mode = $("show").value, showFiltered = $("showFiltered").checked;
   const share = $("fShare").value, type = $("fType").value, kind = $("fKind").value;
   const phase = $("fPhase").value.split("-").map(Number), moonAlt = siteSet() ? $("fMoonAlt").value : "";
-  const night = $("fNight").value, obj = $("fObject").value, qual = $("fQuality").value;
+  const night = $("fNight").value, obj = $("fObject").value, qual = $("fQuality").value, sats = $("fSats").value;
   const from = dayStart($("fFrom").value), to = dayEnd($("fTo").value);
   return state.files.filter(f => {
     if (q && !f.path.toLowerCase().includes(q)) return false;
@@ -1201,6 +1208,12 @@ function visibleFiles() {
     if (qual) {
       if (qual === "unmeasured") { if (f.q || !f.local || frameKind(f.name) !== "light" || !isFits(f.name)) return false; }
       else { const j = judge(f); if (!j || (qual === "bad") !== j.bad) return false; }
+    }
+    if (sats) {
+      // tracks are searched together with the stars: an unmeasured frame is not known to be clean
+      const n = f.tracks ? f.tracks.length : 0;
+      if (sats === "with" && !n || sats === "without" && (n || !f.q)) return false;
+      if (sats === "unknown" && !(f.sat_told && f.tracks && f.tracks.some(t => !t.sat))) return false;
     }
     if (phase.length === 2 || moonAlt) {
       const m = moonOf(f);
@@ -1814,7 +1827,7 @@ function filtersChanged() { saveFilters(); if (state) { renderFilterOptions(); r
 for (const id of filterIds) $(id).addEventListener(id === "filter" ? "input" : "change", filtersChanged);
 $("showFiltered").onchange = filtersChanged;
 $("fReset").onclick = () => {
-  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fNight").value = ""; $("fObject").value = ""; $("fQuality").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fPhase").value = ""; $("fMoonAlt").value = ""; $("fFrom").value = ""; $("fTo").value = "";
+  $("filter").value = ""; $("show").value = "all"; $("fShare").value = ""; $("fNight").value = ""; $("fObject").value = ""; $("fQuality").value = ""; $("fSats").value = ""; $("fKind").value = ""; $("fType").value = ""; $("fPhase").value = ""; $("fMoonAlt").value = ""; $("fFrom").value = ""; $("fTo").value = "";
   filtersChanged();
 };
 // the last night: from noon of the day before until noon (by the newest frame)
