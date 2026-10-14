@@ -72,6 +72,7 @@ type Server struct {
 	speed      speedLog       // the agent speed of the last hours, for the chart
 	quality    *quality       // stars and HFR of the received Light frames
 	sats       *satState      // orbits of the satellites, for the tracks on the frames
+	planes     *planeState    // the planes near the observatory (OpenSky)
 	weather    *weather.Cache // the forecast of the clouds for the planner
 	thumbs     *thumbCache    // gallery thumbnails
 	thumbSem   chan struct{}  // thumbnails made at once
@@ -129,6 +130,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
 	s.quality = newQuality(filepath.Join(cfg.DataDir, "quality.json"))
 	s.sats = newSatState(filepath.Join(cfg.DataDir, "satellites"), cfg.SpaceTrackUser, cfg.SpaceTrackPassword)
+	s.planes = newPlaneState(filepath.Join(cfg.DataDir, "planes"), cfg.OpenSkyID, cfg.OpenSkySecret)
 	s.weather = &weather.Cache{File: filepath.Join(cfg.DataDir, "weather.json"), UserAgent: "asiair-receiver/" + protocol.Version}
 	s.thumbs, s.thumbSem = newThumbCache(), make(chan struct{}, 2)
 	if !cfg.DisableTLS {
@@ -193,6 +195,7 @@ func (s *Server) Run(ctx context.Context) error {
 		s.satelliteWorker(qctx)
 	}()
 	defer func() { qstop(); <-sdone }()
+	go s.planeWorker(qctx)
 	defer s.speed.save() // the chart history survives a restart
 	if s.cfg.TailscaleOn {
 		if err := s.startTailscale(); err != nil {
@@ -520,6 +523,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/order", s.handleUIOrder)
 	mux.HandleFunc("/ui/api/site", s.handleUISite)
 	mux.HandleFunc("/ui/api/spacetrack", s.handleUISpaceTrack)
+	mux.HandleFunc("/ui/api/opensky", s.handleUIOpenSky)
 	mux.HandleFunc("/ui/api/planner", s.handleUIPlanner)
 	mux.HandleFunc("/ui/api/plan", s.handleUIPlan)
 	mux.HandleFunc("/ui/api/weather", s.handleUIWeather)
@@ -626,6 +630,7 @@ type uiState struct {
 	Network       netInfo                         `json:"network"`
 	RemoteAccess  remoteInfo                      `json:"remote_access"`
 	Satellites    satInfo                         `json:"satellites"`
+	Planes        planeInfo                       `json:"planes"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -687,6 +692,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Network:       s.netInfo(),
 		RemoteAccess:  s.remoteInfo(r),
 		Satellites:    s.satInfo(),
+		Planes:        s.planeInfo(),
 	}
 	writeJSON(w, out)
 }

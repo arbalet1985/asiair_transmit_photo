@@ -101,7 +101,7 @@ func UpdateAgentFile(path string, values map[string]string) error {
 
 // UpdateReceiverFile is UpdateAgentFile for receiver.yaml.
 func UpdateReceiverFile(path string, values map[string]string) error {
-	return updateFile(path, nil, values, func(p string) error {
+	return updateFile(path, nil, sealValues(values), func(p string) error {
 		_, err := LoadReceiver(p)
 		return err
 	})
@@ -110,7 +110,7 @@ func UpdateReceiverFile(path string, values map[string]string) error {
 // CreateReceiverFile writes a new receiver.yaml from the example text with
 // the given values filled in.
 func CreateReceiverFile(path string, example []byte, values map[string]string) error {
-	return updateFile(path, example, values, func(p string) error {
+	return updateFile(path, example, sealValues(values), func(p string) error {
 		_, err := LoadReceiver(p)
 		return err
 	})

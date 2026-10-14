@@ -194,6 +194,9 @@ func (s *Server) satelliteWorker(ctx context.Context) {
 		if n := s.identifyPending(ctx); n > 0 {
 			s.quality.save()
 		}
+		if n := s.tellPlanes(ctx); n > 0 {
+			s.quality.save()
+		}
 		st.mu.Lock()
 		st.orbits, st.loaded = nil, "" // the memory back while idle
 		st.mu.Unlock()
@@ -308,6 +311,7 @@ func (s *Server) identifyPending(ctx context.Context) int {
 		}
 		e := j.e
 		e.Sats, e.SatErr = nil, ""
+		e.Planes, e.PlanesDone = nil, false // told again for the tracks left
 		ms, err := identifyFrame(store.Local(j.path), j.path, e.Tracks, orbits, site)
 		if err != nil {
 			e.SatErr = err.Error()
@@ -417,7 +421,8 @@ func (s *Server) satInfo() satInfo {
 // uiTrack: a track of a frame and what left it, for the page.
 type uiTrack struct {
 	trackEntry
-	Sat *satEntry `json:"sat,omitempty"`
+	Sat   *satEntry   `json:"sat,omitempty"`
+	Plane *planeEntry `json:"plane,omitempty"`
 }
 
 // uiTracks: the tracks of a measured frame for the page; told: the
@@ -431,6 +436,11 @@ func uiTracks(e qualityEntry) (tr []uiTrack, told bool, age float64, err string)
 		for j := range e.Sats {
 			if e.Sats[j].T == i {
 				u.Sat = &e.Sats[j]
+			}
+		}
+		for j := range e.Planes {
+			if e.Planes[j].T == i && u.Sat == nil {
+				u.Plane = &e.Planes[j]
 			}
 		}
 		tr = append(tr, u)
