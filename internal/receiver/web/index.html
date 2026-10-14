@@ -636,6 +636,28 @@
       <div class="line muted" id="siteNow"></div>
       <div class="hint">Нужны, чтобы показать, на какой высоте была Луна во время съёмки (фаза Луны считается и без них). Долгота к востоку от Гринвича — положительная. ASIAIR обычно записывает координаты в FITS-файлы: тогда приёмник возьмёт их сам.</div>
     </section>
+    <section class="panel" id="orbitsPanel">
+      <h2>Спутники и самолёты</h2>
+      <div class="line" id="orbNow">—</div>
+      <div class="line err" id="orbErr"></div>
+      <div class="label" style="margin-top:8px">Архив орбит Space-Track — для старых кадров</div>
+      <div class="field">
+        <input type="text" id="stUser" placeholder="логин (e-mail)" style="flex:1 1 140px;min-width:0" autocomplete="off">
+        <input type="password" id="stPass" placeholder="пароль" style="flex:1 1 120px;min-width:0" autocomplete="new-password">
+        <button class="primary" id="stSave">Сохранить</button>
+      </div>
+      <div class="hint">CelesTrak, откуда приёмник каждый день скачивает каталог, даёт только текущие орбиты, поэтому треки на кадрах, снятых до первого скачанного каталога (или пока приёмник был выключен), опознаются по далёким орбитам и хуже. На <a href="https://www.space-track.org/auth/createAccount" target="_blank" rel="noopener">space-track.org</a> (бесплатная регистрация) есть архив орбит за любую дату: приёмник скачивает орбиты каждой такой ночи один раз, хранит их без срока и заново опознаёт треки её кадров. API-ключей Space-Track не выдаёт, нужны логин и пароль — лучше отдельный пароль, нигде больше не используемый; он хранится в receiver.yaml и на страницу не возвращается. Чтобы удалить вход, сохраните пустой логин.</div>
+      <div class="label" style="margin-top:12px">Самолёты — OpenSky Network</div>
+      <div class="line" id="osNow">—</div>
+      <div class="line err" id="osErr"></div>
+      <div class="field">
+        <input type="text" id="osId" placeholder="client id" style="flex:1 1 140px;min-width:0" autocomplete="off">
+        <input type="password" id="osSecret" placeholder="client secret" style="flex:1 1 120px;min-width:0" autocomplete="new-password">
+        <button class="primary" id="osSave">Сохранить</button>
+      </div>
+      <div class="hint">OpenSky хранит положения самолётов (ADS-B) только за последний час, поэтому приёмник сам записывает самолёты в квадрате ±1,5° вокруг обсерватории каждые 25 секунд, пока Солнце там ниже −6°, — около 2500 запросов за длинную зимнюю ночь из 4000 бесплатных в сутки. Нужны координаты обсерватории. Трек, для которого не нашёлся спутник, сравнивается с путями записанных самолётов: где и в какую сторону путь пересёк кадр. API-клиент создаётся на <a href="https://opensky-network.org/my-opensky/account" target="_blank" rel="noopener">opensky-network.org</a> → Account → API Client (client id и client secret). Записи хранятся 60 дней в receiver-data\planes. Самолёты без ADS-B-ответчика и кадры, снятые до начала записи, так не опознаются.</div>
+      <div class="hint">Пароли и секреты в receiver.yaml хранятся зашифрованными средствами Windows для этого компьютера.</div>
+    </section>
     <section class="panel" id="startupPanel" hidden>
       <h2>Запуск на этом компьютере</h2>
       <div class="label">Сейчас приёмник работает</div>
@@ -805,6 +827,7 @@
         <option value="">Со спутниками и без</option>
         <option value="with">Кадры со спутниками</option>
         <option value="without">Кадры без спутников</option>
+        <option value="planes">Кадры с самолётами</option>
         <option value="unknown">С неопознанными треками</option>
       </select>
       <select id="fType" title="Тип файлов"><option value="">Все типы</option></select>
@@ -976,7 +999,7 @@
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
       <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
       <div id="vTiltBox" class="hint" hidden></div>
-      <label title="Прямые треки на кадре (спутники, самолёты, метеоры) и какой спутник их оставил: по орбитам из каталога CelesTrak, времени кадра и его астрометрическому решению"><input type="checkbox" id="vSats"> Треки спутников</label>
+      <label title="Прямые треки на кадре (спутники, самолёты, метеоры) и какой спутник их оставил: по орбитам из каталога CelesTrak (для старых кадров — из архива Space-Track), времени кадра и его астрометрическому решению"><input type="checkbox" id="vSats"> Треки спутников</label>
       <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), правая кнопка мыши, долгое нажатие или ⌖ — замер звезды (пересвечена ли), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
@@ -1213,7 +1236,8 @@ function visibleFiles() {
       // tracks are searched together with the stars: an unmeasured frame is not known to be clean
       const n = f.tracks ? f.tracks.length : 0;
       if (sats === "with" && !n || sats === "without" && (n || !f.q)) return false;
-      if (sats === "unknown" && !(f.sat_told && f.tracks && f.tracks.some(t => !t.sat))) return false;
+      if (sats === "unknown" && !(f.sat_told && f.tracks && f.tracks.some(t => !t.sat && !t.plane))) return false;
+      if (sats === "planes" && !(f.tracks && f.tracks.some(t => t.plane))) return false;
     }
     if (phase.length === 2 || moonAlt) {
       const m = moonOf(f);
@@ -1681,6 +1705,7 @@ function renderStatus() {
   renderSchedule();
   renderCleanup();
   renderSite();
+  renderOrbits();
   renderSummary();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
@@ -2249,7 +2274,7 @@ function qualityTag(f) {
 // the tracks of satellites (planes, meteors) on a frame
 function tracksBadge(f) {
   if (!f.tracks || !f.tracks.length) return null;
-  const names = f.tracks.map(t => t.sat ? t.sat.name : "?");
+  const names = f.tracks.map(t => t.sat ? t.sat.name : t.plane ? "✈ " + (t.plane.call || t.plane.icao) : "?");
   return el("span", { className: "badge qsat", textContent: "🛰 " + (f.sat_told ? names.join(", ") : f.tracks.length),
     title: f.tracks.map((t, i) => `Трек ${i + 1}: ` + trackText(f, t)).join("\n") });
 }
@@ -2264,8 +2289,11 @@ function trackText(f, t) {
       (f.sat_age > 2 ? `; орбиты взяты в ${f.sat_age} дн. от кадра — точность ниже` : "") +
       (s.others ? `; почти так же подходят ещё ${s.others}` : "");
   }
+  const p = t.plane;
+  if (p) return `самолёт ${p.call || "без позывного"} (ICAO ${p.icao}): высота ${Math.round(p.altm).toLocaleString("ru-RU")} м, ${p.km} км от обсерватории, ${p.alt}° над горизонтом; путь по записи OpenSky прошёл в ${(p.cross * 60).toFixed(1)}′ от трека` +
+    (p.others ? `; почти так же подходят ещё ${p.others}` : "");
   if (f.sat_err) return "не опознан: " + f.sat_err;
-  if (f.sat_told) return "не опознан: самолёт, метеор или объекта нет в открытом каталоге";
+  if (f.sat_told) return "не опознан: самолёт без записи OpenSky, метеор или объекта нет в открытом каталоге";
   const c = state.satellites || {};
   return "опознание — после загрузки каталога орбит" + (c.error ? ` (не скачан: ${c.error})` : "");
 }
@@ -2569,6 +2597,51 @@ $("siteApply").onclick = async () => {
 $("siteDetect").onclick = async () => {
   try { await post("/ui/api/site", { detect: true }); siteEdited = false; toast("Координаты взяты из снимков"); summaryKey = ""; }
   catch (e) { alert(e.message); }
+  refresh();
+};
+// ---------- orbits of the satellites ----------
+let stEdited = false;
+$("stUser").addEventListener("input", () => { stEdited = true; });
+function renderOrbits() {
+  const c = state.satellites || {};
+  const d = t => new Date(t).toLocaleDateString("ru-RU");
+  $("orbNow").textContent = (c.catalogs ? `Каталогов CelesTrak: ${c.catalogs} (с ${d(c.oldest)} по ${d(c.newest)})` : "Каталог CelesTrak ещё не скачан") +
+    (c.history ? ` · ночей из архива Space-Track: ${c.history}` : "");
+  $("orbErr").textContent = [c.error && "CelesTrak: " + c.error, c.hist_err].filter(Boolean).join(" · ");
+  if (!stEdited) $("stUser").value = c.st_user || "";
+  markSecret("stPass", c.st_set, "пароль");
+  const p = state.planes || {};
+  const t = p.last ? new Date(p.last).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
+  $("osNow").textContent = !p.set ? "Не подключено" : p.idle ? `Запись не идёт: ${p.idle}` + (t ? ` (последний запрос в ${t})` : "") :
+    `Идёт запись` + (t ? `: последний запрос в ${t}, самолётов рядом ${p.last_n || 0}` : "");
+  $("osErr").textContent = p.error || "";
+  if (!osEdited) $("osId").value = p.id || "";
+  markSecret("osSecret", p.set, "client secret");
+}
+let osEdited = false;
+$("osId").addEventListener("input", () => { osEdited = true; });
+$("osSave").onclick = async () => {
+  const id = $("osId").value.trim(), secret = $("osSecret").value.trim();
+  const p = state.planes || {};
+  if (id && !secret && !p.set) return alert("Введите client secret");
+  if (!id && p.id && !confirm("Client id пустой: API-клиент OpenSky будет удалён. Удалить?")) return;
+  try {
+    await post("/ui/api/opensky", secret ? { id, secret } : { id });
+    osEdited = false; $("osSecret").value = "";
+    toast(id ? "API-клиент OpenSky сохранён" : "API-клиент OpenSky удалён");
+  } catch (e) { alert("Ошибка: " + e.message); }
+  refresh();
+};
+$("stSave").onclick = async () => {
+  const user = $("stUser").value.trim(), pass = $("stPass").value;
+  const c = state.satellites || {};
+  if (user && !pass && !c.st_set) return alert("Введите пароль Space-Track");
+  if (!user && c.st_user && !confirm("Логин пустой: вход в Space-Track будет удалён. Удалить?")) return;
+  try {
+    await post("/ui/api/spacetrack", pass ? { user, password: pass } : { user });
+    stEdited = false; $("stPass").value = "";
+    toast(user ? "Вход в Space-Track сохранён: архив орбит скачается в фоне" : "Вход в Space-Track удалён");
+  } catch (e) { alert("Ошибка: " + e.message); }
   refresh();
 };
 let siteEdited = false;
@@ -4531,7 +4604,7 @@ function drawTracks(ctx, im) {
     ctx.setLineDash([lw * 4, lw * 3]);
     ctx.beginPath(); ctx.moveTo(x0 + nx, y0 + ny); ctx.lineTo(x1 + nx, y1 + ny); ctx.stroke();
     ctx.setLineDash([]);
-    const label = t.sat ? `${t.sat.name} (${t.sat.norad})` : cur.sat_told ? "не опознан" : "трек";
+    const label = t.sat ? `${t.sat.name} (${t.sat.norad})` : t.plane ? `✈ ${t.plane.call || t.plane.icao}` : cur.sat_told ? "не опознан" : "трек";
     const lx = (x0 + x1) / 2 + nx * 2.5, ly = (y0 + y1) / 2 + ny * 2.5;
     ctx.textAlign = lx > W * 0.7 ? "right" : "left";
     ctx.textBaseline = "middle";

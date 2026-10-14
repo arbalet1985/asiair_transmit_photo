@@ -107,7 +107,9 @@ func Merge(texts ...[]byte) ([]byte, int) {
 }
 
 // Store keeps the catalogues downloaded, one file per download, named by
-// its time: catalog-20261012-1530.tle.gz.
+// its time: catalog-20261012-1530.tle.gz; and the catalogues of the past
+// (Space-Track), named by the time their elements are nearest:
+// history-20260912-2100.tle.gz. Those are never deleted.
 type Store struct {
 	Dir  string
 	Keep int // newest files kept
@@ -117,10 +119,19 @@ const fileLayout = "20060102-1504"
 
 // Save writes a catalogue downloaded at t.
 func (s Store) Save(text []byte, t time.Time) (string, error) {
+	return s.save("catalog-", text, t)
+}
+
+// SaveHistory writes a catalogue of the past, its elements nearest t.
+func (s Store) SaveHistory(text []byte, t time.Time) (string, error) {
+	return s.save("history-", text, t)
+}
+
+func (s Store) save(prefix string, text []byte, t time.Time) (string, error) {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return "", err
 	}
-	name := filepath.Join(s.Dir, "catalog-"+t.UTC().Format(fileLayout)+".tle.gz")
+	name := filepath.Join(s.Dir, prefix+t.UTC().Format(fileLayout)+".tle.gz")
 	var b bytes.Buffer
 	zw := gzip.NewWriter(&b)
 	zw.Write(text)
@@ -144,21 +155,37 @@ func (s Store) Catalogs() []CatalogFile {
 	var out []CatalogFile
 	for _, e := range ents {
 		n := e.Name()
-		if !strings.HasPrefix(n, "catalog-") || !strings.HasSuffix(n, ".tle.gz") {
+		if !CatalogName(n) {
 			continue
 		}
-		t, err := time.Parse(fileLayout, strings.TrimSuffix(strings.TrimPrefix(n, "catalog-"), ".tle.gz"))
+		t, err := time.Parse(fileLayout, strings.TrimSuffix(n[strings.IndexByte(n, '-')+1:], ".tle.gz"))
 		if err != nil {
 			continue
 		}
-		out = append(out, CatalogFile{Path: filepath.Join(s.Dir, n), Time: t})
+		out = append(out, CatalogFile{Path: filepath.Join(s.Dir, n), Time: t, History: strings.HasPrefix(n, "history-")})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	return out
 }
 
+// CatalogName: name is that of a catalogue file.
+func CatalogName(name string) bool {
+	return (strings.HasPrefix(name, "catalog-") || strings.HasPrefix(name, "history-")) && strings.HasSuffix(name, ".tle.gz")
+}
+
+// Downloads: the catalogues downloaded (not those of the past), oldest first.
+func (s Store) Downloads() []CatalogFile {
+	var out []CatalogFile
+	for _, c := range s.Catalogs() {
+		if !c.History {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (s Store) prune() {
-	c := s.Catalogs()
+	c := s.Downloads()
 	for len(c) > max(s.Keep, 1) {
 		os.Remove(c[0].Path)
 		c = c[1:]
@@ -167,8 +194,9 @@ func (s Store) prune() {
 
 // CatalogFile is one catalogue kept.
 type CatalogFile struct {
-	Path string
-	Time time.Time // downloaded
+	Path    string
+	Time    time.Time // downloaded; of one of the past: the time its elements are nearest
+	History bool      // a catalogue of the past (Space-Track)
 }
 
 // Nearest returns the catalogue downloaded nearest to t (its orbits are

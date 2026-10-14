@@ -127,7 +127,7 @@ func (c *SatCatalog) tryFile() string { return filepath.Join(c.store.Dir, "last-
 
 // due: a new catalogue is to be downloaded.
 func (c *SatCatalog) due(now time.Time) bool {
-	if cs := c.store.Catalogs(); len(cs) > 0 && now.Sub(cs[len(cs)-1].Time) < satRefresh {
+	if cs := c.store.Downloads(); len(cs) > 0 && now.Sub(cs[len(cs)-1].Time) < satRefresh {
 		return false
 	}
 	if st, err := os.Stat(c.tryFile()); err == nil && now.Sub(st.ModTime()) < satRetry {
@@ -214,7 +214,7 @@ func (c *SatCatalog) copyNearest(ctx context.Context, ms []*Measurement) int {
 
 // copy copies one catalogue of the source into the folder.
 func (c *SatCatalog) copy(ctx context.Context, name string) error {
-	if filepath.Base(name) != name || !strings.HasPrefix(name, "catalog-") || !strings.HasSuffix(name, ".tle.gz") {
+	if filepath.Base(name) != name || !satellites.CatalogName(name) {
 		return fmt.Errorf("имя каталога орбит %q", name)
 	}
 	if err := os.MkdirAll(c.store.Dir, 0o755); err != nil {

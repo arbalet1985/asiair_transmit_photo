@@ -108,6 +108,15 @@ type Receiver struct {
 	// UpdateRepo is "owner/name" of the GitHub repository with the releases.
 	UpdateRepo string `yaml:"update_repo"`
 
+	// The login of space-track.org: the orbits of the past, for frames
+	// taken when no catalogue from CelesTrak was downloaded near their time.
+	SpaceTrackUser     string `yaml:"spacetrack_user"`
+	SpaceTrackPassword string `yaml:"spacetrack_password"`
+	// The API client of opensky-network.org: the planes near the
+	// observatory are recorded at night to tell the tracks they leave.
+	OpenSkyID     string `yaml:"opensky_id"`
+	OpenSkySecret string `yaml:"opensky_secret"`
+
 	// Internet: serve the agent API on Listen (reachable from the internet
 	// when the router forwards the port). Missing = true (older settings);
 	// a new receiver starts with false until a way is chosen on the page.
@@ -344,6 +353,7 @@ func LoadReceiver(path string) (*Receiver, error) {
 	if err := load(path, c); err != nil {
 		return nil, err
 	}
+	c.unsealSecrets()
 	if _, err := ParseReserve(c.MinFree); err != nil {
 		return nil, err
 	}

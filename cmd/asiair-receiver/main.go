@@ -50,6 +50,9 @@ func prepare(path, mode string) (*prepared, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := config.SealReceiverFile(path); err != nil {
+		log.Printf("Приёмник: пароли в %s не зашифрованы: %v", path, err)
+	}
 	cfg, err := config.LoadReceiver(path)
 	if err != nil {
 		return nil, err

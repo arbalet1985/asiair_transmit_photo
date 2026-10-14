@@ -53,6 +53,10 @@ type qualityEntry struct {
 	SatCat  string     `json:"satcat,omitempty"`
 	SatCatT int64      `json:"satcatt,omitempty"`
 	SatErr  string     `json:"saterr,omitempty"`
+	// Planes: the planes that left the tracks no satellite was found for
+	// (from the recording of OpenSky); PlanesDone: looked for
+	Planes     []planeEntry `json:"planes,omitempty"`
+	PlanesDone bool         `json:"pdone,omitempty"`
 }
 
 // qualityVersion: 2 takes the background of each star around it, 3 tells
