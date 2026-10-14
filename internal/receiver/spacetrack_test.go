@@ -26,12 +26,12 @@ func TestHistoryWanted(t *testing.T) {
 	s.sats.store.Save([]byte("x"), recent.Add(-4*time.Hour))
 
 	w := s.historyWanted()
-	if len(w) != 2 || !w[0].first.Equal(n2) || !w[1].first.Equal(n1) || len(w[1].starts) != 3 || !w[1].target().Equal(n1.Add(3*time.Hour)) {
+	if len(w) != 2 || !w[0].First.Equal(n2) || !w[1].First.Equal(n1) || len(w[1].Starts) != 3 || !w[1].Target().Equal(n1.Add(3*time.Hour)) {
 		t.Fatalf("%+v", w)
 	}
 	// once the night of n1 is kept, only n2 is wanted
-	s.sats.store.SaveHistory([]byte("x"), w[1].target())
-	if w = s.historyWanted(); len(w) != 1 || !w[0].first.Equal(n2) {
+	s.sats.store.SaveHistory([]byte("x"), w[1].Target())
+	if w = s.historyWanted(); len(w) != 1 || !w[0].First.Equal(n2) {
 		t.Fatalf("%+v", w)
 	}
 }

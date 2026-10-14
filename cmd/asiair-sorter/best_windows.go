@@ -15,6 +15,7 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
@@ -42,6 +43,9 @@ func (w *window) measureStars() {
 	cache := w.qualityCache
 	site := w.satSite()
 	cat := satCatalog()
+	w.mu.Lock()
+	cat.STUser, cat.STPass = w.saved.SpaceTrackUser, config.Unseal(w.saved.SpaceTrackPass)
+	w.mu.Unlock()
 	for _, it := range l.Items {
 		if it.Frame.Src != nil {
 			cat.Source = it.Frame.Src // the catalogues of orbits the receiver gathered

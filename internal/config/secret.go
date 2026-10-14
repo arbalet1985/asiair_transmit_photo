@@ -52,6 +52,9 @@ func Seal(v string) string {
 // Sealed: the value is encrypted (or there is none).
 func Sealed(v string) bool { return v == "" || strings.HasPrefix(v, sealPrefix) }
 
+// Unseal decrypts a secret written by Seal ("" when it cannot be).
+func Unseal(v string) string { return unseal("секрет", v) }
+
 // unseal decrypts a secret; a plain value is returned as it is. One that
 // cannot be decrypted (receiver.yaml copied from another computer) is
 // empty: it is to be entered again.

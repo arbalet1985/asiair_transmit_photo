@@ -2,6 +2,7 @@ package sorter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -36,6 +37,27 @@ type Track struct {
 	Sky    bool       `json:"sky,omitempty"`
 	Static bool       `json:"static,omitempty"`
 	Sat    *Satellite `json:"sat,omitempty"`
+	Plane  *Plane     `json:"plane,omitempty"` // told by the receiver (OpenSky)
+}
+
+// Plane is the plane that left a track, as the receiver tells it from its
+// recording of OpenSky Network.
+type Plane struct {
+	ICAO     string  `json:"icao"`
+	Callsign string  `json:"call,omitempty"`
+	Km       float64 `json:"km"`   // from the observatory
+	Alt      float64 `json:"alt"`  // degrees above the horizon
+	AltM     float64 `json:"altm"` // its height, m
+	Cross    float64 `json:"cross"`
+	Others   int     `json:"others,omitempty"`
+}
+
+// Name: the callsign, else the ICAO address.
+func (p *Plane) Name() string {
+	if p.Callsign != "" {
+		return p.Callsign
+	}
+	return p.ICAO
 }
 
 // Satellite is the object that left a track.
@@ -97,8 +119,11 @@ func frameStart(h *fits.Header) int64 {
 // nearest one to each frame, and CelesTrak is asked only when the
 // receiver has no fresh one either.
 type SatCatalog struct {
-	store  satellites.Store
-	Source CatalogSource
+	// the login of space-track.org: the orbits of the past for frames
+	// that no catalogue kept is near (empty: not asked)
+	STUser, STPass string
+	store          satellites.Store
+	Source         CatalogSource
 }
 
 // CatalogSource gives catalogues of orbits kept elsewhere: a receiver.
@@ -252,6 +277,8 @@ type SatReport struct {
 	Copied     int    // catalogues copied from the receiver now
 	CatalogErr string // the download failed
 	Catalogs   int    // catalogues kept
+	History    int    // nights of the past downloaded from Space-Track now
+	HistoryErr string
 }
 
 // Text describes the report for the status line.
@@ -271,6 +298,12 @@ func (r SatReport) Text() string {
 	}
 	if r.Downloaded > 0 {
 		t += fmt.Sprintf("; скачан каталог орбит CelesTrak: %d объектов", r.Downloaded)
+	}
+	if r.History > 0 {
+		t += fmt.Sprintf("; скачаны орбиты прошлых ночей с Space-Track: %d", r.History)
+	}
+	if r.HistoryErr != "" {
+		t += "; архив Space-Track: " + r.HistoryErr
 	}
 	switch {
 	case r.CatalogErr != "" && r.Catalogs == 0:
@@ -372,6 +405,15 @@ func IdentifySatellites(ctx context.Context, ms []Measurement, cache *QualityCac
 		if len(told) > 0 {
 			rep.Copied = cat.copyNearest(ctx, told)
 		}
+	}
+	if cat.STUser != "" && cat.STPass != "" {
+		var starts []time.Time
+		for _, m := range with {
+			if m.start != 0 && m.moving() {
+				starts = append(starts, time.UnixMilli(m.start))
+			}
+		}
+		rep.History, rep.HistoryErr = cat.fetchHistory(ctx, starts)
 	}
 	if len(pending()) > 0 {
 		n, err := cat.refresh(ctx)
@@ -483,9 +525,13 @@ func (f *Frame) TracksText() string {
 	}
 	names := make([]string, len(f.Tracks))
 	for i, t := range f.Tracks {
-		names[i] = "?"
-		if t.Sat != nil {
+		switch {
+		case t.Sat != nil:
 			names[i] = t.Sat.Name
+		case t.Plane != nil:
+			names[i] = "✈ " + t.Plane.Name()
+		default:
+			names[i] = "?"
 		}
 	}
 	return strings.Join(names, ", ")
@@ -496,6 +542,8 @@ func (f *Frame) TrackLabel(t Track) string {
 	switch {
 	case t.Sat != nil:
 		return fmt.Sprintf("%s (%d)", t.Sat.Name, t.Sat.NORAD)
+	case t.Plane != nil:
+		return "✈ " + t.Plane.Name()
 	case f.SatTold:
 		return "не опознан"
 	}
@@ -534,6 +582,18 @@ func (f *Frame) TrackText(t Track) string {
 		}
 		return txt
 	}
+	if p := t.Plane; p != nil {
+		call := p.Callsign
+		if call == "" {
+			call = "без позывного"
+		}
+		txt := fmt.Sprintf("самолёт %s (ICAO %s): высота %.0f м, %s км от обсерватории, %s° над горизонтом; путь по записи OpenSky прошёл в %s′ от трека",
+			call, p.ICAO, p.AltM, ruFloat(p.Km, 1), ruFloat(p.Alt, 1), ruFloat(p.Cross*60, 1))
+		if p.Others > 0 {
+			txt += fmt.Sprintf("; почти так же подходят ещё %d", p.Others)
+		}
+		return txt
+	}
 	switch {
 	case f.SatErr != "":
 		return "не опознан: " + f.SatErr
@@ -562,4 +622,63 @@ func (f *Frame) TracksInfo() string {
 
 func ruFloat(v float64, dec int) string {
 	return strings.Replace(fmt.Sprintf("%.*f", dec, v), ".", ",", 1)
+}
+
+// historyRetry: a night of the past that failed is asked again after this.
+const historyRetry = 12 * time.Hour
+
+// fetchHistory downloads from Space-Track the orbits of the nights of the
+// frames starting at starts that no catalogue kept (or copied from the
+// receiver) is near: a few nights at a time, each once. It returns how many
+// it downloaded and the error that stopped it ("" without one).
+func (c *SatCatalog) fetchHistory(ctx context.Context, starts []time.Time) (int, string) {
+	nights := c.store.HistoryWanted(starts)
+	if len(nights) == 0 {
+		return 0, ""
+	}
+	triedFile := filepath.Join(c.store.Dir, "history-tried.json")
+	tried := map[string]time.Time{}
+	if b, err := os.ReadFile(triedFile); err == nil {
+		json.Unmarshal(b, &tried)
+	}
+	var todo []satellites.HistoryNight
+	for _, n := range nights {
+		if t, ok := tried[n.Key()]; ok && time.Since(t) < historyRetry {
+			continue
+		}
+		todo = append(todo, n)
+		if len(todo) == satellites.HistoryPerRound {
+			break
+		}
+	}
+	if len(todo) == 0 {
+		return 0, ""
+	}
+	sess := &satellites.SpaceTrack{User: c.STUser, Password: c.STPass, UserAgent: "asiair-sorter/" + protocol.Version}
+	lctx, cancel := context.WithTimeout(ctx, time.Minute)
+	err := sess.Login(lctx)
+	cancel()
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer sess.Logout(context.Background())
+	os.MkdirAll(c.store.Dir, 0o755)
+	n := 0
+	for i, night := range todo {
+		if ctx.Err() != nil {
+			break
+		}
+		if i > 0 {
+			time.Sleep(5 * time.Second)
+		}
+		tried[night.Key()] = time.Now()
+		if b, err := json.Marshal(tried); err == nil {
+			os.WriteFile(triedFile, b, 0o644)
+		}
+		if _, err := c.store.FetchHistory(ctx, sess, night); err != nil {
+			return n, fmt.Sprintf("орбиты за %s не скачаны: %v", night.Target().Local().Format("02.01.2006"), err)
+		}
+		n++
+	}
+	return n, ""
 }
