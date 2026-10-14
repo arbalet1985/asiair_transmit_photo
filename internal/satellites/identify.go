@@ -258,7 +258,9 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 		// the whole exposure on the frame: the middle of the track is
 		// the middle of the exposure, and the track is no longer than the
 		// path then (it may be shorter: a flash, the shadow of the Earth)
-		if sl > 1.3*predicted+20 || sl < 0.25*predicted {
+		// longer by up to half: the end of a faint track is followed on to
+		// a star lying on its line
+		if sl > 1.5*predicted+20 || sl < 0.25*predicted {
 			return m, false
 		}
 		off = bt - exp/2
