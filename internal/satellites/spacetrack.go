@@ -52,6 +52,9 @@ func (s *SpaceTrack) Login(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errors.New("Space-Track: неверный логин или пароль")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Space-Track: вход: %s", resp.Status)
 	}
