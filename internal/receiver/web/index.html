@@ -1371,7 +1371,7 @@ function renderFiles() {
       folder = f.folder;
       const inFolder = files.filter(x => x.folder === folder);
       const cb = el("input", { type: "checkbox" });
-      const selectable = inFolder.filter(x => x.remote && !x.pending);
+      const selectable = inFolder.filter(canSel);
       cb.checked = selectable.length > 0 && selectable.every(x => selected.has(x.path));
       cb.disabled = selectable.length === 0;
       cb.onclick = e => {
@@ -1408,7 +1408,7 @@ function renderFiles() {
         acts.append(miniButton("⟳ Синхр.", "Синхронизировать на паузе: передавать файлы этой папки (или папки выше) и новые файлы в ней, даже когда передача на паузе", () => openSyncDir(fname)));
       }
       if (!isRemote() && inFolder.some(x => x.local)) acts.append(miniButton("📂", "Открыть эту папку на этом компьютере", () => openFolder(fname)));
-      if (selectable.length) acts.append(miniButton("🗑", "Удалить на ASIAIR эту папку (или папку выше) целиком, со всеми файлами и вложенными папками", () => openDelDir(fname)));
+      if (selectable.some(x => x.remote)) acts.append(miniButton("🗑", "Удалить на ASIAIR эту папку (или папку выше) целиком, со всеми файлами и вложенными папками", () => openDelDir(fname)));
       const tr = el("tr", { className: "folder" }, el("td", {}, cb),
         el("td", { className: "name" }, (collapsed.has(folder) ? "▸ " : "▾ ") + folder),
         el("td", { className: "muted", textContent: integ }),
@@ -1421,7 +1421,7 @@ function renderFiles() {
       tb.append(tr);
     }
     if (collapsed.has(folder)) continue;
-    const cb = el("input", { type: "checkbox", checked: selected.has(f.path), disabled: !f.remote || f.pending });
+    const cb = el("input", { type: "checkbox", checked: selected.has(f.path), disabled: !canSel(f) });
     cb.onchange = () => { cb.checked ? selected.add(f.path) : selected.delete(f.path); renderFiles(); };
     let name = f.name;
     if (f.local && viewable(f.name)) {
@@ -1446,6 +1446,8 @@ function renderFiles() {
   const selSize = state.files.filter(f => selected.has(f.path)).reduce((a, f) => a + f.size, 0);
   $("selInfo").textContent = sel.length ? `выбрано: ${sel.length} (${fmtBytes(selSize)})` : "";
   $("delBtn").disabled = sel.length === 0;
+  const selHere = state.files.filter(f => selected.has(f.path) && !f.remote).length;
+  $("delBtn").textContent = !selHere ? "Удалить на ASIAIR" : selHere === sel.length ? "Удалить у себя" : "Удалить";
   const selFetch = state.files.filter(f => selected.has(f.path) && canFetch(f) && !requested.has(f.path)).map(f => f.path);
   $("fetchBtn").hidden = !selFetch.length;
   $("fetchBtn").textContent = paused ? `Скачать выбранные (${selFetch.length})` : `Скачать выбранные первыми (${selFetch.length})`;
@@ -1455,10 +1457,10 @@ function renderFiles() {
   const rec = receivedToDelete();
   $("delReceived").textContent = `Удалить полученные на ASIAIR (${rec.length})`;
   $("delReceived").hidden = rec.length === 0;
-  const found = files.filter(f => f.remote && !f.pending);
+  const found = files.filter(canSel);
   $("selFound").textContent = `Выбрать все найденные (${found.length})`;
   $("selFound").disabled = found.length === 0;
-  const vis = files.filter(f => f.remote && !f.pending);
+  const vis = files.filter(canSel);
   $("selAll").checked = vis.length > 0 && vis.every(f => selected.has(f.path));
   const nr = state.files.filter(f => f.remote && f.status !== "filtered").length, nl = state.files.filter(f => f.local).length;
   const nf = state.files.filter(f => f.status === "filtered").length;
@@ -1843,7 +1845,7 @@ async function refresh() {
     state.files = state.files || [];
     state.commands = state.commands || [];
     // drop selections that no longer apply
-    const ok = new Set(state.files.filter(f => f.remote && !f.pending).map(f => f.path));
+    const ok = new Set(state.files.filter(canSel).map(f => f.path));
     for (const p of [...selected]) if (!ok.has(p)) selected.delete(p);
     renderStatus(); renderFilterOptions(); renderFiles(); renderSyncBar(); renderCmds();
   } catch (e) {
@@ -1871,12 +1873,15 @@ $("fLastNight").onclick = () => {
 };
 $("collapseAll").onclick = () => { for (const f of visibleFiles()) collapsed.add(f.folder); saveCollapsed(); renderFiles(); };
 $("expandAll").onclick = () => { collapsed.clear(); saveCollapsed(); renderFiles(); };
-$("selFound").onclick = () => { for (const f of visibleFiles()) if (f.remote && !f.pending) selected.add(f.path); renderFiles(); };
+$("selFound").onclick = () => { for (const f of visibleFiles()) if (canSel(f)) selected.add(f.path); renderFiles(); };
 $("selNone").onclick = () => { selected.clear(); renderFiles(); };
 $("selAll").onchange = e => {
-  for (const f of visibleFiles()) if (f.remote && !f.pending) e.target.checked ? selected.add(f.path) : selected.delete(f.path);
+  for (const f of visibleFiles()) if (canSel(f)) e.target.checked ? selected.add(f.path) : selected.delete(f.path);
   renderFiles();
 };
+// a file may be selected: to delete on the ASIAIR, or only its copy here
+// when the ASIAIR has it no more
+function canSel(f) { return f.remote ? !f.pending : !!f.local; }
 // files shown now (filters apply) that are received and verified, still on the ASIAIR
 function receivedToDelete() {
   return state ? visibleFiles().filter(f => f.status === "received" && f.remote && !f.pending) : [];
@@ -1902,17 +1907,37 @@ async function queueDelete(paths, also) {
   } catch (e) { alert("Ошибка: " + e.message); }
 }
 $("delBtn").onclick = async () => {
-  const files = state.files.filter(f => selected.has(f.path));
+  const sel = state.files.filter(f => selected.has(f.path));
+  const files = sel.filter(f => f.remote), here = sel.filter(f => !f.remote && f.local);
   const also = $("alsoLocal").checked;
   // one press only: the next deletion must not remove local copies by accident
   $("alsoLocal").checked = false;
-  const { total, lines } = deleteSummary(files);
-  const notYet = files.filter(f => f.status !== "received");
-  let msg = `Будет удалено на ASIAIR: ${files.length} файл(ов), ${fmtBytes(total)}` + (also ? " — и на этом компьютере" : "") + `\n${lines.join("\n")}`;
-  if (notYet.length && !also) msg += `\n\n⚠ ${notYet.length} из них ещё НЕ получены этим компьютером (${fmtBytes(notYet.reduce((a, f) => a + f.size, 0))}) — после удаления их не останется нигде.`;
+  let msg = "";
+  if (files.length) {
+    const { total, lines } = deleteSummary(files);
+    const notYet = files.filter(f => f.status !== "received");
+    msg = `Будет удалено на ASIAIR: ${files.length} файл(ов), ${fmtBytes(total)}` + (also ? " — и на этом компьютере" : "") + `\n${lines.join("\n")}`;
+    if (notYet.length && !also) msg += `\n\n⚠ ${notYet.length} из них ещё НЕ получены этим компьютером (${fmtBytes(notYet.reduce((a, f) => a + f.size, 0))}) — после удаления их не останется нигде.`;
+  }
+  if (here.length) {
+    msg += (msg ? "\n\n" : "") + `Будет удалено на этом компьютере: ${here.length} файл(ов), ${fmtBytes(here.reduce((a, f) => a + f.size, 0))}. ` +
+      "На ASIAIR их уже нет — других копий не останется (кроме разложенных сортировщиком).";
+  }
   msg += "\n\nЭто действие необратимо. Удалить?";
-  if (confirm(msg)) queueDelete(files.map(f => f.path), also);
+  if (!confirm(msg)) return;
+  if (here.length) await deleteHere(here.map(f => f.path));
+  if (files.length) queueDelete(files.map(f => f.path), also);
 };
+// deletes the copies here of files the ASIAIR has no more
+async function deleteHere(paths) {
+  try {
+    const r = await post("/ui/api/delete_local", { paths });
+    for (const p of paths) selected.delete(p);
+    toast(`Удалено у себя: ${r.deleted}` + (r.errors.length ? `, не удалось: ${r.errors.length}` : ""));
+    if (r.errors.length) alert("Не удалось удалить:\n" + r.errors.slice(0, 20).join("\n"));
+    refresh();
+  } catch (e) { alert("Ошибка: " + e.message); }
+}
 // folders synchronised while the transfer is paused
 const syncDirs = () => (state && state.sync_dirs) || [];
 // the synchronised folder the folder lies in ("" if none)
@@ -2361,11 +2386,11 @@ function renderGallery(files) {
       t.dataset.key = key;
       const img = el("img", { loading: "lazy", decoding: "async", alt: f.name, src: "/ui/thumb?w=320&path=" + encodeURIComponent(f.path) });
       img.onerror = () => { img.style.visibility = "hidden"; };
-      t.append(img, el("input", { type: "checkbox", title: "Отметить для удаления на ASIAIR" }), el("div", { className: "cap" }));
+      t.append(img, el("input", { type: "checkbox", title: "Отметить для удаления (на ASIAIR, а если его там уже нет — у себя)" }), el("div", { className: "cap" }));
     }
     const cb = t.querySelector("input");
     cb.checked = selected.has(f.path);
-    cb.disabled = !f.remote || f.pending;
+    cb.disabled = !canSel(f);
     cb.onclick = e => { e.stopPropagation(); cb.checked ? selected.add(f.path) : selected.delete(f.path); renderFiles(); };
     t.classList.toggle("sel", selected.has(f.path));
     t.onclick = () => openViewer(f.path, list);
@@ -4744,12 +4769,12 @@ function statsRows(st, only) {
 function updateSel() {
   const f = V.list[V.idx];
   const f2 = state.files.find(x => x.path === f.path) || f;
-  const can = f2.remote && !f2.pending;
-  $("vSel").disabled = !can;
+  $("vSel").disabled = !canSel(f2);
   $("vSel").classList.toggle("on", selected.has(f.path));
-  $("vSel").textContent = f2.pending ? "удаляется" : !f2.remote ? "нет на ASIAIR" : selected.has(f.path) ? "Отмечен для удаления" : "Отметить для удаления";
+  $("vSel").textContent = f2.pending ? "удаляется" : selected.has(f.path) ? "Отмечен для удаления" :
+    f2.remote ? "Отметить для удаления" : "Отметить для удаления у себя";
   $("vDelete").disabled = selected.size === 0;
-  $("vDelete").textContent = `Удалить отмеченные на ASIAIR (${selected.size})…`;
+  $("vDelete").textContent = `Удалить отмеченные (${selected.size})…`;
 }
 // Decoded FITS previews, most recent last: blinking and paging back show
 // them without loading again. Their memory is capped.
@@ -5094,7 +5119,7 @@ function step(d) {
 }
 function toggleSel() {
   const f = V.list[V.idx], f2 = state.files.find(x => x.path === f.path);
-  if (!f2 || !f2.remote || f2.pending) return;
+  if (!f2 || !canSel(f2)) return;
   selected.has(f.path) ? selected.delete(f.path) : selected.add(f.path);
   updateSel();
   renderFiles();
