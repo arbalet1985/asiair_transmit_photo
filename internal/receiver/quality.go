@@ -262,7 +262,7 @@ func (s *Server) measurePending(ctx context.Context) int {
 	s.quality.forget(keep)
 	// newest first
 	sort.Slice(todo, func(i, j int) bool { return todo[i].ModTime.After(todo[j].ModTime) })
-	n, tracks := 0, 0
+	n, tracks, static := 0, 0, 0
 	for _, f := range todo {
 		if ctx.Err() != nil {
 			break
@@ -278,6 +278,12 @@ func (s *Server) measurePending(ctx context.Context) int {
 		s.quality.set(f.Path, e)
 		if len(e.Tracks) > 0 {
 			tracks++
+			// a filament of a nebula is found on every frame of the
+			// series: marked at once, not shown as a satellite until the
+			// whole batch is measured
+			if m := s.quality.markStatic(); m > 0 {
+				static += m
+			}
 		}
 		n++
 		if n%20 == 0 {
@@ -290,6 +296,9 @@ func (s *Server) measurePending(ctx context.Context) int {
 	}
 	if n > 0 {
 		log.Printf("Приёмник: оценено кадров (звёзды, HFR, треки спутников): %d, с треками: %d", n, tracks)
+	}
+	if static > 0 {
+		log.Printf("Приёмник: неподвижных треков (туманность, галактика — не спутник): %d", static)
 	}
 	if tracks > 0 && s.sats != nil {
 		s.quality.save()

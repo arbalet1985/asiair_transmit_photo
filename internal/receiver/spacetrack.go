@@ -108,7 +108,7 @@ func (s *Server) fetchHistory(ctx context.Context) {
 	cancel()
 	if err != nil {
 		st.setHistErr(err.Error())
-		log.Printf("Приёмник: Space-Track: %v", err)
+		log.Printf("Приёмник: %v", err)
 		return
 	}
 	defer sess.Logout(context.Background())
