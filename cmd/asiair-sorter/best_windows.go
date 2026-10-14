@@ -291,6 +291,7 @@ func (w *window) bestDialog() {
 	var roundEdit, satEdit *walk.NumberEdit
 
 	var dlg *walk.Dialog
+	var tv *walk.TableView
 	var ok, cancel *walk.PushButton
 	var objBox, filterBox *walk.ComboBox
 	var pctEdit *walk.NumberEdit
@@ -396,7 +397,7 @@ func (w *window) bestDialog() {
 					}},
 				},
 			},
-			TableView{Model: m, CheckBoxes: true, AlternatingRowBG: true, NotSortableByHeaderClick: true,
+			TableView{AssignTo: &tv, Model: m, CheckBoxes: true, AlternatingRowBG: true, NotSortableByHeaderClick: true,
 				Columns: []TableViewColumn{
 					{Title: "Сессия", Width: 70},
 					{Title: "Ночь", Width: 140},
@@ -458,6 +459,7 @@ func (w *window) bestDialog() {
 		return
 	}
 	m.changed = update
+	copyMenu(tv, nil)
 	setFilters()
 	if dlg.Run() != walk.DlgCmdOK {
 		return

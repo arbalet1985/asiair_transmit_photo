@@ -54,7 +54,7 @@ type Satellite struct {
 
 // trackVersion: the version of the track search (as the receiver's); frames
 // searched by an older one are searched again.
-const trackVersion = 1
+const trackVersion = 2
 
 func (t Track) sky() satellites.SkyLine {
 	return satellites.SkyLine{RA0: t.RA0, Dec0: t.Dec0, RA1: t.RA1, Dec1: t.Dec1}

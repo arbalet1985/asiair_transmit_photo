@@ -30,6 +30,7 @@ const (
 	maxWidthPx   = 6   // binned pixels: wider pieces are nebulae, galaxies, halos
 	minElongated = 4   // length over width of a piece of a track
 	maxStreaks   = 20
+	edgeReach    = 8 // binned pixels beyond an end still taken for the edge
 )
 
 // FindStreaks finds the straight tracks of satellites (planes and meteors
@@ -43,6 +44,16 @@ func FindStreaks(img *fits.Image) []Streak {
 	sigma := noise(res)
 	segs := segments(res, w, h, streakSigma*sigma)
 	lines := mergeSegments(segs)
+	// the pieces followed to their ends, then those of one track joined
+	var pieces []line
+	for _, l := range lines {
+		t0, t1, _ := refineEnds(res, w, h, l)
+		if softness(res, w, h, l, t0, t1) <= maxSoftness {
+			l.t0, l.t1 = t0, t1
+			pieces = append(pieces, l)
+		}
+	}
+	lines = joinPieces(pieces)
 	var out []Streak
 	bin := float64(max(img.Binning, 1) * k)
 	srcH := float64(img.Height * max(img.Binning, 1))
@@ -59,10 +70,14 @@ func FindStreaks(img *fits.Image) []Streak {
 			continue // a piece of a track already taken
 		}
 		kept = append(kept, l)
-		ax, ay := l.cx+l.dx*t0, l.cy+l.dy*t0
-		bx, by := l.cx+l.dx*t1, l.cy+l.dy*t1
-		edge := func(x, y float64) bool { return x < 3 || y < 3 || x > float64(w)-4 || y > float64(h)-4 }
-		s := Streak{Edge0: edge(ax, ay), Edge1: edge(bx, by), SNR: snr, Soft: soft}
+		at := func(t float64) (float64, float64) { return l.cx + l.dx*t, l.cy + l.dy*t }
+		ax, ay := at(t0)
+		bx, by := at(t1)
+		// an end at the edge: the track goes on out of the frame. The ends
+		// are measured with the sky 6 pixels beside the track, so a slanted
+		// one stops a few pixels short of the edge: look a bit further on.
+		outside := func(x, y float64) bool { return x < 3 || y < 3 || x > float64(w)-4 || y > float64(h)-4 }
+		s := Streak{Edge0: outside(at(t0 - edgeReach)), Edge1: outside(at(t1 + edgeReach)), SNR: snr, Soft: soft}
 		// the centre of a binned pixel in pixels of the frame
 		s.X0, s.Y0 = (ax+0.5)*bin-0.5, (ay+0.5)*bin-0.5
 		s.X1, s.Y1 = (bx+0.5)*bin-0.5, (by+0.5)*bin-0.5
@@ -206,6 +221,13 @@ func segments(d []float32, w, h int, thr float32) []line {
 			continue
 		}
 		l, width := fit(pix)
+		if width > maxWidthPx && l.t1-l.t0 >= minElongated*width {
+			// a track through a galaxy or touching stars is one group with
+			// them: its line is the pixels near the axis, most of the group
+			if core, cl, cw := coreOf(pix, l); 2*len(core) >= len(pix) {
+				pix, l, width = core, cl, cw
+			}
+		}
 		if length := l.t1 - l.t0; length >= minSegment && width <= maxWidthPx && length >= minElongated*width {
 			l.px = append([][2]float64(nil), pix...)
 			out = append(out, l)
@@ -243,6 +265,26 @@ func fit(pix [][2]float64) (line, float64) {
 	return l, math.Max(1, math.Sqrt(12*l2))
 }
 
+// coreOf: the pixels within 2.5 pixels of the line, its line fitted again
+// over them a few times, and its width; nil if too few are left.
+func coreOf(pix [][2]float64, l line) ([][2]float64, line, float64) {
+	var width float64
+	for i := 0; i < 3; i++ {
+		var core [][2]float64
+		for _, p := range pix {
+			if math.Abs(-(p[0]-l.cx)*l.dy+(p[1]-l.cy)*l.dx) <= 2.5 {
+				core = append(core, p)
+			}
+		}
+		if len(core) < 6 {
+			return nil, l, 0
+		}
+		pix = core
+		l, width = fit(pix)
+	}
+	return pix, l, width
+}
+
 // mergeSegments joins the pieces of one track (broken by noise, or a
 // tumbling object flashing) and returns the tracks, longest first.
 func mergeSegments(segs []line) []line {
@@ -268,7 +310,7 @@ func mergeSegments(segs []line) []line {
 				changed = true
 			}
 		}
-		cur.px = nil
+		cur.px = pix // kept for joining the pieces
 		out = append(out, cur)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].t1-out[i].t0 > out[j].t1-out[j].t0 })
@@ -294,6 +336,79 @@ func collinear(a, b line) bool {
 	p := func(t float64) float64 { return (b.cx+b.dx*t-a.cx)*a.dx + (b.cy+b.dy*t-a.cy)*a.dy }
 	lo, hi := math.Min(p(b.t0), p(b.t1)), math.Max(p(b.t0), p(b.t1))
 	return lo < a.t1+60 && hi > a.t0-60
+}
+
+const (
+	joinOffset = 3   // binned pixels: the ends of the pieces of a track lie this close to its line
+	joinGap    = 100 // binned pixels: the longest gap between them
+)
+
+// joinPieces joins the pieces of one track found apart: a faint track breaks
+// where the noise hides it for longer than the pieces are followed, and a
+// tumbling object flashes. Longest first.
+func joinPieces(ls []line) []line {
+	for changed := true; changed; {
+		changed = false
+		for i := 0; i < len(ls) && !changed; i++ {
+			for j := i + 1; j < len(ls); j++ {
+				if m, ok := joined(ls[i], ls[j]); ok {
+					ls[i] = m
+					ls = append(ls[:j], ls[j+1:]...)
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	sort.Slice(ls, func(i, j int) bool { return ls[i].t1-ls[i].t0 > ls[j].t1-ls[j].t0 })
+	return ls
+}
+
+// joined: the line from end to end of two pieces of one track.
+func joined(a, b line) (line, bool) {
+	var p [4][2]float64
+	for i, l := range []line{a, b} {
+		p[2*i] = [2]float64{l.cx + l.dx*l.t0, l.cy + l.dy*l.t0}
+		p[2*i+1] = [2]float64{l.cx + l.dx*l.t1, l.cy + l.dy*l.t1}
+	}
+	// the two ends farthest apart
+	var u, v [2]float64
+	best := -1.0
+	for i := 0; i < 4; i++ {
+		for j := i + 1; j < 4; j++ {
+			if d := math.Hypot(p[j][0]-p[i][0], p[j][1]-p[i][1]); d > best {
+				best, u, v = d, p[i], p[j]
+			}
+		}
+	}
+	if best <= 0 {
+		return line{}, false
+	}
+	dx, dy := (v[0]-u[0])/best, (v[1]-u[1])/best
+	along := func(q [2]float64) float64 { return (q[0]-u[0])*dx + (q[1]-u[1])*dy }
+	for _, q := range p {
+		if math.Abs(-(q[0]-u[0])*dy+(q[1]-u[1])*dx) > joinOffset {
+			return line{}, false
+		}
+	}
+	a0, a1 := math.Min(along(p[0]), along(p[1])), math.Max(along(p[0]), along(p[1]))
+	b0, b1 := math.Min(along(p[2]), along(p[3])), math.Max(along(p[2]), along(p[3]))
+	if math.Max(b0-a1, a0-b1) > joinGap {
+		return line{}, false
+	}
+	// the line again over the pixels of both: the ends of a short piece are
+	// along its own direction, not quite that of the track
+	l := line{cx: (u[0] + v[0]) / 2, cy: (u[1] + v[1]) / 2, dx: dx, dy: dy}
+	if px := append(append([][2]float64(nil), a.px...), b.px...); len(px) >= 6 {
+		l, _ = fit(px)
+		l.px = px
+	}
+	l.t0, l.t1 = math.Inf(1), math.Inf(-1)
+	for _, q := range p {
+		t := (q[0]-l.cx)*l.dx + (q[1]-l.cy)*l.dy
+		l.t0, l.t1 = math.Min(l.t0, t), math.Max(l.t1, t)
+	}
+	return l, true
 }
 
 // softness: how wide the track is, as the signal 3 pixels beside it over
@@ -335,19 +450,21 @@ func softness(d []float32, w, h int, l line, t0, t1 float64) float64 {
 	return ((prof[5]+prof[11])/2 - bg) / peak
 }
 
-// within: the line lies on one of the lines kept, inside its ends.
+// within: the line lies on one of the lines kept, mostly inside its ends.
 func within(l line, kept []line) bool {
 	for _, k := range kept {
 		in := true
-		for _, t := range []float64{l.t0, l.t1} {
+		var u [2]float64
+		for i, t := range []float64{l.t0, l.t1} {
 			x, y := l.cx+l.dx*t, l.cy+l.dy*t
-			u := (x-k.cx)*k.dx + (y-k.cy)*k.dy
-			if math.Abs(-(x-k.cx)*k.dy+(y-k.cy)*k.dx) > 4 || u < k.t0-10 || u > k.t1+10 {
+			u[i] = (x-k.cx)*k.dx + (y-k.cy)*k.dy
+			if math.Abs(-(x-k.cx)*k.dy+(y-k.cy)*k.dx) > 4 {
 				in = false
 				break
 			}
 		}
-		if in {
+		u0, u1 := math.Min(u[0], u[1]), math.Max(u[0], u[1])
+		if in && (u0 >= k.t0-10 && u1 <= k.t1+10 || math.Min(u1, k.t1)-math.Max(u0, k.t0) >= (u1-u0)/2) {
 			return true
 		}
 	}
@@ -388,7 +505,7 @@ func refineEnds(d []float32, w, h int, l line) (float64, float64, float64) {
 		}
 		return float64(on/3 - side/2), true
 	}
-	const ext, win = 80.0, 3
+	const ext, win, longWin = 80.0, 3, 10
 	lo, hi := l.t0-ext, l.t1+ext
 	n := int(hi-lo) + 1
 	on := make([]float64, n)
@@ -404,7 +521,7 @@ func refineEnds(d []float32, w, h int, l line) (float64, float64, float64) {
 			ctl = append(ctl, v)
 		}
 	}
-	smooth := func(v []float64, okv []bool) []float64 {
+	smooth := func(v []float64, okv []bool, win int) []float64 {
 		out := make([]float64, len(v))
 		for i := range v {
 			var s float64
@@ -421,41 +538,49 @@ func refineEnds(d []float32, w, h int, l line) (float64, float64, float64) {
 		}
 		return out
 	}
-	sm := smooth(on, ok)
+	// spread: the sigma of values around zero from their median absolute value
+	spread := func(v []float64) float64 {
+		a := make([]float64, len(v))
+		for i, x := range v {
+			a[i] = math.Abs(x)
+		}
+		sort.Float64s(a)
+		if len(a) == 0 {
+			return 1e-9
+		}
+		return math.Max(1.4826*a[len(a)/2], 1e-9)
+	}
+	// extend follows the track outward from i0 and i1 while the signal is
+	// above thr, over gaps of a few points
+	extend := func(sm []float64, thr float64, i0, i1 int) (int, int) {
+		for gap := 0; i0 > 0 && gap <= 4; {
+			if ok[i0-1] && sm[i0-1] > thr {
+				gap = 0
+			} else {
+				gap++
+			}
+			i0--
+		}
+		for i0 < n-1 && !(ok[i0] && sm[i0] > thr) {
+			i0++
+		}
+		for gap := 0; i1 < n-1 && gap <= 4; {
+			if ok[i1+1] && sm[i1+1] > thr {
+				gap = 0
+			} else {
+				gap++
+			}
+			i1++
+		}
+		for i1 > 0 && !(ok[i1] && sm[i1] > thr) {
+			i1--
+		}
+		return i0, i1
+	}
+	sm := smooth(on, ok, win)
 	// the noise of the smoothed signal, from lines beside the track
-	cs := smooth(ctl, nil)
-	for i := range cs {
-		cs[i] = math.Abs(cs[i])
-	}
-	sort.Float64s(cs)
-	sn := 1e-9
-	if len(cs) > 0 {
-		sn = math.Max(1.4826*cs[len(cs)/2], 1e-9)
-	}
-	thr := 3 * sn
-	i0, i1 := int(l.t0-lo), int(l.t1-lo)
-	for gap := 0; i0 > 0 && gap <= 4; {
-		if ok[i0-1] && sm[i0-1] > thr {
-			gap = 0
-		} else {
-			gap++
-		}
-		i0--
-	}
-	for i0 < n-1 && !(ok[i0] && sm[i0] > thr) {
-		i0++
-	}
-	for gap := 0; i1 < n-1 && gap <= 4; {
-		if ok[i1+1] && sm[i1+1] > thr {
-			gap = 0
-		} else {
-			gap++
-		}
-		i1++
-	}
-	for i1 > 0 && !(ok[i1] && sm[i1] > thr) {
-		i1--
-	}
+	sn := spread(smooth(ctl, nil, win))
+	i0, i1 := extend(sm, 3*sn, int(l.t0-lo), int(l.t1-lo))
 	if i1 <= i0 {
 		return l.t0, l.t1, 0
 	}
@@ -463,5 +588,25 @@ func refineEnds(d []float32, w, h int, l line) (float64, float64, float64) {
 	for i := i0; i <= i1; i++ {
 		s += sm[i]
 	}
-	return lo + float64(i0), lo + float64(i1), s / float64(i1-i0+1) / sn
+	snr := s / float64(i1-i0+1) / sn
+	// A faint track sinks below the threshold here and there and would end
+	// there: it is followed on averaged over a longer piece, the points
+	// clipped so that a star on it or beside it does not stop it. The end is
+	// where the signal falls to half that of the track.
+	lim := 4 * spread(ctl)
+	clip := func(v []float64) []float64 {
+		out := make([]float64, len(v))
+		for i, x := range v {
+			out[i] = math.Max(-lim, math.Min(lim, x))
+		}
+		return out
+	}
+	lsm := smooth(clip(on), ok, longWin)
+	level := append([]float64(nil), lsm[i0:i1+1]...)
+	sort.Float64s(level)
+	thr := math.Max(3*spread(smooth(clip(ctl), nil, longWin)), level[len(level)/2]/2)
+	if j0, j1 := extend(lsm, thr, i0, i1); j1 > j0 {
+		i0, i1 = min(i0, j0), max(i1, j1)
+	}
+	return lo + float64(i0), lo + float64(i1), snr
 }

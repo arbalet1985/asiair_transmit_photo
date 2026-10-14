@@ -473,6 +473,10 @@ func main() {
 	w.speedChanged()
 	w.inputChanged()
 	w.pl.init()
+	copyMenu(w.table, w.frameCopies)
+	copyMenu(w.nightTable, nil)
+	copyMenu(w.pl.targetTable, nil)
+	copyMenu(w.pl.stepTable, nil)
 	cleanupUpdate()
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
