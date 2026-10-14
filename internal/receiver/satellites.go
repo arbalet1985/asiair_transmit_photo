@@ -155,6 +155,10 @@ type satState struct {
 	lastTry time.Time
 	err     string // of the last download
 	wake    chan struct{}
+	// the login of Space-Track: the orbits of the past
+	stUser, stPass string
+	histErr        string
+	histTried      map[string]time.Time // nights asked, by their first hour
 }
 
 const (
@@ -165,8 +169,9 @@ const (
 	satBetter = 6 * time.Hour
 )
 
-func newSatState(dir string) *satState {
-	return &satState{store: satellites.Store{Dir: dir, Keep: satKeep}, wake: make(chan struct{}, 1)}
+func newSatState(dir, stUser, stPass string) *satState {
+	return &satState{store: satellites.Store{Dir: dir, Keep: satKeep}, wake: make(chan struct{}, 1),
+		stUser: stUser, stPass: stPass, histTried: map[string]time.Time{}}
 }
 
 func (st *satState) poke() {
@@ -185,6 +190,7 @@ func (s *Server) satelliteWorker(ctx context.Context) {
 		if n := s.quality.markStatic(); n > 0 {
 			log.Printf("Приёмник: неподвижных треков (туманность, галактика — не спутник): %d", n)
 		}
+		s.fetchHistory(ctx)
 		if n := s.identifyPending(ctx); n > 0 {
 			s.quality.save()
 		}
@@ -203,7 +209,7 @@ func (s *Server) satelliteWorker(ctx context.Context) {
 // refreshCatalog downloads the catalogue once a day.
 func (s *Server) refreshCatalog(ctx context.Context) {
 	st := s.sats
-	c := st.store.Catalogs()
+	c := st.store.Downloads()
 	if len(c) > 0 && time.Since(c[len(c)-1].Time) < satRefresh || time.Since(st.lastTry) < satRetry {
 		return
 	}
@@ -378,16 +384,32 @@ func absDur(d time.Duration) time.Duration {
 type satInfo struct {
 	Catalogs int       `json:"catalogs"`
 	Newest   time.Time `json:"newest,omitempty"`
+	Oldest   time.Time `json:"oldest,omitempty"`
 	Error    string    `json:"error,omitempty"`
+	// the orbits of the past from Space-Track
+	History int    `json:"history"`
+	STUser  string `json:"st_user,omitempty"`
+	STSet   bool   `json:"st_set,omitempty"` // the password too
+	HistErr string `json:"hist_err,omitempty"`
 }
 
 func (s *Server) satInfo() satInfo {
-	c := s.sats.store.Catalogs()
+	all := s.sats.store.Catalogs()
+	var c []satellites.CatalogFile
+	hist := 0
+	for _, x := range all {
+		if x.History {
+			hist++
+		} else {
+			c = append(c, x)
+		}
+	}
 	s.sats.mu.Lock()
 	defer s.sats.mu.Unlock()
-	i := satInfo{Catalogs: len(c), Error: s.sats.err}
+	i := satInfo{Catalogs: len(c), Error: s.sats.err, History: hist,
+		STUser: s.sats.stUser, STSet: s.sats.stUser != "" && s.sats.stPass != "", HistErr: s.sats.histErr}
 	if len(c) > 0 {
-		i.Newest = c[len(c)-1].Time
+		i.Newest, i.Oldest = c[len(c)-1].Time, c[0].Time
 	}
 	return i
 }

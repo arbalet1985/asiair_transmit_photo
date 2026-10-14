@@ -108,6 +108,11 @@ type Receiver struct {
 	// UpdateRepo is "owner/name" of the GitHub repository with the releases.
 	UpdateRepo string `yaml:"update_repo"`
 
+	// The login of space-track.org: the orbits of the past, for frames
+	// taken when no catalogue from CelesTrak was downloaded near their time.
+	SpaceTrackUser     string `yaml:"spacetrack_user"`
+	SpaceTrackPassword string `yaml:"spacetrack_password"`
+
 	// Internet: serve the agent API on Listen (reachable from the internet
 	// when the router forwards the port). Missing = true (older settings);
 	// a new receiver starts with false until a way is chosen on the page.

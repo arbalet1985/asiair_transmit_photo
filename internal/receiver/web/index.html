@@ -636,6 +636,18 @@
       <div class="line muted" id="siteNow"></div>
       <div class="hint">Нужны, чтобы показать, на какой высоте была Луна во время съёмки (фаза Луны считается и без них). Долгота к востоку от Гринвича — положительная. ASIAIR обычно записывает координаты в FITS-файлы: тогда приёмник возьмёт их сам.</div>
     </section>
+    <section class="panel" id="orbitsPanel">
+      <h2>Орбиты спутников</h2>
+      <div class="line" id="orbNow">—</div>
+      <div class="line err" id="orbErr"></div>
+      <div class="label" style="margin-top:8px">Архив орбит Space-Track — для старых кадров</div>
+      <div class="field">
+        <input type="text" id="stUser" placeholder="логин (e-mail)" style="flex:1 1 140px;min-width:0" autocomplete="off">
+        <input type="password" id="stPass" placeholder="пароль" style="flex:1 1 120px;min-width:0" autocomplete="new-password">
+        <button class="primary" id="stSave">Сохранить</button>
+      </div>
+      <div class="hint">CelesTrak, откуда приёмник каждый день скачивает каталог, даёт только текущие орбиты, поэтому треки на кадрах, снятых до первого скачанного каталога (или пока приёмник был выключен), опознаются по далёким орбитам и хуже. На <a href="https://www.space-track.org/auth/createAccount" target="_blank" rel="noopener">space-track.org</a> (бесплатная регистрация) есть архив орбит за любую дату: приёмник скачивает орбиты каждой такой ночи один раз, хранит их без срока и заново опознаёт треки её кадров. API-ключей Space-Track не выдаёт, нужны логин и пароль — лучше отдельный пароль, нигде больше не используемый; он хранится в receiver.yaml и на страницу не возвращается. Чтобы удалить вход, сохраните пустой логин.</div>
+    </section>
     <section class="panel" id="startupPanel" hidden>
       <h2>Запуск на этом компьютере</h2>
       <div class="label">Сейчас приёмник работает</div>
@@ -976,7 +988,7 @@
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
       <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
       <div id="vTiltBox" class="hint" hidden></div>
-      <label title="Прямые треки на кадре (спутники, самолёты, метеоры) и какой спутник их оставил: по орбитам из каталога CelesTrak, времени кадра и его астрометрическому решению"><input type="checkbox" id="vSats"> Треки спутников</label>
+      <label title="Прямые треки на кадре (спутники, самолёты, метеоры) и какой спутник их оставил: по орбитам из каталога CelesTrak (для старых кадров — из архива Space-Track), времени кадра и его астрометрическому решению"><input type="checkbox" id="vSats"> Треки спутников</label>
       <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), правая кнопка мыши, долгое нажатие или ⌖ — замер звезды (пересвечена ли), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
@@ -1681,6 +1693,7 @@ function renderStatus() {
   renderSchedule();
   renderCleanup();
   renderSite();
+  renderOrbits();
   renderSummary();
   $("destPath").textContent = state.dest_dir;
   renderDisk(state.disk || {});
@@ -2569,6 +2582,30 @@ $("siteApply").onclick = async () => {
 $("siteDetect").onclick = async () => {
   try { await post("/ui/api/site", { detect: true }); siteEdited = false; toast("Координаты взяты из снимков"); summaryKey = ""; }
   catch (e) { alert(e.message); }
+  refresh();
+};
+// ---------- orbits of the satellites ----------
+let stEdited = false;
+$("stUser").addEventListener("input", () => { stEdited = true; });
+function renderOrbits() {
+  const c = state.satellites || {};
+  const d = t => new Date(t).toLocaleDateString("ru-RU");
+  $("orbNow").textContent = (c.catalogs ? `Каталогов CelesTrak: ${c.catalogs} (с ${d(c.oldest)} по ${d(c.newest)})` : "Каталог CelesTrak ещё не скачан") +
+    (c.history ? ` · ночей из архива Space-Track: ${c.history}` : "");
+  $("orbErr").textContent = [c.error && "CelesTrak: " + c.error, c.hist_err].filter(Boolean).join(" · ");
+  if (!stEdited) $("stUser").value = c.st_user || "";
+  markSecret("stPass", c.st_set, "пароль");
+}
+$("stSave").onclick = async () => {
+  const user = $("stUser").value.trim(), pass = $("stPass").value;
+  const c = state.satellites || {};
+  if (user && !pass && !c.st_set) return alert("Введите пароль Space-Track");
+  if (!user && c.st_user && !confirm("Логин пустой: вход в Space-Track будет удалён. Удалить?")) return;
+  try {
+    await post("/ui/api/spacetrack", pass ? { user, password: pass } : { user });
+    stEdited = false; $("stPass").value = "";
+    toast(user ? "Вход в Space-Track сохранён: архив орбит скачается в фоне" : "Вход в Space-Track удалён");
+  } catch (e) { alert("Ошибка: " + e.message); }
   refresh();
 };
 let siteEdited = false;

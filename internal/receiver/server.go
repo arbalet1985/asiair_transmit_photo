@@ -128,7 +128,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	s.updater = newUpdater(s)
 	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
 	s.quality = newQuality(filepath.Join(cfg.DataDir, "quality.json"))
-	s.sats = newSatState(filepath.Join(cfg.DataDir, "satellites"))
+	s.sats = newSatState(filepath.Join(cfg.DataDir, "satellites"), cfg.SpaceTrackUser, cfg.SpaceTrackPassword)
 	s.weather = &weather.Cache{File: filepath.Join(cfg.DataDir, "weather.json"), UserAgent: "asiair-receiver/" + protocol.Version}
 	s.thumbs, s.thumbSem = newThumbCache(), make(chan struct{}, 2)
 	if !cfg.DisableTLS {
@@ -519,6 +519,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)
 	mux.HandleFunc("/ui/api/order", s.handleUIOrder)
 	mux.HandleFunc("/ui/api/site", s.handleUISite)
+	mux.HandleFunc("/ui/api/spacetrack", s.handleUISpaceTrack)
 	mux.HandleFunc("/ui/api/planner", s.handleUIPlanner)
 	mux.HandleFunc("/ui/api/plan", s.handleUIPlan)
 	mux.HandleFunc("/ui/api/weather", s.handleUIWeather)
