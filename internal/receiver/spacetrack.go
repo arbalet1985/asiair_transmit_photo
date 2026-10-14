@@ -43,7 +43,7 @@ func (s *Server) historyWanted() []histNightOf {
 	var starts []time.Time
 	s.quality.mu.Lock()
 	for _, e := range s.quality.m {
-		if e.Start == 0 || e.TV < trackVersion {
+		if e.Start == 0 {
 			continue
 		}
 		moving := false
