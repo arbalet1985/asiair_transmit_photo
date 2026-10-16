@@ -84,6 +84,12 @@ func TestCache(t *testing.T) {
 	if f, err = c.Get(ctx, 45, 10); f != nil || err == nil || calls.Load() != 2 {
 		t.Fatalf("%v %v %d", f, err, calls.Load())
 	}
+	// nothing to show there: asked again after 10 minutes, not an hour
+	c.saved.Tried = time.Now().Add(-11 * time.Minute)
+	fail = false
+	if f, err = c.Get(ctx, 45, 10); f == nil || err != nil || calls.Load() != 3 {
+		t.Fatalf("not asked again after 11 minutes: %v %v %d", f, err, calls.Load())
+	}
 }
 
 func TestSummary(t *testing.T) {
