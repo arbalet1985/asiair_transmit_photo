@@ -151,7 +151,7 @@ type Cache struct {
 	File      string
 	UserAgent string
 	MinAge    time.Duration // 0: 3 hours
-	Retry     time.Duration // 0: 1 hour
+	Retry     time.Duration // 0: 1 hour; 10 minutes while there is no forecast to show
 	Client    *http.Client  // nil: one with a timeout
 
 	mu     sync.Mutex
@@ -193,6 +193,9 @@ func (c *Cache) Get(ctx context.Context, lat, lon float64) (*Forecast, error) {
 	if !near(kept, lat, lon) {
 		kept = nil
 	}
+	if kept == nil && c.Retry <= 0 {
+		retry = 10 * time.Minute // nothing to show: Open-Meteo is asked again sooner
+	}
 	now := time.Now()
 	if kept != nil && now.Sub(kept.Fetched) < minAge {
 		return kept, nil
@@ -205,9 +208,9 @@ func (c *Cache) Get(ctx context.Context, lat, lon float64) (*Forecast, error) {
 	}
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = &http.Client{Timeout: 45 * time.Second} // Open-Meteo is slow to answer at times
 	}
-	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	fctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	f, err := Fetch(fctx, client, c.UserAgent, lat, lon)
 	cancel()
 	if ctx.Err() != nil {
