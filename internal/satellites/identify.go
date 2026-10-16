@@ -252,6 +252,11 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 	half := sl / 2 / speed
 	ta, tb := bt-half, bt+half
 	predicted := speed * exp
+	// how far the passage of the track lies outside the exposure: for a
+	// piece much shorter than the path in the exposure (a flash, the shadow
+	// of the Earth, or the rest of the track too faint to be found) only
+	// that is known
+	during := math.Max(0, math.Max(-ta, tb-exp))
 	var off float64
 	switch {
 	case !s.Edge0 && !s.Edge1:
@@ -260,10 +265,13 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 		// path then (it may be shorter: a flash, the shadow of the Earth)
 		// longer by up to half: the end of a faint track is followed on to
 		// a star lying on its line
-		if sl > 1.5*predicted+20 || sl < 0.25*predicted {
+		if sl > 1.5*predicted+20 {
 			return m, false
 		}
 		off = bt - exp/2
+		if sl < 0.25*predicted {
+			off = during
+		}
 	case s.Edge0 != s.Edge1:
 		// one end inside: there the exposure started or ended
 		if sl > 1.3*predicted+20 {
@@ -273,6 +281,9 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 			off = tb - exp // the inner end is the later one: the exposure ended there
 		} else {
 			off = ta // the earlier one: it started there
+		}
+		if math.Abs(off) > slack && sl < 0.5*predicted {
+			off = during // the inner end is where it faded, not where the exposure began or ended
 		}
 	default:
 		// across the whole frame: passed during the exposure
