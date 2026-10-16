@@ -455,6 +455,8 @@ func main() {
 										ToolTipText: "Растяжка цветного кадра: всех каналов вместе (цвета как на матрице) или каждого отдельно (фон серый), как в приёмнике"},
 									CheckBox{AssignTo: &w.tiltBox, Text: "Тилт", Checked: s.ShowTilt, OnCheckedChanged: w.tiltToggled,
 										ToolTipText: "Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, не во время блинка"},
+									PushButton{Text: "Тилт камеры…", OnClicked: w.cameraTilt,
+										ToolTipText: "Тилт каждой камеры по показанным в таблице кадрам: до 40 кадров каждой камеры, равномерно по времени; углы каждого кадра — относительно его среднего, кадры-выбросы отбрасываются, берётся медиана"},
 									CheckBox{AssignTo: &w.satBox, Text: "Спутники", Checked: !s.HideTracks, OnCheckedChanged: w.satsToggled,
 										ToolTipText: "Треки спутников (самолётов, метеоров) на кадре и какой спутник их оставил — по каталогу орбит CelesTrak, как в приёмнике"},
 									PushButton{Text: "Space-Track…", OnClicked: w.spaceTrackDialog,

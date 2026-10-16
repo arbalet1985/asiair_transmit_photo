@@ -1,7 +1,6 @@
 package receiver
 
 import (
-	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -31,28 +30,14 @@ func (s *Server) handleUITilt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	local := s.getStore().Local(p)
-	st, err := os.Stat(local)
-	if err != nil {
+	if _, err := os.Stat(local); err != nil {
 		http.Error(w, "файл не найден", http.StatusNotFound)
 		return
 	}
-	key := fmt.Sprintf("%s|%d|%d", local, st.Size(), st.ModTime().UnixNano())
-	c := &s.tilts
-	c.mu.Lock()
-	t, ok := c.items[key]
-	c.mu.Unlock()
-	if !ok {
-		t, err = stars.TiltFile(local)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-			return
-		}
-		c.mu.Lock()
-		if c.items == nil || len(c.items) >= tiltCacheMax {
-			c.items = map[string]stars.Tilt{}
-		}
-		c.items[key] = t
-		c.mu.Unlock()
+	t, err := s.tiltOf(p, local)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	}
 	writeJSON(w, t)
 }
