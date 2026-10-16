@@ -18,11 +18,11 @@ import (
 )
 
 // The tilt of each camera over many frames (stars.SummarizeTilt): a
-// background job measures the tilt of up to tiltPerCamera frames of each
-// optical train, spread over the nights, and sums them up.
+// background job measures the tilt of the newest tiltPerCamera frames of
+// each optical train and sums them up.
 
 const (
-	tiltPerCamera = 40
+	tiltPerCamera = 300
 	tiltMinStars  = 80 // frames with fewer stars (clouds) are not taken
 )
 
@@ -34,6 +34,7 @@ type cameraTilt struct {
 	Width   int               `json:"width"`
 	Height  int               `json:"height"`
 	Frames  int               `json:"frames"` // of this camera here
+	Taken   int               `json:"taken"`  // the newest of them measured
 	Failed  int               `json:"failed,omitempty"`
 	OK      bool              `json:"ok"`
 	Summary stars.TiltSummary `json:"summary"`
@@ -156,20 +157,17 @@ func (s *Server) cameraTilts(ctx context.Context) {
 		}
 		g.frames = append(g.frames, tiltFrame{c.path, local, time.UnixMilli(c.e.Start)})
 	}
-	// up to tiltPerCamera frames of each, spread evenly over time
+	// the newest tiltPerCamera frames of each
 	total := 0
 	for _, g := range groups {
-		sort.Slice(g.frames, func(a, b int) bool { return g.frames[a].start.Before(g.frames[b].start) })
+		sort.Slice(g.frames, func(a, b int) bool { return g.frames[a].start.After(g.frames[b].start) })
 		g.ct.Frames = len(g.frames)
-		if n := len(g.frames); n > 0 {
-			g.ct.First, g.ct.Last = g.frames[0].start, g.frames[n-1].start
+		if len(g.frames) > tiltPerCamera {
+			g.frames = g.frames[:tiltPerCamera]
 		}
-		if n := len(g.frames); n > tiltPerCamera {
-			pick := make([]tiltFrame, tiltPerCamera)
-			for i := range pick {
-				pick[i] = g.frames[i*(n-1)/(tiltPerCamera-1)]
-			}
-			g.frames = pick
+		g.ct.Taken = len(g.frames)
+		if n := len(g.frames); n > 0 {
+			g.ct.First, g.ct.Last = g.frames[n-1].start, g.frames[0].start
 		}
 		total += len(g.frames)
 	}

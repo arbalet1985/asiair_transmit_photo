@@ -14,10 +14,10 @@ import (
 )
 
 // The tilt of each camera over the frames shown (stars.SummarizeTilt), as
-// in the receiver: up to camTiltFrames frames of each camera, spread over
-// time, are measured and summed up with the outliers left out.
+// in the receiver: the newest camTiltFrames frames of each camera are
+// measured and summed up with the outliers left out.
 
-const camTiltFrames = 40
+const camTiltFrames = 300
 
 var camTiltBusy atomic.Bool
 
@@ -52,13 +52,9 @@ func (w *window) cameraTilt() {
 	total := 0
 	for _, k := range keys {
 		g := groups[k]
-		sort.Slice(g, func(a, b int) bool { return g[a].f.UTC.Before(g[b].f.UTC) })
-		if n := len(g); n > camTiltFrames {
-			pick := make([]item, camTiltFrames)
-			for i := range pick {
-				pick[i] = g[i*(n-1)/(camTiltFrames-1)]
-			}
-			groups[k] = pick
+		sort.Slice(g, func(a, b int) bool { return g[a].f.UTC.After(g[b].f.UTC) })
+		if len(g) > camTiltFrames {
+			groups[k] = g[:camTiltFrames]
 		}
 		total += len(groups[k])
 	}
@@ -98,7 +94,7 @@ func (w *window) cameraTilt() {
 				})
 			}
 			s, ok := stars.SummarizeTilt(ts)
-			fmt.Fprintf(&b, "%s — кадров в таблице: %d\r\n", k, shown[k])
+			fmt.Fprintf(&b, "%s — кадров в таблице: %d, взято ближайших по времени: %d\r\n", k, shown[k], len(groups[k]))
 			if !ok {
 				fmt.Fprintf(&b, "  мало кадров, на которых тилт удалось измерить (%d, не удалось: %d)\r\n\r\n", len(ts), failed)
 				continue
@@ -155,13 +151,13 @@ func (w *window) showCameraTilt(text string) {
 	var ok *walk.PushButton
 	Dialog{
 		AssignTo:      &dlg,
-		Title:         "Тилт камеры по кадрам",
+		Title:         "Тилт по 300 ближайшим кадрам",
 		DefaultButton: &ok,
 		CancelButton:  &ok,
 		MinSize:       Size{Width: 640, Height: 460},
 		Layout:        VBox{},
 		Children: []Widget{
-			Label{Text: "Для каждой камеры — до 40 показанных в таблице кадров, взятых равномерно по времени. Углы каждого кадра берутся\r\n" +
+			Label{Text: "Для каждой камеры — 300 ближайших по времени (последних) кадров из показанных в таблице. Углы каждого кадра берутся\r\n" +
 				"относительно его среднего (так уходят фокус, атмосфера и фильтр), кадры с перекосом, далёким от остальных, отбрасываются,\r\n" +
 				"а по остальным берётся медиана."},
 			TextEdit{ReadOnly: true, VScroll: true, Text: text, Font: Font{Family: "Consolas", PointSize: 10}},

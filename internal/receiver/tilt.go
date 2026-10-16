@@ -15,7 +15,7 @@ type tiltCache struct {
 	items map[string]stars.Tilt
 }
 
-const tiltCacheMax = 500
+const tiltCacheMax = 2000 // the camera tilt takes up to 300 frames of each camera
 
 // handleUITilt: GET ?path= measures the tilt of the sensor on a received
 // FITS frame, as Siril's "tilt" command does.
