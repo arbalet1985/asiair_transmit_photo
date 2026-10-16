@@ -245,13 +245,21 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 	sl := math.Hypot(s.X1-s.X0, s.Y1-s.Y0)
 	cosA := math.Abs(((s.X1-s.X0)*bdx + (s.Y1-s.Y0)*bdy) / (sl * math.Hypot(bdx, bdy)))
 	angle := math.Acos(math.Min(1, cosA)) * 180 / math.Pi
-	if cross > crossTol || angle > angTol {
+	// the direction of a short piece is uncertain (its ends are found to a
+	// few pixels): one whose both ends lie on the path is taken too
+	if cross > crossTol || angle > angTol && (angle > 4*angTol ||
+		math.Max(pathDist(path, s.X0, s.Y0), pathDist(path, s.X1, s.Y1))*scale > crossTol) {
 		return m, false
 	}
 	// along the path: when the ends of the track were passed
 	half := sl / 2 / speed
 	ta, tb := bt-half, bt+half
 	predicted := speed * exp
+	// how far the passage of the track lies outside the exposure: for a
+	// piece much shorter than the path in the exposure (a flash, the shadow
+	// of the Earth, or the rest of the track too faint to be found) only
+	// that is known
+	during := math.Max(0, math.Max(-ta, tb-exp))
 	var off float64
 	switch {
 	case !s.Edge0 && !s.Edge1:
@@ -260,10 +268,13 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 		// path then (it may be shorter: a flash, the shadow of the Earth)
 		// longer by up to half: the end of a faint track is followed on to
 		// a star lying on its line
-		if sl > 1.5*predicted+20 || sl < 0.25*predicted {
+		if sl > 1.5*predicted+20 {
 			return m, false
 		}
 		off = bt - exp/2
+		if sl < 0.25*predicted {
+			off = during
+		}
 	case s.Edge0 != s.Edge1:
 		// one end inside: there the exposure started or ended
 		if sl > 1.3*predicted+20 {
@@ -273,6 +284,9 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 			off = tb - exp // the inner end is the later one: the exposure ended there
 		} else {
 			off = ta // the earlier one: it started there
+		}
+		if math.Abs(off) > slack && sl < 0.5*predicted {
+			off = during // the inner end is where it faded, not where the exposure began or ended
 		}
 	default:
 		// across the whole frame: passed during the exposure
@@ -287,6 +301,22 @@ func fitPath(f Frame, s Streak, path []sample, scale, slack, age float64) (Match
 	m.Offset, m.Cross, m.Angle = off, cross, angle
 	m.score = (cross/crossTol)*(cross/crossTol) + (angle/angTol)*(angle/angTol) + (off/slack)*(off/slack)
 	return m, true
+}
+
+// pathDist: the distance in pixels from a point to the path.
+func pathDist(path []sample, x, y float64) float64 {
+	best := math.Inf(1)
+	for i := 1; i < len(path); i++ {
+		a, b := path[i-1], path[i]
+		dx, dy := b.x-a.x, b.y-a.y
+		l2 := dx*dx + dy*dy
+		u := 0.0
+		if l2 > 0 {
+			u = math.Max(0, math.Min(1, ((x-a.x)*dx+(y-a.y)*dy)/l2))
+		}
+		best = math.Min(best, math.Hypot(a.x+u*dx-x, a.y+u*dy-y))
+	}
+	return best
 }
 
 func atoi(s string) int { return int(atof(s)) }

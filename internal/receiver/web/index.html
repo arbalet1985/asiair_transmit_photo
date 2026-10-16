@@ -269,6 +269,10 @@
   .tile input[type=checkbox] { position: absolute; top: 6px; left: 6px; width: 18px; height: 18px; }
   .tile .badge { position: absolute; top: 6px; right: 6px; }
   .qbad { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+  .camtilt { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+  .camtilt-h { font-weight: 600; }
+  .camtilt-g { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; max-width: 240px; margin: 6px 0; }
+  .camtilt-c { border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
   .qsat { background: color-mix(in srgb, #3bb4e5 22%, transparent); color: #3bb4e5; }
   .usage { margin-top: 10px; font-size: 13px; }
   .usage .row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 80px; gap: 8px; align-items: center; margin: 2px 0; }
@@ -1003,11 +1007,23 @@
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
       <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
       <div id="vTiltBox" class="hint" hidden></div>
+      <button id="vCamTilt" title="Тилт каждой камеры с объективом по 300 ближайшим по времени (последним) кадрам; углы каждого кадра — относительно его среднего, кадры-выбросы отбрасываются, берётся медиана">Тилт по 300 ближайшим кадрам…</button>
       <label title="Прямые треки на кадре (спутники, самолёты, метеоры) и какой спутник их оставил: по орбитам из каталога CelesTrak (для старых кадров — из архива Space-Track), времени кадра и его астрометрическому решению"><input type="checkbox" id="vSats"> Треки спутников</label>
       <div id="vMoonBox" hidden></div>
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), правая кнопка мыши, долгое нажатие или ⌖ — замер звезды (пересвечена ли), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
     </div>
+  </div>
+</dialog>
+<dialog id="camTiltDlg">
+  <h2>Тилт по 300 ближайшим кадрам</h2>
+  <div class="hint" style="margin-top:0">Для каждой камеры (с объективом и бинингом) приёмник измеряет тилт 300 ближайших по времени, то есть последних, Light-кадров — как команда tilt в Siril. Углы каждого кадра берутся относительно его среднего размера звёзд: так уходят фокус, атмосфера и фильтр. Кадры, перекос которых далёк от остальных (ветер, облако, удар), отбрасываются, а по остальным берётся медиана. Один кадр — около секунды, 300 кадров — минут пять на камеру; считается в фоне, окно можно закрыть.</div>
+  <div class="line" id="ctStatus"></div>
+  <div id="ctBody"></div>
+  <div class="toolbar" style="margin-top:10px">
+    <span class="spacer"></span>
+    <button class="primary" id="ctStart">Посчитать</button>
+    <button id="ctClose">Закрыть</button>
   </div>
 </dialog>
 <dialog id="syncDlg">
@@ -1928,6 +1944,58 @@ $("delBtn").onclick = async () => {
   if (here.length) await deleteHere(here.map(f => f.path));
   if (files.length) queueDelete(files.map(f => f.path), also);
 };
+// ---------- the tilt of each camera over many frames ----------
+let camTiltTimer = 0;
+function camTiltCard(c) {
+  const d = x => new Date(x).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const head = `${c.camera}` + (c.focal ? ` · ${c.focal} мм` : "") + (c.binning > 1 ? ` · бин ${c.binning}` : "") +
+    ` · ${c.width}×${c.height}`;
+  const card = el("div", { className: "camtilt" }, el("div", { className: "camtilt-h", textContent: head }),
+    el("div", { className: "muted", textContent: `кадров: ${c.frames}, взято ближайших: ${c.taken} (${d(c.first)} — ${d(c.last)})` }));
+  if (!c.ok) {
+    card.append(el("div", { className: "muted", textContent: `мало кадров, на которых тилт удалось измерить (${c.summary.frames}` + (c.failed ? `, не удалось: ${c.failed}` : "") + ")" }));
+    return card;
+  }
+  const s = c.summary, k = s.corners;
+  // the corners as a square: the bigger the stars there, the redder
+  const lo = Math.min(...k), hi = Math.max(...k);
+  const cell = (v, arrow) => el("div", { className: "camtilt-c", style: `background:color-mix(in srgb, #ff3b30 ${hi > lo ? Math.round(60 * (v - lo) / (hi - lo)) : 0}%, transparent)`,
+    textContent: `${arrow} ${v.toFixed(2)}` });
+  card.append(el("div", { className: "camtilt-g" }, cell(k[0], "↖"), cell(k[1], "↗"), cell(k[2], "↙"), cell(k[3], "↘")));
+  const steady = s.spread < 0.5 * s.percent;
+  card.append(
+    el("div", { textContent: `Тилт: ${s.tilt.toFixed(2)} px HFR (${Math.round(s.percent)}%)` + (c.bigger ? ` — звёзды крупнее ${c.bigger}` : " — углы почти одинаковы") }),
+    el("div", { textContent: `Разброс по кадрам: ±${s.spread.toFixed(1)}%` + (s.percent >= 5 ? (steady ? " — перекос устойчивый: похоже на наклон матрицы или фокусёра" :
+      " — перекос заметно меняется от кадра к кадру: скорее гидирование, ветер или прогиб, чем наклон матрицы") : "") }),
+    el("div", { textContent: `Вне оси (края − центр): ${s.off_axis.toFixed(2)} px — кривизна поля, кома` }),
+    el("div", { className: "muted", textContent: `Взято кадров: ${s.used} из ${s.frames} измеренных` + (s.frames > s.used ? ` (${s.frames - s.used} отброшены как выбросы)` : "") +
+      (c.failed ? `, не измерено: ${c.failed}` : "") + `; углы — при HFR ${s.hfr.toFixed(2)} px` }));
+  return card;
+}
+function renderCamTilt(r) {
+  const box = $("ctBody");
+  if (r.running) {
+    $("ctStatus").textContent = r.total ? `Измеряю кадры: ${r.done} из ${r.total}…` : "Выбираю кадры…";
+  } else {
+    $("ctStatus").textContent = r.error ? "Ошибка: " + r.error : r.at ? `Посчитано ${new Date(r.at).toLocaleString("ru-RU")}` : "";
+  }
+  $("ctStart").disabled = r.running;
+  $("ctStart").textContent = r.at ? "Посчитать заново" : "Посчитать";
+  box.replaceChildren(...(r.result || []).map(camTiltCard));
+  if (!r.running && r.at && !(r.result || []).length) box.append(el("div", { className: "muted", textContent: "Нет Light-кадров с оценкой по звёздам." }));
+}
+async function pollCamTilt(start) {
+  clearTimeout(camTiltTimer);
+  try {
+    const r = start ? await post("/ui/api/cameratilt", {}) : await (await fetch("/ui/api/cameratilt")).json();
+    renderCamTilt(r);
+    if (r.running && $("camTiltDlg").open) camTiltTimer = setTimeout(() => pollCamTilt(false), 1500);
+  } catch (e) { $("ctStatus").textContent = "Ошибка: " + e.message; }
+}
+$("vCamTilt").onclick = () => { $("camTiltDlg").showModal(); pollCamTilt(false); };
+$("ctStart").onclick = () => pollCamTilt(true);
+$("ctClose").onclick = () => { clearTimeout(camTiltTimer); $("camTiltDlg").close(); };
+
 // deletes the copies here of files the ASIAIR has no more
 async function deleteHere(paths) {
   try {

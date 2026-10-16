@@ -33,7 +33,7 @@ func (c *tiltCache) get(k string) (stars.Tilt, bool) {
 func (c *tiltCache) put(k string, t stars.Tilt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.items == nil || len(c.items) > 500 {
+	if c.items == nil || len(c.items) > 2000 { // the camera tilt takes up to 300 frames of each camera
 		c.items = map[string]stars.Tilt{}
 	}
 	c.items[k] = t

@@ -66,6 +66,7 @@ type Server struct {
 
 	previews *previewCache
 	tilts    tiltCache
+	camTilt  tiltJob // the tilt of each camera over many frames
 
 	stopping chan struct{} // closed when Run ends: held sync requests answer at once
 
@@ -511,6 +512,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/delete_local", s.handleUIDeleteLocal)
+	mux.HandleFunc("/ui/api/cameratilt", s.handleUICameraTilt)
 	mux.HandleFunc("/ui/api/syncdir", s.handleUISyncDir)
 	mux.HandleFunc("/ui/api/rate", s.handleUIRate)
 	mux.HandleFunc("/ui/api/streams", s.handleUIStreams)
