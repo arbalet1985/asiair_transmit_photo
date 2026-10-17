@@ -46,7 +46,11 @@ func (w *window) withTracks(head string) string {
 	if f == nil || len(f.Tracks) == 0 {
 		return head
 	}
-	return "Треки спутников (самолётов, метеоров) на кадре:\r\n" + f.TracksInfo() + "\r\n\r\n" + head
+	t := "Треки спутников (самолётов, метеоров) на кадре:\r\n" + f.TracksInfo()
+	if len(frameSats(f)) > 0 {
+		t += "\r\nВладелец, запуск, орбита, фото и ссылки — правой кнопкой по строке таблицы, «О спутнике …»."
+	}
+	return t + "\r\n\r\n" + head
 }
 
 // tracksChanged shows again the tracks of the frame selected, when they

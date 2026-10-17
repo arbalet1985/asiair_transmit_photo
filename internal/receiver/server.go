@@ -25,6 +25,7 @@ import (
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/satinfo"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/tsnode"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/weather"
@@ -73,6 +74,7 @@ type Server struct {
 	speed      speedLog       // the agent speed of the last hours, for the chart
 	quality    *quality       // stars and HFR of the received Light frames
 	sats       *satState      // orbits of the satellites, for the tracks on the frames
+	satAbout   *satinfo.Store // what open sources tell about the satellites
 	planes     *planeState    // the planes near the observatory (OpenSky)
 	weather    *weather.Cache // the forecast of the clouds for the planner
 	thumbs     *thumbCache    // gallery thumbnails
@@ -131,6 +133,7 @@ func New(cfg *config.Receiver) (*Server, error) {
 	s.speed.load(filepath.Join(cfg.DataDir, "speed-log.json"), time.Now())
 	s.quality = newQuality(filepath.Join(cfg.DataDir, "quality.json"))
 	s.sats = newSatState(filepath.Join(cfg.DataDir, "satellites"), cfg.SpaceTrackUser, cfg.SpaceTrackPassword)
+	s.satAbout = satinfo.New(filepath.Join(cfg.DataDir, "satinfo"), satinfo.UserAgent("asiair-receiver"))
 	s.planes = newPlaneState(filepath.Join(cfg.DataDir, "planes"), cfg.OpenSkyID, cfg.OpenSkySecret)
 	s.weather = &weather.Cache{File: filepath.Join(cfg.DataDir, "weather.json"), UserAgent: "asiair-receiver/" + protocol.Version}
 	s.thumbs, s.thumbSem = newThumbCache(), make(chan struct{}, 2)
@@ -540,6 +543,8 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/sorter", s.handleUISorterUpdate)
 	mux.HandleFunc("/ui/sorter.exe", s.handleUISorterFile)
 	mux.HandleFunc("/ui/api/satcats", s.handleUISatCatalogs)
+	mux.HandleFunc("/ui/api/satinfo", s.handleUISatInfo)
+	mux.HandleFunc("/ui/api/satinfo/photo", s.handleUISatPhoto)
 	mux.HandleFunc("/ui/satcat", s.handleUISatCatalog)
 	mux.HandleFunc("/ui/api/pause", s.handleUIPause)
 	mux.HandleFunc("/ui/api/delpause", s.handleUIDeletePause)

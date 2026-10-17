@@ -72,3 +72,32 @@ func TestDeleteEverywhere(t *testing.T) {
 		}
 	}
 }
+
+func TestSatInfoFromReceiver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ui/api/satinfo":
+			if r.URL.Query().Get("norad") != "25544" || r.URL.Query().Get("name") != "ISS" {
+				http.Error(w, "bad", http.StatusBadRequest)
+				return
+			}
+			w.Write([]byte(`{"norad":25544,"name":"ISS (ZARYA)","photo":{"source":"SatNOGS DB"},"links":[{"name":"N2YO","url":"u"}],"rows":[["a","b"]]}`))
+		case "/ui/api/satinfo/photo":
+			w.Write([]byte("jpeg"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	r, _ := NewReceiver(srv.URL, "", "")
+	i, err := r.SatInfo(context.Background(), 25544, "ISS")
+	if err != nil || i.Name != "ISS (ZARYA)" || i.Photo == nil || len(i.Links) != 1 {
+		t.Fatalf("%+v %v", i, err)
+	}
+	if b, err := r.SatPhoto(context.Background(), 25544); err != nil || string(b) != "jpeg" {
+		t.Errorf("photo %q %v", b, err)
+	}
+	if _, err := r.SatInfo(context.Background(), 1, "x"); err == nil {
+		t.Error("an error is not told")
+	}
+}

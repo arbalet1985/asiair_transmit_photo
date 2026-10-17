@@ -250,6 +250,10 @@ func (w *window) frameCopies(i int) []copyItem {
 	if r.it != nil && !r.it.Dup && w.scannedOut != "" {
 		items = append(items, copyItem{label: "Копировать путь «Куда»", text: filepath.Join(w.scannedOut, filepath.FromSlash(r.it.Dest))})
 	}
+	if sats := w.satInfoItems(i); len(sats) > 0 {
+		items = append(items, copyItem{})
+		items = append(items, sats...)
+	}
 	if !w.busy {
 		items = append(items, copyItem{}, copyItem{label: w.deleteLabel(i), run: func() { w.deleteEverywhere(i) }})
 	}

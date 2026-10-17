@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/satellites"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/satinfo"
 )
 
 // trackEntry is a straight track found on a frame, in its pixels (0-based,
@@ -493,4 +495,49 @@ func (s *Server) handleUISatCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "нет такого каталога орбит", http.StatusNotFound)
+}
+
+// handleUISatInfo tells what open sources know about a satellite (asked
+// once, then kept), for the page and the sorters.
+func (s *Server) handleUISatInfo(w http.ResponseWriter, r *http.Request) {
+	norad, err := strconv.Atoi(r.URL.Query().Get("norad"))
+	if err != nil || norad <= 0 || norad > 999999999 {
+		http.Error(w, "нужен номер NORAD", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	i, err := s.satAbout.Get(ctx, norad, strings.TrimSpace(r.URL.Query().Get("name")))
+	if err != nil {
+		log.Printf("Сведения о спутнике %d не получены: %v", norad, err)
+		http.Error(w, "сведения о спутнике не получены: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, struct {
+		*satinfo.Info
+		Rows [][2]string `json:"rows"`
+	}{i, i.Lines()})
+}
+
+// handleUISatPhoto sends the picture of a satellite found by handleUISatInfo.
+func (s *Server) handleUISatPhoto(w http.ResponseWriter, r *http.Request) {
+	norad, err := strconv.Atoi(r.URL.Query().Get("norad"))
+	if err != nil || norad <= 0 {
+		http.Error(w, "нужен номер NORAD", http.StatusBadRequest)
+		return
+	}
+	f, err := os.Open(s.satAbout.PhotoPath(norad))
+	if err != nil {
+		http.Error(w, "картинки нет", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeContent(w, r, "", st.ModTime(), f)
 }
