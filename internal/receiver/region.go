@@ -51,3 +51,34 @@ func (s *Server) handleUIRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, reg)
 }
+
+// handleUISaturated: GET ?path= finds the saturated areas of a received
+// FITS frame, read from the file itself at its full resolution.
+func (s *Server) handleUISaturated(w http.ResponseWriter, r *http.Request) {
+	p, err := CleanPath(r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !isFITS(p) {
+		http.Error(w, "не FITS-файл", http.StatusBadRequest)
+		return
+	}
+	f, err := os.Open(s.getStore().Local(p))
+	if err != nil {
+		http.Error(w, "файл не найден", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a, err := fits.ReadSaturated(f, st.Size())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, a)
+}

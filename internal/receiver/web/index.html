@@ -121,7 +121,7 @@
   /* a long press measures: no callout or text selection on the picture */
   .vimg canvas { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   .vimg.probe canvas { cursor: crosshair; }
-  #vProbeMode.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #vProbeMode.on, #vSatMode.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .vprobe { position: fixed; z-index: 10; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 6px 24px rgba(0,0,0,.45); padding: 8px 10px; font-size: 12px; max-width: 320px; }
   .vprobe .verdict { font-weight: 600; margin-right: 22px; }
@@ -1003,6 +1003,8 @@
       <div id="vStats" hidden>
         <h3 title="Статистика всего кадра в полном разрешении (не превью), как Statistics в PixInsight. У цветного кадра — по цветам матрицы">Статистика кадра</h3>
         <div class="tablewrap"><table class="vstats"><tbody id="vStatsBody"></tbody></table></div>
+        <button id="vSatMode" title="Обвести красными кружками пересвеченные области кадра: пиксели не ниже уровня насыщения (как строка saturated), по исходному файлу в полном разрешении. Остаётся включённым при листании">◯ Обвести пересвеченные</button>
+        <div id="vSatBox" class="hint" hidden></div>
       </div>
       <label title="Где была Луна и какая у неё фаза в момент съёмки кадра"><input type="checkbox" id="vMoon"> Луна в момент кадра</label>
       <label title="Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR, усечённое среднее) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, около секунды"><input type="checkbox" id="vTilt"> Тилт матрицы (как в Siril)</label>
@@ -4681,7 +4683,54 @@ function renderViewer() {
   ctx.putImageData(out, 0, 0);
   if ($("vTilt").checked && im.tilt) drawTilt(ctx, im);
   if ($("vSats").checked) drawTracks(ctx, im);
+  if (V.satOn && im.satAreas) drawSaturated(ctx, im);
   if (V.probe) drawProbe(ctx, im);
+}
+// the saturated areas of the frame, circled
+function drawSaturated(ctx, im) {
+  const a = im.satAreas, k = im.width / a.width, lw = Math.max(1.5, im.width / 600), rmin = Math.max(6, im.width / 150);
+  ctx.save();
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = "#ff3b30";
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 3;
+  ctx.beginPath();
+  for (const s of a.spots) {
+    const x = (s.x + 0.5) * k, y = (s.y + 0.5) * k, r = Math.max(rmin, s.r * k + lw);
+    ctx.moveTo(x + r, y);
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+// the saturated areas of the frame shown, found on the receiver
+const satCache = new Map();
+async function showSaturated(f, im) {
+  const box = $("vSatBox");
+  box.hidden = !V.satOn || !im;
+  if (box.hidden) return;
+  if (V.play && !im.satAreas) { box.textContent = "Пересвет — после блинка"; return; }
+  if (!im.satAreas) {
+    box.textContent = "Ищу пересвеченные области…";
+    let a = satCache.get(f.path);
+    try {
+      if (!a) {
+        const resp = await fetch("/ui/api/saturated?path=" + encodeURIComponent(f.path));
+        if (!resp.ok) throw new Error(await resp.text());
+        a = await resp.json();
+        if (satCache.size > 200) satCache.clear();
+        satCache.set(f.path, a);
+      }
+    } catch (e) {
+      if (V.img === im) box.textContent = "Пересвет: " + e.message;
+      return;
+    }
+    im.satAreas = a;
+    if (V.img !== im) return;
+    renderViewer();
+  }
+  const a = im.satAreas;
+  box.textContent = !a.count ? "Пересвеченных пикселей нет"
+    : `Пересвеченных областей: ${a.count} (${a.pixels} пикс. не ниже ${ru(a.saturation)})` + (a.count > a.spots.length ? `, обведены ${a.spots.length} крупнейших` : "");
 }
 // the tracks found on the frame, with what left them
 function drawTracks(ctx, im) {
@@ -4922,6 +4971,7 @@ async function showFile() {
     place(node);
     if (im) drawHist(); else $("vHistBox").hidden = true;
     showTilt(f, im);
+    showSaturated(f, im);
     if (V.probe) { if (im) probe(); else closeProbe(); }
     showInfo(f, im);
     V.meta = im;
@@ -5203,6 +5253,17 @@ $("vSats").onchange = () => {
   store.set("vSats", $("vSats").checked);
   for (const e of vCache.values()) if (e.img) e.img.drawn = "";
   if (V.img) computeStretch();
+};
+V.satOn = !!store.get("vSatOn", false);
+$("vSatMode").classList.toggle("on", V.satOn);
+$("vSatMode").onclick = () => {
+  V.satOn = !V.satOn;
+  store.set("vSatOn", V.satOn);
+  $("vSatMode").classList.toggle("on", V.satOn);
+  // the frames kept are drawn again: with the circles or without them
+  for (const e of vCache.values()) if (e.img) e.img.drawn = "";
+  if (V.img) { computeStretch(); showSaturated(V.list[V.idx], V.img); }
+  else $("vSatBox").hidden = true;
 };
 $("vTilt").checked = !!store.get("vTilt", false);
 $("vTilt").onchange = () => {

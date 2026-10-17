@@ -116,6 +116,9 @@ func (w *window) showTilt(t *stars.Tilt, note string) {
 	case note != "":
 		info += " · " + note
 	}
+	if s := w.satAreasText(); s != "" && info != "" {
+		info += " · " + s
+	}
 	if info != "" {
 		setLong(w.previewInfo, info)
 		w.header.SetText(w.withTracks(head))

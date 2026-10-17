@@ -115,3 +115,29 @@ func TestUIRegion(t *testing.T) {
 		t.Fatalf("no file: %d", rec.Code)
 	}
 }
+
+func TestUISaturated(t *testing.T) {
+	s, _ := newTestServer(t)
+	ui := s.uiHandler()
+	p := "EMMC Images/Light/M42/a.fit"
+	writeFITS(t, s.getStore().Local(p), 300, 200)
+	get := func(q string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		ui.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/api/saturated?"+q, nil))
+		return rec
+	}
+	rec := get("path=" + url.QueryEscape(p))
+	if rec.Code != 200 {
+		t.Fatalf("saturated: %d %s", rec.Code, rec.Body)
+	}
+	var a fits.SaturatedAreas
+	if err := json.Unmarshal(rec.Body.Bytes(), &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.Width != 300 || a.Height != 200 || a.Saturation <= 0 {
+		t.Fatalf("%+v", a)
+	}
+	if rec := get("path=" + url.QueryEscape("EMMC Images/Light/M42/none.fit")); rec.Code != 404 {
+		t.Fatalf("missing file: %d", rec.Code)
+	}
+}
