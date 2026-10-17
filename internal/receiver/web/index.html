@@ -86,6 +86,11 @@
   dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); padding: 16px; width: min(640px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   dialog h2 { font-size: 15px; margin: 0 0 10px; }
+  .satphoto { margin: 0 0 10px; }
+  .satphoto img { display: block; max-width: 100%; max-height: 360px; border-radius: 8px; background: #fff; }
+  .satphoto figcaption { font-size: 12px; margin-top: 4px; }
+  .satlinks { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; }
+  .satmore { margin-left: 6px; padding: 0 8px; font-size: 12px; }
   .crumbs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   .dirlist { border: 1px solid var(--border); border-radius: 6px; height: 300px; overflow-y: auto; margin-bottom: 10px; }
   .dirlist div { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
@@ -1015,6 +1020,14 @@
       <div class="hint">← → листать (на телефоне — смахнуть), Delete — отметить, щелчок по кадру или + − 0 — масштаб, пробел или ▶ — блинк (масштаб и место на кадре сохраняются), правая кнопка мыши, долгое нажатие или ⌖ — замер звезды (пересвечена ли), Esc — закрыть.</div>
       <div class="toolbar" style="margin-top:10px"><button class="danger" id="vDelete">Удалить отмеченные на ASIAIR…</button></div>
     </div>
+  </div>
+</dialog>
+<dialog id="satDlg">
+  <h2 id="siTitle"></h2>
+  <div id="siBody"></div>
+  <div class="toolbar" style="margin-top:10px">
+    <span class="spacer"></span>
+    <button id="siClose">Закрыть</button>
   </div>
 </dialog>
 <dialog id="camTiltDlg">
@@ -1994,6 +2007,49 @@ async function pollCamTilt(start) {
     if (r.running && $("camTiltDlg").open) camTiltTimer = setTimeout(() => pollCamTilt(false), 1500);
   } catch (e) { $("ctStatus").textContent = "Ошибка: " + e.message; }
 }
+// ---------- what open sources know about a satellite ----------
+let satInfoReq = 0;
+async function openSatInfo(sat) {
+  const req = ++satInfoReq, body = $("siBody");
+  $("siTitle").textContent = `${sat.name} (NORAD ${sat.norad})`;
+  body.replaceChildren(el("div", { className: "muted", textContent: "Ищу сведения в CelesTrak, SatNOGS и Wikidata… (первый раз — до минуты, потом сразу)" }));
+  $("satDlg").showModal();
+  let i;
+  try {
+    const r = await fetch(`/ui/api/satinfo?norad=${sat.norad}&name=${encodeURIComponent(sat.name)}`);
+    if (!r.ok) throw new Error(await r.text());
+    i = await r.json();
+  } catch (e) {
+    if (req === satInfoReq) body.replaceChildren(el("div", { textContent: "Не получилось: " + e.message }), satLinks(sat.norad, []));
+    return;
+  }
+  if (req !== satInfoReq) return;
+  if (i.name) $("siTitle").textContent = `${i.name} (NORAD ${i.norad})`;
+  const kids = [];
+  if (i.photo) {
+    const cap = el("figcaption", { className: "muted" });
+    if (i.photo.of_type) cap.append(el("b", { textContent: `Спутник того же типа (${i.photo.of_type}), не этот. ` }));
+    const credit = [i.photo.author, i.photo.license].filter(Boolean).join(", ");
+    cap.append(i.photo.page ? el("a", { href: i.photo.page, target: "_blank", rel: "noopener", textContent: i.photo.source }) : i.photo.source,
+      credit ? ", " + credit : "");
+    kids.push(el("figure", { className: "satphoto" },
+      el("img", { src: `/ui/api/satinfo/photo?norad=${i.norad}&t=${encodeURIComponent(i.fetched)}`, alt: i.name || "" }), cap));
+  } else {
+    kids.push(el("div", { className: "muted", textContent: "Фотографии в открытых источниках нет." }));
+  }
+  const dl = el("dl", { className: "kv" });
+  for (const [k, v] of i.rows || []) dl.append(el("dt", { textContent: k }), el("dd", { textContent: v }));
+  kids.push(dl, satLinks(i.norad, i.links || []));
+  if (i.errors && i.errors.length) kids.push(el("div", { className: "muted", style: "margin-top:8px",
+    textContent: "Не ответили (спросим позже): " + i.errors.join("; ") }));
+  body.replaceChildren(...kids);
+}
+function satLinks(norad, links) {
+  if (!links.length) links = [{ name: "N2YO", url: `https://www.n2yo.com/satellite/?s=${norad}` },
+    { name: "Heavens-Above", url: `https://www.heavens-above.com/SatInfo.aspx?satid=${norad}` }];
+  return el("div", { className: "satlinks" }, ...links.map(l => el("a", { href: l.url, target: "_blank", rel: "noopener", textContent: l.name + " ↗" })));
+}
+$("siClose").onclick = () => { satInfoReq++; $("satDlg").close(); };
 $("vCamTilt").onclick = () => { $("camTiltDlg").showModal(); pollCamTilt(false); };
 $("ctStart").onclick = () => pollCamTilt(true);
 $("ctClose").onclick = () => { clearTimeout(camTiltTimer); $("camTiltDlg").close(); };
@@ -4843,7 +4899,11 @@ function showInfo(f, meta) {
     if (cur.sat_px != null || cur.bg) add("Пересвечено", cur.sat_px ? `${cur.sat_px} пикс. (${cur.sat_pct >= 0.01 ? cur.sat_pct.toFixed(2) : "<0,01"}% кадра)` : "нет");
     const j = judge(cur);
     if (j && j.bad) add("Качество", "⚠ " + j.why);
-    (cur.tracks || []).forEach((t, i) => add(cur.tracks.length > 1 ? `Трек ${i + 1}` : "Трек", trackText(cur, t)));
+    (cur.tracks || []).forEach((t, i) => {
+      add(cur.tracks.length > 1 ? `Трек ${i + 1}` : "Трек", trackText(cur, t));
+      if (t.sat) dl.lastChild.append(el("button", { className: "satmore", textContent: "о спутнике…",
+        title: "Что известно о спутнике: владелец, запуск, орбита, фотография и ссылки (CelesTrak, SatNOGS, Wikidata)", onclick: () => openSatInfo(t.sat) }));
+    });
   }
   if (meta) {
     add("Кадр", `${meta.source[0]}×${meta.source[1]}` + (meta.bayer ? " (цветной, " + meta.bayer + ")" : meta.channels === 3 ? " (RGB)" : " (ч/б)"));
