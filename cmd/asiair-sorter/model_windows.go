@@ -82,6 +82,7 @@ type frameModel struct {
 	only      map[*sorter.Item]bool // the frames of a line of the summary, nil = all
 	words     []string              // the filter: every word is somewhere in the row
 	object    string                // the object chosen (normObject), "" = all
+	wheel     string                // the filter of the filter wheel, "" = all, noFilter = frames without one
 	folders   map[string]folderTotal
 	shown     folderTotal // of the rows shown
 	// gone: the frames of the output the receiver of the input has no more
@@ -314,6 +315,44 @@ func (m *frameModel) setObject(text string) {
 	m.filter()
 }
 
+// The lines of the filter box: all frames, the frames taken without a
+// filter (the first line and the last one).
+const (
+	allFilters   = "все фильтры"
+	noFilterText = "без фильтра"
+	noFilter     = "\x00" // m.wheel for the frames without a filter
+)
+
+// filters lists the filters of the frames, each once whatever its case,
+// and whether some frames have none.
+func (m *frameModel) filters() (names []string, none bool) {
+	seen := map[string]bool{}
+	for _, r := range m.all {
+		f := strings.TrimSpace(r.f.Filter)
+		if f == "" {
+			none = true
+			continue
+		}
+		if !seen[strings.ToLower(f)] {
+			seen[strings.ToLower(f)] = true
+			names = append(names, f)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return sorter.NaturalLess(strings.ToLower(names[i]), strings.ToLower(names[j])) })
+	return names, none
+}
+
+// wheelMatches: the frame was taken with the filter chosen.
+func (m *frameModel) wheelMatches(f *sorter.Frame) bool {
+	switch m.wheel {
+	case "":
+		return true
+	case noFilter:
+		return strings.TrimSpace(f.Filter) == ""
+	}
+	return strings.EqualFold(strings.TrimSpace(f.Filter), m.wheel)
+}
+
 // allObjects is the first line of the object box.
 const allObjects = "все объекты"
 
@@ -359,6 +398,9 @@ func (m *frameModel) filter() {
 			continue
 		}
 		if m.tracks != "" && !tracksMatch(r.f, m.tracks) {
+			continue
+		}
+		if !m.wheelMatches(r.f) {
 			continue
 		}
 		m.rows = append(m.rows, r)

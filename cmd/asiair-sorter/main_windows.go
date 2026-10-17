@@ -150,6 +150,8 @@ type window struct {
 	objBox                     *walk.ComboBox // the object: a list with a quick search
 	objList                    []string       // the objects of the frames shown in objBox
 	objBusy                    bool           // objBox is being refilled: ignore its events
+	wheelBox                   *walk.ComboBox // the filter of the filter wheel
+	wheelList                  []string       // the values of the lines of wheelBox (m.wheel)
 	fillBox                    *walk.CheckBox
 	btnScan, btnApply, btnStop *walk.PushButton
 	btnBest                    *walk.PushButton
@@ -371,6 +373,11 @@ func main() {
 						OnTextChanged:     func() { w.objectChanged(true) },
 						OnEditingFinished: func() { w.objectChanged(false) }},
 					PushButton{Text: "✕", MaxSize: Size{Width: 28}, ToolTipText: "Все объекты", OnClicked: func() { w.setObjectText("") }},
+					Label{Text: "Светофильтр:"},
+					ComboBox{AssignTo: &w.wheelBox, Model: []string{allFilters}, CurrentIndex: 0,
+						MinSize: Size{Width: 90}, MaxSize: Size{Width: 140},
+						ToolTipText:           "Только кадры, снятые с этим фильтром (FILTER в заголовке FITS); «без фильтра» — кадры без колеса фильтров и калибровка без фильтра",
+						OnCurrentIndexChanged: w.wheelChanged},
 					Label{Text: "Фильтр:"},
 					LineEdit{AssignTo: &w.filterEdit, MinSize: Size{Width: 160}, MaxSize: Size{Width: 240}, CueBanner: "объект, ночь, фильтр, папка…",
 						OnTextChanged: func() { w.model.setFilter(w.filterEdit.Text()); w.filterChanged() },
@@ -397,7 +404,7 @@ func main() {
 						},
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
-								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true,
+								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true, MultiSelection: true,
 									OnCurrentIndexChanged: w.showPreview, StyleCell: func(c *walk.CellStyle) {
 										if w.model.marked(c.Row()) {
 											c.BackgroundColor = walk.RGB(255, 205, 205)
@@ -741,6 +748,7 @@ func (w *window) scan() {
 			w.offline = offline
 			w.model.set(l, remote && !offline)
 			w.objectsChanged()
+			w.filtersChanged()
 			w.btnGone.SetText(goneOn)
 			w.btnDelete.SetVisible(false)
 			w.showAll()
@@ -964,7 +972,8 @@ func (w *window) showNight() {
 	for _, it := range r.Items {
 		w.model.only[it] = true
 	}
-	w.kindBox.SetCurrentIndex(0) // the line is of one kind already
+	w.kindBox.SetCurrentIndex(0)  // the line is of one kind already
+	w.wheelBox.SetCurrentIndex(0) // and of one filter
 	w.model.kind = ""
 	w.filterChanged()
 	what := sorter.KindLabel[r.Kind]
@@ -1012,6 +1021,7 @@ func (w *window) toggleGone() {
 	w.btnDelete.SetVisible(true)
 	w.model.only = w.model.gone
 	w.kindBox.SetCurrentIndex(0)
+	w.wheelBox.SetCurrentIndex(0)
 	w.model.kind = ""
 	w.filterChanged()
 	var bytes int64
@@ -1159,6 +1169,48 @@ func (w *window) objectsChanged() {
 		keep = t
 	}
 	w.setObjectText(keep)
+}
+
+// filtersChanged refills the filter box after the frames were read: the
+// filter chosen stays if the new frames have it.
+func (w *window) filtersChanged() {
+	names, none := w.model.filters()
+	values, items := []string{""}, []string{allFilters}
+	for _, n := range names {
+		values, items = append(values, n), append(items, n)
+	}
+	if none {
+		values, items = append(values, noFilter), append(items, noFilterText)
+	}
+	keep := 0
+	for i, v := range values {
+		if v != "" && (v == noFilter && w.model.wheel == noFilter || v != noFilter && strings.EqualFold(v, w.model.wheel)) {
+			keep = i
+		}
+	}
+	w.wheelList = values
+	w.objBusy = true
+	w.wheelBox.SetModel(items)
+	w.wheelBox.SetCurrentIndex(keep)
+	w.objBusy = false
+	w.wheelChanged()
+}
+
+// wheelChanged applies the filter box.
+func (w *window) wheelChanged() {
+	if w.objBusy || w.wheelBox == nil {
+		return
+	}
+	i := w.wheelBox.CurrentIndex()
+	v := ""
+	if i >= 0 && i < len(w.wheelList) {
+		v = w.wheelList[i]
+	}
+	if v == w.model.wheel {
+		return
+	}
+	w.model.wheel = v
+	w.filterChanged()
 }
 
 // filterChanged shows the model filtered again and how much it shows.
