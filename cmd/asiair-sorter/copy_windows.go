@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"github.com/lxn/walk"
@@ -12,63 +14,141 @@ import (
 )
 
 // The right button on a cell of a table: a menu to copy the cell, the whole
-// row and, for frames, the paths of the file.
+// row and, for frames, the paths of the file and what can be done with it.
+//
+// The menu is shown by the table itself, not as the context menu of walk:
+// a TableView of walk is made of list views walk does not know, and the
+// WM_CONTEXTMENU they send names one of them, so walk never showed its menu.
 
-// copyItem is a line of the menu: its label and what it copies.
-type copyItem struct{ label, text string }
+// copyItem is a line of the menu: its label and what it copies, or, with
+// run, what it does; a line without a label is a separator.
+type copyItem struct {
+	label, text string
+	run         func()
+}
 
-// copyMenu gives the table the menu; extra adds the lines of a row (nil: none).
+// copyMenu gives the table the menu; extra adds the lines of a row (nil:
+// none). Ctrl+C copies the rows selected.
 func copyMenu(tv *walk.TableView, extra func(row int) []copyItem) {
-	menu, err := walk.NewMenu()
-	if err != nil {
-		return
-	}
-	tv.AddDisposable(menu)
-	fill := func(row, col int) {
-		menu.Actions().Clear()
-		tv.SetContextMenu(nil)
+	show := func(row, col int, at func() (int32, int32)) {
 		m, ok := tv.Model().(walk.TableModel)
 		if !ok || row < 0 || row >= m.RowCount() {
 			return
 		}
 		var items []copyItem
 		if t := cellText(m, row, col); t != "" {
-			items = append(items, copyItem{"Копировать", t})
+			items = append(items, copyItem{label: "Копировать", text: t})
+		}
+		if r := rowText(tv, m, row); strings.Contains(r, "\t") {
+			items = append(items, copyItem{label: "Копировать строку", text: r})
+		}
+		if t := selectedText(tv, m); strings.Contains(t, "\n") {
+			items = append(items, copyItem{label: fmt.Sprintf("Копировать выделенные строки (%d)", strings.Count(t, "\n")+1), text: t})
 		}
 		if extra != nil {
 			items = append(items, extra(row)...)
 		}
-		if r := rowText(tv, m, row); strings.Contains(r, "\t") {
-			items = append(items, copyItem{"Копировать строку", r})
+		x, y := at()
+		popup(tv.Form().Handle(), x, y, items)
+	}
+	cursor := func() (int32, int32) {
+		var pt win.POINT
+		win.GetCursorPos(&pt)
+		return pt.X, pt.Y
+	}
+	// the menu is shown once the list view has selected the row clicked
+	tv.MouseDown().Attach(func(x, y int, b walk.MouseButton) {
+		if b == walk.RightButton {
+			row, col := cellAt(tv)
+			tv.Synchronize(func() { show(row, col, cursor) })
 		}
-		seen := map[string]bool{}
-		for _, it := range items {
+	})
+	tv.KeyDown().Attach(func(k walk.Key) {
+		switch {
+		case k == walk.KeyApps || k == walk.KeyF10 && walk.ShiftDown():
+			row := tv.CurrentIndex()
+			tv.Synchronize(func() {
+				show(row, firstColumn(tv), func() (int32, int32) {
+					p := tv.ContextMenuLocation()
+					return int32(p.X), int32(p.Y)
+				})
+			})
+		case k == walk.KeyC && walk.ControlDown():
+			if m, ok := tv.Model().(walk.TableModel); ok {
+				if t := selectedText(tv, m); t != "" {
+					walk.Clipboard().SetText(t)
+				}
+			}
+		}
+	})
+}
+
+// popup shows the menu at the point of the screen and does what is chosen.
+func popup(owner win.HWND, x, y int32, items []copyItem) {
+	menu := win.CreatePopupMenu()
+	if menu == 0 {
+		return
+	}
+	defer win.DestroyMenu(menu)
+	var actions []func()
+	seen := map[string]bool{}
+	sep := false // a separator is due before the next line
+	for _, it := range items {
+		if it.label == "" {
+			sep = len(actions) > 0
+			continue
+		}
+		label := menuText(it.label)
+		run := it.run
+		if run == nil {
 			if it.text == "" || seen[it.text] {
 				continue
 			}
 			seen[it.text] = true
-			a := walk.NewAction()
 			// the text after the tab is shown on the right, like a shortcut
-			a.SetText(menuText(it.label) + "\t" + menuText(shorten(it.text, 60)))
+			label += "\t" + menuText(shorten(it.text, 60))
 			text := it.text
-			a.Triggered().Attach(func() { walk.Clipboard().SetText(text) })
-			menu.Actions().Add(a)
+			run = func() { walk.Clipboard().SetText(text) }
 		}
-		if menu.Actions().Len() > 0 {
-			tv.SetContextMenu(menu)
+		if sep {
+			mii := win.MENUITEMINFO{FMask: win.MIIM_FTYPE, FType: win.MFT_SEPARATOR}
+			mii.CbSize = uint32(unsafe.Sizeof(mii))
+			win.InsertMenuItem(menu, uint32(win.GetMenuItemCount(menu)), true, &mii)
+			sep = false
+		}
+		actions = append(actions, run)
+		u, err := syscall.UTF16PtrFromString(label)
+		if err != nil {
+			continue
+		}
+		mii := win.MENUITEMINFO{FMask: win.MIIM_FTYPE | win.MIIM_ID | win.MIIM_STRING, FType: win.MFT_STRING,
+			WID: uint32(len(actions)), DwTypeData: u}
+		mii.CbSize = uint32(unsafe.Sizeof(mii))
+		win.InsertMenuItem(menu, uint32(win.GetMenuItemCount(menu)), true, &mii)
+	}
+	if len(actions) == 0 {
+		return
+	}
+	cmd := int(win.TrackPopupMenuEx(menu, win.TPM_RETURNCMD|win.TPM_RIGHTBUTTON|win.TPM_NONOTIFY, x, y, owner, nil))
+	if cmd >= 1 && cmd <= len(actions) {
+		actions[cmd-1]()
+	}
+}
+
+// selectedText: the rows selected, one per line, the cells with tabs between.
+func selectedText(tv *walk.TableView, m walk.TableModel) string {
+	rows := tv.SelectedIndexes()
+	if len(rows) == 0 && tv.CurrentIndex() >= 0 {
+		rows = []int{tv.CurrentIndex()}
+	}
+	slices.Sort(rows)
+	var lines []string
+	for _, i := range rows {
+		if i >= 0 && i < m.RowCount() {
+			lines = append(lines, rowText(tv, m, i))
 		}
 	}
-	// both come before the menu is shown
-	tv.MouseDown().Attach(func(x, y int, b walk.MouseButton) {
-		if b == walk.RightButton {
-			fill(cellAt(tv))
-		}
-	})
-	tv.KeyDown().Attach(func(k walk.Key) {
-		if k == walk.KeyApps || k == walk.KeyF10 && walk.ShiftDown() {
-			fill(tv.CurrentIndex(), firstColumn(tv))
-		}
-	})
+	return strings.Join(lines, "\n")
 }
 
 // cellAt: the row and the column of the model under the mouse, -1 if none.
@@ -160,15 +240,18 @@ func (w *window) frameCopies(i int) []copyItem {
 		local = onDisk(w.localPaths(r), f.Size) // downloaded already
 	}
 	if local != "" {
-		items = append(items, copyItem{"Копировать путь к файлу", local},
-			copyItem{"Копировать путь к папке", filepath.Dir(local)})
+		items = append(items, copyItem{label: "Копировать путь к файлу", text: local},
+			copyItem{label: "Копировать путь к папке", text: filepath.Dir(local)})
 	}
 	if f.Src != nil {
-		items = append(items, copyItem{"Копировать путь на приёмнике", strings.ReplaceAll(f.Path, "/", `\`)})
+		items = append(items, copyItem{label: "Копировать путь на приёмнике", text: strings.ReplaceAll(f.Path, "/", `\`)})
 	}
-	items = append(items, copyItem{"Копировать имя файла", path.Base(f.Rel)})
+	items = append(items, copyItem{label: "Копировать имя файла", text: path.Base(f.Rel)})
 	if r.it != nil && !r.it.Dup && w.scannedOut != "" {
-		items = append(items, copyItem{"Копировать путь «Куда»", filepath.Join(w.scannedOut, filepath.FromSlash(r.it.Dest))})
+		items = append(items, copyItem{label: "Копировать путь «Куда»", text: filepath.Join(w.scannedOut, filepath.FromSlash(r.it.Dest))})
+	}
+	if !w.busy {
+		items = append(items, copyItem{}, copyItem{label: w.deleteLabel(i), run: func() { w.deleteEverywhere(i) }})
 	}
 	return items
 }
