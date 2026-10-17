@@ -534,6 +534,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/open", s.handleUIOpen)
 	mux.HandleFunc("/ui/api/tilt", s.handleUITilt)
 	mux.HandleFunc("/ui/api/region", s.handleUIRegion)
+	mux.HandleFunc("/ui/api/saturated", s.handleUISaturated)
 	mux.HandleFunc("/ui/api/minfree", s.handleUIMinFree)
 	mux.HandleFunc("/ui/api/update", s.handleUIUpdate)
 	mux.HandleFunc("/ui/api/sorter", s.handleUISorterUpdate)

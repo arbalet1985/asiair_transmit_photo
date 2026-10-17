@@ -407,6 +407,24 @@ func (r *Receiver) Region(ctx context.Context, p string, x, y, rad int) (*fits.R
 	return &st, nil
 }
 
+// Saturated asks the receiver for the saturated areas of a frame, found
+// there in the file itself (fits.ReadSaturated).
+func (r *Receiver) Saturated(ctx context.Context, p string) (*fits.SaturatedAreas, error) {
+	resp, err := r.get(ctx, "/ui/api/saturated", url.Values{"path": {p}}, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "ответил 404: страницы нет") {
+			return nil, errors.New("пересвет на приёмнике: нужен приёмник новой версии")
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var a fits.SaturatedAreas
+	if err := json.NewDecoder(resp.Body).Decode(&a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // PartSuffix marks a download not finished yet; the next run continues it.
 const PartSuffix = ".part"
 

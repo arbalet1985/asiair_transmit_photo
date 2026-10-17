@@ -73,7 +73,8 @@ type settings struct {
 	BlinkSpeed      int     `json:"blink_speed,omitempty"` // half frames per second
 	ShowMoon        bool    `json:"show_moon,omitempty"`
 	ShowTilt        bool    `json:"show_tilt,omitempty"`
-	HideTracks      bool    `json:"hide_tracks,omitempty"` // the tracks of satellites are not drawn on the preview
+	ShowSaturated   bool    `json:"show_saturated,omitempty"` // the saturated areas circled on the preview
+	HideTracks      bool    `json:"hide_tracks,omitempty"`    // the tracks of satellites are not drawn on the preview
 	ShowHist        bool    `json:"show_hist,omitempty"`
 	HistMode        int     `json:"hist_mode,omitempty"`
 	LinkedChannels  bool    `json:"linked_channels,omitempty"` // the colour channels stretched together
@@ -193,6 +194,10 @@ type window struct {
 	previewPending             bool      // the selected frame is being read
 	moonBox                    *walk.CheckBox
 	tiltBox                    *walk.CheckBox
+	satAreasBox                *walk.CheckBox
+	satAreas                   *fits.SaturatedAreas // of the frame shown, when found
+	satAreasNote               string               // while they are searched for, or why not
+	satAreasCache              satAreasCache
 	satBox                     *walk.CheckBox
 	histBox                    *walk.CheckBox
 	linkedBox                  *walk.CheckBox
@@ -455,6 +460,8 @@ func main() {
 										ToolTipText: "Растяжка цветного кадра: всех каналов вместе (цвета как на матрице) или каждого отдельно (фон серый), как в приёмнике"},
 									CheckBox{AssignTo: &w.tiltBox, Text: "Тилт", Checked: s.ShowTilt, OnCheckedChanged: w.tiltToggled,
 										ToolTipText: "Наклон матрицы, как команда tilt в Siril: размеры звёзд (HFR) по четвертям кадра. Четырёхугольник на кадре: чем дальше угол от центра, тем крупнее там звёзды. Кадр читается в полном разрешении, не во время блинка"},
+									CheckBox{AssignTo: &w.satAreasBox, Text: "Пересвет", Checked: s.ShowSaturated, OnCheckedChanged: w.satAreasToggled,
+										ToolTipText: "Обвести красными кружками пересвеченные области кадра: пиксели не ниже уровня насыщения (как строка saturated статистики), по исходному файлу в полном разрешении, не во время блинка"},
 									PushButton{Text: "Тилт по 300 ближайшим…", OnClicked: w.cameraTilt,
 										ToolTipText: "Тилт каждой камеры по 300 ближайшим по времени (последним) кадрам из показанных в таблице; углы каждого кадра — относительно его среднего, кадры-выбросы отбрасываются, берётся медиана"},
 									CheckBox{AssignTo: &w.satBox, Text: "Спутники", Checked: !s.HideTracks, OnCheckedChanged: w.satsToggled,
@@ -490,6 +497,7 @@ func main() {
 	w.zoom.changed = w.zoomChanged
 	w.zoom.overlay = func(c *walk.Canvas, x0, y0, dw, dh float64) {
 		w.paintTilt(c, x0, y0, dw, dh)
+		w.paintSatAreas(c, x0, y0, dw, dh)
 		w.paintProbe(c, x0, y0, dw, dh)
 		w.paintTracks(c, x0, y0, dw, dh)
 	}
@@ -1223,12 +1231,14 @@ func (w *window) showPreview() {
 			}
 			w.zoomLabel.SetText(w.zoom.label())
 			w.previewText, w.previewHead, w.tilt = p.info, p.head, nil
+			w.satAreas, w.satAreasNote = nil, ""
 			w.hist = p.hist
 			w.histView.Invalidate()
 			setLong(w.previewInfo, p.info)
 			w.header.SetText(w.withTracks(p.head))
 			if p.err == nil {
 				w.measureTilt(i)
+				w.findSatAreas(i)
 			}
 			w.moon, w.skyObj = p.moon, p.obj
 			w.moonView.Invalidate()
