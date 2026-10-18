@@ -40,6 +40,17 @@ func (w *window) setProgress(v int) {
 	}
 }
 
+// taskbarPaused shows the pause on the taskbar button (yellow).
+func (w *window) taskbarPaused(p bool) {
+	if pi := w.mw.ProgressIndicator(); pi != nil && w.busy {
+		if p {
+			pi.SetState(walk.PIPaused)
+		} else {
+			pi.SetState(walk.PINormal)
+		}
+	}
+}
+
 // taskbarBusy follows setBusy: the taskbar shows a job going on; when it
 // ends after a while with the window not in front, its button flashes.
 func (w *window) taskbarBusy(b bool) {

@@ -189,6 +189,8 @@ type window struct {
 	btnAll, btnGone, btnDelete *walk.PushButton
 	btnRejects                 *walk.PushButton
 	btnRecentIn, btnRecentOut  *walk.PushButton
+	btnPause                   *walk.PushButton
+	gate                       *sorter.Gate // pauses the download going on
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
 	shownText                  string // the line under the table, without the selection
@@ -383,6 +385,8 @@ func main() {
 					PushButton{AssignTo: &w.btnApply, Text: "2. Разложить", Enabled: false, OnClicked: w.apply},
 					PushButton{AssignTo: &w.btnBest, Text: "Лучшие кадры…", Enabled: false, OnClicked: w.bestDialog,
 						ToolTipText: "Отобрать лучшие кадры объекта (по HFR и числу звёзд, как взвешенный FWHM в Siril) за выбранные сессии в каталог Stars рядом с Objects, с той же структурой папок"},
+					PushButton{AssignTo: &w.btnPause, Text: "Пауза", Enabled: false, OnClicked: w.togglePause,
+						ToolTipText: "Приостановить скачивание с приёмника; начатые файлы потом докачаются с того же места"},
 					PushButton{AssignTo: &w.btnStop, Text: "Стоп", Enabled: false, OnClicked: func() {
 						if w.cancel != nil {
 							w.cancel()
@@ -1027,6 +1031,10 @@ func (w *window) apply() {
 	if sorter.IsURL(s.In) {
 		_, total := l.Missing(s.Out)
 		sw = w.startSpeed(total, opt.Parallel)
+		w.gate = sorter.NewGate()
+		opt.Pause = w.gate
+		w.btnPause.SetText("Пауза")
+		w.btnPause.SetEnabled(true)
 	}
 	go func() {
 		defer cancel()
@@ -1048,6 +1056,9 @@ func (w *window) apply() {
 		stopped := ctx.Err() != nil
 		nights := l.Nights(s.Out) // what is in the output now
 		w.mw.Synchronize(func() {
+			w.gate = nil
+			w.btnPause.SetEnabled(false)
+			w.btnPause.SetText("Пауза")
 			w.showNights(nights)
 			msg := fmt.Sprintf("Готово: разложено %d, уже были на месте %d", r.Placed, r.Skipped)
 			if r.Sessions > 0 {
@@ -1100,8 +1111,27 @@ func (w *window) apply() {
 	}()
 }
 
+// togglePause pauses the download from the receiver or resumes it.
+func (w *window) togglePause() {
+	if w.gate == nil {
+		return
+	}
+	p := !w.gate.Paused()
+	w.gate.SetPaused(p)
+	if p {
+		w.btnPause.SetText("Продолжить")
+		w.setStatus("Пауза: скачивание приостановлено, начатые файлы докачаются после «Продолжить».")
+	} else {
+		w.btnPause.SetText("Пауза")
+	}
+	w.taskbarPaused(p)
+}
+
 // showProgress: by bytes while downloading from a receiver, else by files.
 func (w *window) showProgress(p sorter.Progress, start time.Time) {
+	if w.gate != nil && w.gate.Paused() {
+		return // the pause is told instead
+	}
 	if p.TotalBytes > 0 {
 		w.setProgress(int(p.Bytes * 1000 / p.TotalBytes))
 		t := fmt.Sprintf("Скачано %s из %s", sorter.FormatBytes(p.Bytes), sorter.FormatBytes(p.TotalBytes))

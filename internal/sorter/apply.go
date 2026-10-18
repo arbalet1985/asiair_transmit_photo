@@ -35,6 +35,75 @@ type Options struct {
 	// one after another, at most MaxParallel). On a slow far link one
 	// connection seldom fills it.
 	Parallel int
+	// Pause, when set, pauses the downloads (see Gate).
+	Pause *Gate
+}
+
+// Gate pauses the downloads of Apply: on a pause the files coming are
+// interrupted (their .part stays) and no new one begins; once resumed they
+// go on from where they stopped.
+type Gate struct {
+	mu     sync.Mutex
+	resume chan struct{} // closed when resumed; nil while running
+	stop   chan struct{} // closed at the pause
+}
+
+func NewGate() *Gate { return &Gate{stop: make(chan struct{})} }
+
+// SetPaused pauses or resumes.
+func (g *Gate) SetPaused(p bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if p == (g.resume != nil) {
+		return
+	}
+	if p {
+		close(g.stop)
+		g.resume = make(chan struct{})
+	} else {
+		close(g.resume)
+		g.resume, g.stop = nil, make(chan struct{})
+	}
+}
+
+// Paused tells whether the downloads are paused.
+func (g *Gate) Paused() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.resume != nil
+}
+
+// wait returns once not paused, or with the error of ctx.
+func (g *Gate) wait(ctx context.Context) error {
+	for {
+		g.mu.Lock()
+		r := g.resume
+		g.mu.Unlock()
+		if r == nil {
+			return ctx.Err()
+		}
+		select {
+		case <-r:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// context is ctx also cancelled at the next pause.
+func (g *Gate) context(ctx context.Context) (context.Context, context.CancelFunc) {
+	g.mu.Lock()
+	stop := g.stop
+	g.mu.Unlock()
+	c, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-stop:
+			cancel()
+		case <-c.Done():
+		}
+	}()
+	return c, cancel
 }
 
 // MaxParallel limits Options.Parallel.
@@ -171,23 +240,38 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				if ctx.Err() != nil {
-					continue // stopped: the rest is left for the next run
-				}
-				var last int64
-				placed, got, err := fetch(ctx, j.it.Frame, j.dst, func(n int64) {
-					lock(func() {
-						p.Bytes += n - last
-						last = n
-						p.Name = j.it.Frame.Rel
-						report()
+				for ctx.Err() == nil {
+					fctx, cancel := ctx, context.CancelFunc(func() {})
+					if g := opt.Pause; g != nil {
+						if g.wait(ctx) != nil {
+							break
+						}
+						fctx, cancel = g.context(ctx)
+					}
+					var last int64
+					placed, got, err := fetch(fctx, j.it.Frame, j.dst, func(n int64) {
+						lock(func() {
+							p.Bytes += n - last
+							last = n
+							p.Name = j.it.Frame.Rel
+							report()
+						})
 					})
-				})
-				lock(func() {
-					p.Bytes += got - last
-					r.Downloaded += got
-					done(j.it, j.dst, placed, err)
-				})
+					cancel()
+					paused := err != nil && ctx.Err() == nil && fctx.Err() != nil
+					lock(func() {
+						p.Bytes += got - last
+						r.Downloaded += got
+						if !paused {
+							done(j.it, j.dst, placed, err)
+						}
+					})
+					if !paused {
+						break
+					}
+					// paused in the middle: the file goes on from its .part once resumed
+				}
+				// stopped: the rest is left for the next run
 			}
 		}()
 	}
