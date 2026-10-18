@@ -70,6 +70,7 @@ type settings struct {
 	Out             string  `json:"out"`
 	Mode            int     `json:"mode"`
 	FillCalibration bool    `json:"fill_calibration"`
+	Parallel        int     `json:"parallel,omitempty"`    // frames of a receiver downloaded at once; 0: the default
 	BlinkSpeed      int     `json:"blink_speed,omitempty"` // half frames per second
 	ShowMoon        bool    `json:"show_moon,omitempty"`
 	ShowTilt        bool    `json:"show_tilt,omitempty"`
@@ -153,6 +154,11 @@ type window struct {
 	wheelBox                   *walk.ComboBox // the filter of the filter wheel
 	wheelList                  []string       // the values of the lines of wheelBox (m.wheel)
 	fillBox                    *walk.CheckBox
+	parBox                     *walk.ComboBox
+	speed                      *speedLog // the download going on or the last one
+	speedDlg                   *walk.Dialog
+	speedView                  *walk.CustomWidget
+	speedInfo                  *walk.Label
 	btnScan, btnApply, btnStop *walk.PushButton
 	btnBest                    *walk.PushButton
 	qualityCache               *sorter.QualityCache // stars measured on frames on disk
@@ -324,6 +330,12 @@ func main() {
 							CheckBox{AssignTo: &w.fillBox, Checked: s.FillCalibration,
 								Text:        "Сразу положить подходящие дарки, флеты и биасы в папки объектов",
 								ToolTipText: "Без этой галочки в каждой сессии появляется файл «калибровка.txt» со списком подходящих папок библиотеки, а darks/flats/biases остаются пустыми.\nС галочкой они заполняются копиями (в режиме жёстких ссылок — ссылками, без лишнего места)."},
+							Label{Text: "  Скачивать одновременно:"},
+							ComboBox{AssignTo: &w.parBox, Model: parallelLabels(), CurrentIndex: parallelIndex(parallelOf(s)), MaxSize: Size{Width: 50},
+								ToolTipText: "Сколько кадров скачивать с приёмника одновременно. По медленному или дальнему каналу (интернет, Tailscale)\n" +
+									"одно соединение редко забирает всю скорость — 3–4 файла сразу обычно быстрее. В локальной сети хватает 1–2."},
+							PushButton{Text: "График скорости…", OnClicked: w.showSpeed,
+								ToolTipText: "Скорость скачивания с приёмника по секундам — во время «Разложить» или за последнее скачивание"},
 							HSpacer{},
 						},
 					},
@@ -541,6 +553,9 @@ func (w *window) settings() settings {
 	s := w.saved
 	s.In, s.Out = strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	s.Mode, s.FillCalibration = w.modeBox.CurrentIndex(), w.fillBox.Checked()
+	if i := w.parBox.CurrentIndex(); i >= 0 && i < len(parallelChoices) {
+		s.Parallel = parallelChoices[i]
+	}
 	s.Planner = w.pl.settings()
 	w.saved = s
 	return s
@@ -624,6 +639,7 @@ func (w *window) setBusy(b bool) {
 	w.btnFolders.SetEnabled(!b)
 	w.modeBox.SetEnabled(!b)
 	w.fillBox.SetEnabled(!b)
+	w.parBox.SetEnabled(!b)
 	w.btnDelete.SetEnabled(!b)
 	if b {
 		w.btnApply.SetEnabled(false)
@@ -880,7 +896,7 @@ func (w *window) apply() {
 	if l == nil || w.offline || s.In != w.scannedIn || s.Out != w.scannedOut {
 		return
 	}
-	opt := sorter.Options{Mode: sorter.Mode(s.Mode), FillCalibration: s.FillCalibration}
+	opt := sorter.Options{Mode: sorter.Mode(s.Mode), FillCalibration: s.FillCalibration, Parallel: parallelOf(s)}
 	var q string
 	if sorter.IsURL(s.In) {
 		n, b := l.Missing(s.Out)
@@ -907,17 +923,28 @@ func (w *window) apply() {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	w.setBusy(true)
+	var sw *speedWatch
+	if sorter.IsURL(s.In) {
+		_, total := l.Missing(s.Out)
+		sw = w.startSpeed(total, opt.Parallel)
+	}
 	go func() {
 		defer cancel()
 		start := time.Now()
 		var lastShown time.Time
 		r := l.Apply(ctx, s.Out, opt, func(p sorter.Progress) {
+			if sw != nil {
+				sw.bytes.Store(p.Bytes)
+			}
 			if time.Since(lastShown) < 200*time.Millisecond && p.Done != p.Total {
 				return
 			}
 			lastShown = time.Now()
 			w.mw.Synchronize(func() { w.showProgress(p, start) })
 		})
+		if sw != nil {
+			close(sw.stop)
+		}
 		stopped := ctx.Err() != nil
 		nights := l.Nights(s.Out) // what is in the output now
 		w.mw.Synchronize(func() {

@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Mode is how frames get into the output.
@@ -30,7 +31,14 @@ type Options struct {
 	// darks/flats/biases folders of every session (copies, or hard links in
 	// Link mode), so Siril's script can run there right away.
 	FillCalibration bool
+	// Parallel is how many frames of a receiver download at once (0 or 1:
+	// one after another, at most MaxParallel). On a slow far link one
+	// connection seldom fills it.
+	Parallel int
 }
+
+// MaxParallel limits Options.Parallel.
+const MaxParallel = 8
 
 // Result counts what Apply did.
 type Result struct {
@@ -93,6 +101,9 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 		}
 	}
 	_, p.TotalBytes = l.Missing(out)
+	// downloads run in their own goroutines: what they share is under mu,
+	// and progress is told by one at a time
+	var mu sync.Mutex
 	report := func() {
 		if progress != nil {
 			progress(p)
@@ -104,6 +115,11 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 		report()
 	}
 	fail := func(err error) { r.Errors = append(r.Errors, err) }
+	lock := func(f func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		f()
+	}
 
 	// sessions laid out under an earlier name move whole, with their
 	// calibration and Siril's results; before the new folders are made
@@ -130,37 +146,7 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 	now := map[*Frame]string{}
 	emptied := map[string]bool{} // folders frames were moved out of
 	defer removeEmpty(emptied, out)
-	for _, it := range l.Items {
-		if ctx.Err() != nil {
-			return r
-		}
-		if it.Dup {
-			step(it.Frame.Rel)
-			continue
-		}
-		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
-		var placed bool
-		var err error
-		if moveFrom := libraryMove(it, dst); moveFrom != "" {
-			// the library of an earlier layout: move the frame to its new folder
-			placed, err = place(moveFrom, dst, Move)
-			if placed {
-				r.Moved++
-				emptied[filepath.Dir(moveFrom)] = true
-			}
-		} else if f := it.Frame; f.Src != nil {
-			p.Name = f.Rel
-			base := p.Bytes
-			var got int64
-			placed, got, err = fetch(ctx, f, dst, func(n int64) {
-				p.Bytes = base + n
-				report()
-			})
-			p.Bytes = base + got
-			r.Downloaded += got
-		} else {
-			placed, err = place(it.Frame.Path, dst, opt.Mode)
-		}
+	done := func(it *Item, dst string, placed bool, err error) {
 		switch {
 		case err != nil:
 			fail(fmt.Errorf("%s: %w", it.Frame.Rel, err))
@@ -172,6 +158,69 @@ func (l *Layout) Apply(ctx context.Context, out string, opt Options, progress fu
 			now[it.Frame] = dst
 		}
 		step(it.Frame.Rel)
+	}
+	// the frames of a receiver download a few at once
+	type job struct {
+		it  *Item
+		dst string
+	}
+	jobs := make(chan job)
+	var wg sync.WaitGroup
+	for range min(max(opt.Parallel, 1), MaxParallel) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if ctx.Err() != nil {
+					continue // stopped: the rest is left for the next run
+				}
+				var last int64
+				placed, got, err := fetch(ctx, j.it.Frame, j.dst, func(n int64) {
+					lock(func() {
+						p.Bytes += n - last
+						last = n
+						p.Name = j.it.Frame.Rel
+						report()
+					})
+				})
+				lock(func() {
+					p.Bytes += got - last
+					r.Downloaded += got
+					done(j.it, j.dst, placed, err)
+				})
+			}
+		}()
+	}
+	for _, it := range l.Items {
+		if ctx.Err() != nil {
+			break
+		}
+		if it.Dup {
+			lock(func() { step(it.Frame.Rel) })
+			continue
+		}
+		dst := filepath.Join(out, filepath.FromSlash(it.Dest))
+		if moveFrom := libraryMove(it, dst); moveFrom != "" {
+			// the library of an earlier layout: move the frame to its new folder
+			placed, err := place(moveFrom, dst, Move)
+			lock(func() {
+				if placed {
+					r.Moved++
+					emptied[filepath.Dir(moveFrom)] = true
+				}
+				done(it, dst, placed, err)
+			})
+		} else if it.Frame.Src != nil {
+			jobs <- job{it, dst}
+		} else {
+			placed, err := place(it.Frame.Path, dst, opt.Mode)
+			lock(func() { done(it, dst, placed, err) })
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if ctx.Err() != nil {
+		return r
 	}
 
 	for _, s := range l.Sessions {
