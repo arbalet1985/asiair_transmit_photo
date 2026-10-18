@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,8 @@ type row struct {
 	f    *sorter.Frame
 	it   *sorter.Item
 	moon float64 // lit fraction of the Moon when the frame was taken, -1 = unknown
+	// fresh: not in the output yet (not downloaded, not laid out)
+	fresh bool
 }
 
 // the columns of the table
@@ -34,6 +38,7 @@ const (
 	colHFR
 	colStars
 	colRound
+	colSat
 	colSats
 	colMoon
 	colFile
@@ -48,7 +53,7 @@ var columns = []struct {
 }{
 	{"Тип", 70, false}, {"Объект", 110, false}, {"Ночь", 80, false}, {"Фильтр", 55, false},
 	{"Выдержка", 70, true}, {"Гейн", 45, true}, {"Темп.", 45, true}, {"Камера", 120, false},
-	{"HFR", 45, true}, {"Звёзд", 50, true}, {"Округл.", 55, true}, {"Спутники", 110, false}, {"Луна", 45, true},
+	{"HFR", 45, true}, {"Звёзд", 50, true}, {"Округл.", 55, true}, {"Пересвет", 60, true}, {"Спутники", 110, false}, {"Луна", 45, true},
 	{"Файл", 280, false}, {"В папке", 110, true}, {"Куда", 360, false},
 }
 
@@ -89,6 +94,16 @@ type frameModel struct {
 	// (nil when the input is a folder); mark highlights them
 	gone map[*sorter.Item]bool
 	mark bool
+	// onlyNew shows only the frames not in the output yet
+	onlyNew bool
+	fresh   int // how many of all are
+	// rejects: the frames marked bad (rejectKey), kept when looked at
+	// again; onlyRejects shows only them
+	rejects     map[string]bool
+	onlyRejects bool
+	// medians of the quality of each group of lights, for telling the
+	// worst frames; nil: to be counted again
+	medians map[*sorter.Group]groupMedians
 }
 
 // goneText is the column «Куда» of a frame deleted on the receiver.
@@ -149,6 +164,11 @@ func (m *frameModel) cell(r row, col int) string {
 			return ""
 		}
 		return strings.Replace(strconv.FormatFloat(f.Round, 'f', 2, 64), ".", ",", 1)
+	case colSat:
+		if !f.Measured || f.SatPx == 0 {
+			return ""
+		}
+		return strings.Replace(strconv.FormatFloat(f.SatPct, 'f', 2, 64), ".", ",", 1) + "%"
 	case colSats:
 		return f.TracksText()
 	case colMoon:
@@ -196,6 +216,11 @@ func (m *frameModel) num(r row, col int) (float64, bool) {
 			return 2, true // not measured: last
 		}
 		return r.f.Round, true
+	case colSat:
+		if !r.f.Measured {
+			return -1, true
+		}
+		return r.f.SatPct, true
 	case colMoon:
 		return r.moon, true
 	case colTemp:
@@ -237,14 +262,34 @@ func (m *frameModel) Sort(col int, order walk.SortOrder) error {
 	return m.SorterBase.Sort(col, order)
 }
 
-// set replaces the frames shown; remote: they were read from a receiver.
-func (m *frameModel) set(l *sorter.Layout, remote bool) {
-	m.all, m.only, m.gone, m.mark = nil, nil, nil, false
+// notInOutput: a frame not laid out yet: neither at its place in the
+// output nor in the output's library.
+func notInOutput(it *sorter.Item, out string) bool {
+	if it.Dup || it.Frame.InLibrary || out == "" {
+		return false
+	}
+	if it.Existing != "" {
+		if st, err := os.Stat(it.Existing); err == nil && st.Size() == it.Frame.Size {
+			return false
+		}
+	}
+	st, err := os.Stat(filepath.Join(out, filepath.FromSlash(it.Dest)))
+	return err != nil || st.Size() != it.Frame.Size
+}
+
+// set replaces the frames shown; remote: they were read from a receiver;
+// out is the output, to tell the frames not laid out yet.
+func (m *frameModel) set(l *sorter.Layout, remote bool, out string) {
+	m.all, m.only, m.gone, m.mark, m.fresh, m.medians = nil, nil, nil, false, 0, nil
 	m.folders = map[string]folderTotal{}
 	if l != nil {
 		for _, it := range l.Items {
 			if !it.InPlace() {
-				m.all = append(m.all, row{f: it.Frame, it: it, moon: moonOf(it.Frame)})
+				r := row{f: it.Frame, it: it, moon: moonOf(it.Frame), fresh: notInOutput(it, out)}
+				if r.fresh {
+					m.fresh++
+				}
+				m.all = append(m.all, r)
 			}
 		}
 		for _, f := range l.Unknown {
@@ -403,6 +448,12 @@ func (m *frameModel) filter() {
 		if !m.wheelMatches(r.f) {
 			continue
 		}
+		if m.onlyNew && !r.fresh {
+			continue
+		}
+		if m.onlyRejects && !m.rejects[rejectKey(r.f)] {
+			continue
+		}
 		m.rows = append(m.rows, r)
 		if r.it != nil && !r.it.Dup {
 			m.shown.frames++
@@ -460,6 +511,7 @@ func (m *nightModel) Value(i, col int) interface{} {
 
 // measured shows again the rows of the frames whose stars were measured.
 func (m *frameModel) measured(frames map[*sorter.Frame]bool) {
+	m.medians = nil
 	for i, r := range m.rows {
 		if frames[r.f] {
 			m.PublishRowChanged(i)
@@ -470,4 +522,85 @@ func (m *frameModel) measured(frames map[*sorter.Frame]bool) {
 func (m *nightModel) set(rows []*sorter.NightRow) {
 	m.rows = rows
 	m.PublishRowsReset()
+}
+
+// groupMedians: the median quality of the measured lights of a group (one
+// object, filter, exposure, session).
+type groupMedians struct {
+	n                 int
+	hfr, stars, round float64
+	sat               float64
+}
+
+// minForMedian: a group of fewer measured frames tells no worst ones.
+const minForMedian = 5
+
+func median(v []float64) float64 {
+	if len(v) == 0 {
+		return 0
+	}
+	sort.Float64s(v)
+	if len(v)%2 == 1 {
+		return v[len(v)/2]
+	}
+	return (v[len(v)/2-1] + v[len(v)/2]) / 2
+}
+
+func (m *frameModel) groupMedians() map[*sorter.Group]groupMedians {
+	if m.medians != nil {
+		return m.medians
+	}
+	type vals struct{ hfr, stars, round, sat []float64 }
+	by := map[*sorter.Group]*vals{}
+	for _, r := range m.all {
+		f := r.f
+		if r.it == nil || r.it.Dup || r.it.Group == nil || f.Kind != sorter.Light || !f.Measured || f.Stars == 0 {
+			continue
+		}
+		v := by[r.it.Group]
+		if v == nil {
+			v = &vals{}
+			by[r.it.Group] = v
+		}
+		v.hfr = append(v.hfr, f.HFR)
+		v.stars = append(v.stars, float64(f.Stars))
+		if f.Round > 0 {
+			v.round = append(v.round, f.Round)
+		}
+		v.sat = append(v.sat, f.SatPct)
+	}
+	m.medians = map[*sorter.Group]groupMedians{}
+	for g, v := range by {
+		m.medians[g] = groupMedians{n: len(v.hfr), hfr: median(v.hfr), stars: median(v.stars), round: median(v.round), sat: median(v.sat)}
+	}
+	return m.medians
+}
+
+// worst tells a cell of the quality much worse than in the rest of its
+// group: HFR a quarter above the median, half the stars, roundness a tenth
+// below, several times the saturated area.
+func (m *frameModel) worst(i, col int) bool {
+	if i < 0 || i >= len(m.rows) {
+		return false
+	}
+	r := m.rows[i]
+	f := r.f
+	if r.it == nil || r.it.Group == nil || f.Kind != sorter.Light || !f.Measured {
+		return false
+	}
+	g, ok := m.groupMedians()[r.it.Group]
+	if !ok || g.n < minForMedian {
+		return false
+	}
+	switch col {
+	case colHFR:
+		return f.Stars > 0 && g.hfr > 0 && f.HFR > g.hfr*1.25
+	case colStars:
+		return g.stars > 0 && float64(f.Stars) < g.stars*0.5
+	case colRound:
+		return f.Round > 0 && g.round > 0 && f.Round < g.round*0.9
+	case colSat:
+		return f.SatPct > 0.01 && f.SatPct > g.sat*3
+	}
+	return false
 }

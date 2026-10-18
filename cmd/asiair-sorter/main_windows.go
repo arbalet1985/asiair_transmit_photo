@@ -66,20 +66,24 @@ type receiverLogin struct {
 }
 
 type settings struct {
-	In              string  `json:"in"`
-	Out             string  `json:"out"`
-	Mode            int     `json:"mode"`
-	FillCalibration bool    `json:"fill_calibration"`
-	Parallel        int     `json:"parallel,omitempty"`    // frames of a receiver downloaded at once; 0: the default
-	BlinkSpeed      int     `json:"blink_speed,omitempty"` // half frames per second
-	ShowMoon        bool    `json:"show_moon,omitempty"`
-	ShowTilt        bool    `json:"show_tilt,omitempty"`
-	ShowSaturated   bool    `json:"show_saturated,omitempty"` // the saturated areas circled on the preview
-	HideTracks      bool    `json:"hide_tracks,omitempty"`    // the tracks of satellites are not drawn on the preview
-	ShowHist        bool    `json:"show_hist,omitempty"`
-	HistMode        int     `json:"hist_mode,omitempty"`
-	LinkedChannels  bool    `json:"linked_channels,omitempty"` // the colour channels stretched together
-	BestPercent     float64 `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
+	In              string `json:"in"`
+	Out             string `json:"out"`
+	Mode            int    `json:"mode"`
+	FillCalibration bool   `json:"fill_calibration"`
+	NoAutoScan      bool   `json:"no_auto_scan,omitempty"` // not «Просмотреть кадры» at the start
+	// the inputs and outputs looked at before, the last first
+	RecentIn       []string `json:"recent_in,omitempty"`
+	RecentOut      []string `json:"recent_out,omitempty"`
+	Parallel       int      `json:"parallel,omitempty"`    // frames of a receiver downloaded at once; 0: the default
+	BlinkSpeed     int      `json:"blink_speed,omitempty"` // half frames per second
+	ShowMoon       bool     `json:"show_moon,omitempty"`
+	ShowTilt       bool     `json:"show_tilt,omitempty"`
+	ShowSaturated  bool     `json:"show_saturated,omitempty"` // the saturated areas circled on the preview
+	HideTracks     bool     `json:"hide_tracks,omitempty"`    // the tracks of satellites are not drawn on the preview
+	ShowHist       bool     `json:"show_hist,omitempty"`
+	HistMode       int      `json:"hist_mode,omitempty"`
+	LinkedChannels bool     `json:"linked_channels,omitempty"` // the colour channels stretched together
+	BestPercent    float64  `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
 	// frames left out of the pick: stretched stars, too much saturated
 	BestRoundOn  bool                     `json:"best_round_on,omitempty"`
 	BestMinRound float64                  `json:"best_min_round,omitempty"`
@@ -93,6 +97,10 @@ type settings struct {
 	// encrypted by Windows for this computer (config.Seal)
 	SpaceTrackUser string `json:"spacetrack_user,omitempty"`
 	SpaceTrackPass string `json:"spacetrack_pass,omitempty"`
+	// the window as it was left: walk's state of the window, the splitter
+	// and the tabs; the columns of the tables
+	UI      map[string]string     `json:"ui,omitempty"`
+	Columns map[string][]colState `json:"columns,omitempty"`
 }
 
 func configDir() string {
@@ -154,6 +162,8 @@ type window struct {
 	wheelBox                   *walk.ComboBox // the filter of the filter wheel
 	wheelList                  []string       // the values of the lines of wheelBox (m.wheel)
 	fillBox                    *walk.CheckBox
+	autoBox                    *walk.CheckBox
+	newBox                     *walk.CheckBox
 	parBox                     *walk.ComboBox
 	speed                      *speedLog // the download going on or the last one
 	speedDlg                   *walk.Dialog
@@ -177,8 +187,13 @@ type window struct {
 	nights                     *nightModel
 	nightTotals, onlyInfo      *walk.Label
 	btnAll, btnGone, btnDelete *walk.PushButton
+	btnRejects                 *walk.PushButton
+	btnRecentIn, btnRecentOut  *walk.PushButton
+	btnPause                   *walk.PushButton
+	gate                       *sorter.Gate // pauses the download going on
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
+	shownText                  string // the line under the table, without the selection
 	filterEdit                 *walk.LineEdit
 	previewInfo                *walk.Label
 	previewFull                bool // the preview shown has the full resolution
@@ -190,6 +205,7 @@ type window struct {
 	offline                    bool   // the receiver was not reached: the output is shown, nothing laid out
 	busy                       bool
 	cancel                     context.CancelFunc
+	busySince                  time.Time // when the job going on began
 	askedUpdate                string    // the version of the sorter offered already
 	loginWarned                bool      // told the login to the receiver is lost
 	checkingGitHub             bool      // a look for a new sorter on GitHub is going on
@@ -269,12 +285,16 @@ func main() {
 		ncols = append(ncols, col)
 	}
 
+	ui := newUIStore(s.UI)
+	walk.App().SetSettings(ui)
 	err := MainWindow{
-		AssignTo: &w.mw,
-		Title:    windowTitle(),
-		Size:     Size{Width: 1280, Height: 840},
-		MinSize:  Size{Width: 800, Height: 500},
-		Layout:   VBox{},
+		AssignTo:   &w.mw,
+		Name:       "sorter",
+		Persistent: true,
+		Title:      windowTitle(),
+		Size:       Size{Width: 1280, Height: 840},
+		MinSize:    Size{Width: 800, Height: 500},
+		Layout:     VBox{},
 		Children: []Widget{
 			Composite{
 				Layout: Grid{Columns: 3, MarginsZero: true},
@@ -285,7 +305,14 @@ func main() {
 							"Или адрес приёмника asiair-receiver, чтобы брать кадры по сети с другого компьютера:\n" +
 							"https://<адрес>:8443/ или адрес Tailscale — с паролем «Доступ с телефона»;\n" +
 							"http://127.0.0.1:8080/ — на компьютере с приёмником."},
-					PushButton{AssignTo: &w.btnBrowseIn, Text: "Обзор…", OnClicked: func() { w.browse(w.inEdit, "Входной каталог: где искать кадры FITS") }},
+					Composite{
+						Layout: HBox{MarginsZero: true},
+						Children: []Widget{
+							PushButton{AssignTo: &w.btnBrowseIn, Text: "Обзор…", OnClicked: func() { w.browse(w.inEdit, "Входной каталог: где искать кадры FITS") }},
+							PushButton{AssignTo: &w.btnRecentIn, Text: "▾", MaxSize: Size{Width: 28}, ToolTipText: "Прежние входные каталоги и адреса приёмников",
+								OnClicked: func() { w.recentMenu(w.inEdit, w.btnRecentIn, false) }},
+						},
+					},
 					Label{Text: ""},
 					Composite{
 						AssignTo:   &w.loginRow,
@@ -312,14 +339,23 @@ func main() {
 								ToolTipText: "Синхронизировать не всё, а только отмеченные папки входного каталога или приёмника (например, только нужные объекты)."},
 							Label{AssignTo: &w.foldersInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 							HSpacer{},
+							CheckBox{AssignTo: &w.autoBox, Text: "Просматривать кадры при запуске", Checked: !s.NoAutoScan,
+								ToolTipText: "Сразу после запуска делать «Просмотреть кадры», если указаны вход и выходной каталог: с приёмником сразу видно, что пришло за ночь"},
 						},
 					},
 					Label{Text: "Выходной каталог:"},
 					LineEdit{AssignTo: &w.outEdit, Text: s.Out, OnTextChanged: w.foldersChanged,
 						ToolTipText: "Куда разложить: Objects\\… (сессии для Siril) и Library\\… (дарки, флеты, биасы). Библиотека, собранная здесь раньше, тоже используется для подбора калибровки."},
-					PushButton{Text: "Обзор…", OnClicked: func() {
-						w.browse(w.outEdit, "Выходной каталог: куда разложить кадры для Siril")
-					}},
+					Composite{
+						Layout: HBox{MarginsZero: true},
+						Children: []Widget{
+							PushButton{Text: "Обзор…", OnClicked: func() {
+								w.browse(w.outEdit, "Выходной каталог: куда разложить кадры для Siril")
+							}},
+							PushButton{AssignTo: &w.btnRecentOut, Text: "▾", MaxSize: Size{Width: 28}, ToolTipText: "Прежние выходные каталоги",
+								OnClicked: func() { w.recentMenu(w.outEdit, w.btnRecentOut, true) }},
+						},
+					},
 					Label{Text: "Как класть файлы:"},
 					Composite{
 						Layout:     HBox{MarginsZero: true},
@@ -349,6 +385,8 @@ func main() {
 					PushButton{AssignTo: &w.btnApply, Text: "2. Разложить", Enabled: false, OnClicked: w.apply},
 					PushButton{AssignTo: &w.btnBest, Text: "Лучшие кадры…", Enabled: false, OnClicked: w.bestDialog,
 						ToolTipText: "Отобрать лучшие кадры объекта (по HFR и числу звёзд, как взвешенный FWHM в Siril) за выбранные сессии в каталог Stars рядом с Objects, с той же структурой папок"},
+					PushButton{AssignTo: &w.btnPause, Text: "Пауза", Enabled: false, OnClicked: w.togglePause,
+						ToolTipText: "Приостановить скачивание с приёмника; начатые файлы потом докачаются с того же места"},
 					PushButton{AssignTo: &w.btnStop, Text: "Стоп", Enabled: false, OnClicked: func() {
 						if w.cancel != nil {
 							w.cancel()
@@ -370,7 +408,15 @@ func main() {
 				Children: []Widget{
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
+					PushButton{AssignTo: &w.btnRejects, Visible: false, OnClicked: w.rejectsMenu,
+						ToolTipText: "Кадры, помеченные клавишей Del или X в таблице: показать только их, отложить, удалить везде, снять пометки"},
 					HSpacer{},
+					CheckBox{AssignTo: &w.newBox, Text: "Только новые",
+						ToolTipText: "Только кадры, которых ещё нет в выходном каталоге: пришедшие после прошлого «Разложить» (не скачанные с приёмника, не разложенные)",
+						OnCheckedChanged: func() {
+							w.model.onlyNew = w.newBox.Checked()
+							w.filterChanged()
+						}},
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
@@ -404,10 +450,14 @@ func main() {
 			ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
 			Label{AssignTo: &w.status, EllipsisMode: EllipsisEnd, Text: "Укажите, откуда брать кадры и куда их разложить, и нажмите «Просмотреть кадры»."},
 			HSplitter{
+				Name:          "split",
+				Persistent:    true,
 				StretchFactor: 1,
 				Children: []Widget{
 					TabWidget{
 						AssignTo:      &w.tabs,
+						Name:          "tabs",
+						Persistent:    true,
 						StretchFactor: 3,
 						OnCurrentIndexChanged: func() {
 							// the planner takes the whole width
@@ -421,9 +471,15 @@ func main() {
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true, MultiSelection: true,
-									OnCurrentIndexChanged: w.showPreview, StyleCell: func(c *walk.CellStyle) {
+									OnCurrentIndexChanged: w.showPreview, OnSelectedIndexesChanged: w.selectionChanged,
+									StyleCell: func(c *walk.CellStyle) {
 										if w.model.marked(c.Row()) {
 											c.BackgroundColor = walk.RGB(255, 205, 205)
+										} else if w.model.rejected(c.Row()) {
+											c.BackgroundColor = walk.RGB(255, 232, 160)
+										}
+										if w.model.worst(c.Row(), c.Col()) {
+											c.TextColor = walk.RGB(200, 30, 30)
 										}
 									}},
 								Label{AssignTo: &w.shownInfo, EllipsisMode: EllipsisEnd, TextColor: walk.RGB(90, 90, 90)},
@@ -528,12 +584,21 @@ func main() {
 	w.speedChanged()
 	w.inputChanged()
 	w.pl.init()
+	w.pl.weatherNeeded() // the planner may be the tab restored
+	for name, tv := range w.keptTables() {
+		w.restoreColumns(name, tv)
+	}
 	copyMenu(w.table, w.frameCopies)
-	copyMenu(w.nightTable, nil)
+	tableKeys(w.table, w.frameKey)
+	copyMenu(w.nightTable, w.nightOpens)
+	w.inEdit.DropFiles().Attach(func(f []string) { dropped(w.inEdit, f) })
+	w.outEdit.DropFiles().Attach(func(f []string) { dropped(w.outEdit, f) })
+	w.mw.DropFiles().Attach(func(f []string) { dropped(w.inEdit, f) })
 	copyMenu(w.pl.targetTable, nil)
 	copyMenu(w.pl.stepTable, nil)
 	cleanupUpdate()
 	w.watchGitHub()
+	w.mw.Synchronize(w.autoScan) // once the window is shown
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
 			w.cancel()
@@ -541,9 +606,18 @@ func main() {
 		if w.measureCancel != nil {
 			w.measureCancel()
 		}
+		for name, tv := range w.keptTables() {
+			w.keepColumns(name, tv)
+		}
 		w.settings().save()
 	})
 	w.mw.Run()
+	// walk writes the state of the window as it closes, after Closing
+	w.mu.Lock()
+	w.saved.UI = ui.all()
+	s = w.saved
+	w.mu.Unlock()
+	s.save()
 }
 
 // settings are the saved ones with the fields of the window.
@@ -553,6 +627,7 @@ func (w *window) settings() settings {
 	s := w.saved
 	s.In, s.Out = strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	s.Mode, s.FillCalibration = w.modeBox.CurrentIndex(), w.fillBox.Checked()
+	s.NoAutoScan = !w.autoBox.Checked()
 	if i := w.parBox.CurrentIndex(); i >= 0 && i < len(parallelChoices) {
 		s.Parallel = parallelChoices[i]
 	}
@@ -627,6 +702,9 @@ func (w *window) foldersChanged() {
 }
 
 func (w *window) setBusy(b bool) {
+	if b != w.busy {
+		w.taskbarBusy(b)
+	}
 	w.busy = b
 	w.btnScan.SetEnabled(!b)
 	w.btnStop.SetEnabled(b)
@@ -636,6 +714,8 @@ func (w *window) setBusy(b bool) {
 	w.codeEdit.SetReadOnly(b)
 	w.btnForget.SetEnabled(!b)
 	w.btnBrowseIn.SetEnabled(!b)
+	w.btnRecentIn.SetEnabled(!b)
+	w.btnRecentOut.SetEnabled(!b)
 	w.btnFolders.SetEnabled(!b)
 	w.modeBox.SetEnabled(!b)
 	w.fillBox.SetEnabled(!b)
@@ -714,6 +794,25 @@ func blinkSpeed(s settings) int {
 	return s.BlinkSpeed
 }
 
+// autoScan looks at the frames at the start when both places are set and
+// there; a folder not there (a disk not plugged in) is only told.
+func (w *window) autoScan() {
+	s := w.settings()
+	if s.NoAutoScan || s.In == "" || s.Out == "" || w.busy {
+		return
+	}
+	if !sorter.IsURL(s.In) {
+		if st, err := os.Stat(s.In); err != nil || !st.IsDir() {
+			w.setStatus("Входной каталог " + s.In + " недоступен — кадры не просмотрены при запуске.")
+			return
+		}
+	}
+	if sorter.CheckDirs(s.In, s.Out) != nil {
+		return
+	}
+	w.scan()
+}
+
 func (w *window) scan() {
 	s := w.settings()
 	w.setPlay(false)
@@ -735,6 +834,10 @@ func (w *window) scan() {
 	}
 	password, code := w.passEdit.Text(), w.codeEdit.Text()
 	only := w.chosenFolders(s.In)
+	w.mu.Lock()
+	w.saved.RecentIn, w.saved.RecentOut = remember(w.saved.RecentIn, s.In), remember(w.saved.RecentOut, s.Out)
+	s.RecentIn, s.RecentOut = w.saved.RecentIn, w.saved.RecentOut
+	w.mu.Unlock()
 	s.save()
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
@@ -771,7 +874,7 @@ func (w *window) scan() {
 		nights := l.Nights(s.Out)
 		w.mw.Synchronize(func() {
 			w.progress.SetMarqueeMode(false)
-			w.progress.SetValue(0)
+			w.setProgress(0)
 			w.setBusy(false)
 			down := remote && fatal != nil && !errors.Is(fatal, sorter.ErrLogin) && !errors.Is(fatal, context.Canceled)
 			if down && !w.receiverDown {
@@ -794,7 +897,8 @@ func (w *window) scan() {
 			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
 			w.scannedOnly = strings.Join(only, "\n")
 			w.offline = offline
-			w.model.set(l, remote && !offline)
+			w.model.set(l, remote && !offline, s.Out)
+			w.rejectsChanged()
 			w.objectsChanged()
 			w.filtersChanged()
 			w.btnGone.SetText(goneOn)
@@ -927,6 +1031,10 @@ func (w *window) apply() {
 	if sorter.IsURL(s.In) {
 		_, total := l.Missing(s.Out)
 		sw = w.startSpeed(total, opt.Parallel)
+		w.gate = sorter.NewGate()
+		opt.Pause = w.gate
+		w.btnPause.SetText("Пауза")
+		w.btnPause.SetEnabled(true)
 	}
 	go func() {
 		defer cancel()
@@ -948,6 +1056,9 @@ func (w *window) apply() {
 		stopped := ctx.Err() != nil
 		nights := l.Nights(s.Out) // what is in the output now
 		w.mw.Synchronize(func() {
+			w.gate = nil
+			w.btnPause.SetEnabled(false)
+			w.btnPause.SetText("Пауза")
 			w.showNights(nights)
 			msg := fmt.Sprintf("Готово: разложено %d, уже были на месте %d", r.Placed, r.Skipped)
 			if r.Sessions > 0 {
@@ -1000,10 +1111,29 @@ func (w *window) apply() {
 	}()
 }
 
+// togglePause pauses the download from the receiver or resumes it.
+func (w *window) togglePause() {
+	if w.gate == nil {
+		return
+	}
+	p := !w.gate.Paused()
+	w.gate.SetPaused(p)
+	if p {
+		w.btnPause.SetText("Продолжить")
+		w.setStatus("Пауза: скачивание приостановлено, начатые файлы докачаются после «Продолжить».")
+	} else {
+		w.btnPause.SetText("Пауза")
+	}
+	w.taskbarPaused(p)
+}
+
 // showProgress: by bytes while downloading from a receiver, else by files.
 func (w *window) showProgress(p sorter.Progress, start time.Time) {
+	if w.gate != nil && w.gate.Paused() {
+		return // the pause is told instead
+	}
 	if p.TotalBytes > 0 {
-		w.progress.SetValue(int(p.Bytes * 1000 / p.TotalBytes))
+		w.setProgress(int(p.Bytes * 1000 / p.TotalBytes))
 		t := fmt.Sprintf("Скачано %s из %s", sorter.FormatBytes(p.Bytes), sorter.FormatBytes(p.TotalBytes))
 		if sec := time.Since(start).Seconds(); sec > 2 && p.Bytes > 0 {
 			speed := float64(p.Bytes) / sec
@@ -1012,7 +1142,7 @@ func (w *window) showProgress(p sorter.Progress, start time.Time) {
 		w.setStatus(fmt.Sprintf("%s — %d из %d: %s", t, p.Done, p.Total, p.Name))
 		return
 	}
-	w.progress.SetValue(p.Done * 1000 / max(p.Total, 1))
+	w.setProgress(p.Done * 1000 / max(p.Total, 1))
 	w.setStatus(fmt.Sprintf("%d из %d: %s", p.Done, p.Total, p.Name))
 }
 
@@ -1287,10 +1417,39 @@ func (w *window) filterChanged() {
 		if w.model.shown.seconds > 0 {
 			t += ", суммарная выдержка " + sorter.FormatDuration(w.model.shown.seconds)
 		}
-		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
+		if w.model.fresh > 0 {
+			t += fmt.Sprintf(", новых (ещё нет в выходном каталоге) %d", w.model.fresh)
+		}
+		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка; красные HFR, звёзды, округлость, пересвет — заметно хуже остальных кадров той же сессии."
 		if w.model.mark {
 			t += " Красным — кадры, удалённые или помеченные на удаление на приёмнике."
 		}
+		if len(w.rejectRows()) > 0 {
+			t += " Жёлтым — помеченные плохими (Del или X)."
+		}
+	}
+	w.shownText = t
+	w.selectionChanged()
+}
+
+// selectionChanged adds what the rows selected hold to the line under the
+// table: how many frames, their size and exposure.
+func (w *window) selectionChanged() {
+	t := w.shownText
+	if sel := w.table.SelectedIndexes(); len(sel) > 1 {
+		var size int64
+		var sec float64
+		for _, i := range sel {
+			if i >= 0 && i < len(w.model.rows) {
+				size += w.model.rows[i].f.Size
+				sec += w.model.rows[i].f.Exposure
+			}
+		}
+		sum := fmt.Sprintf("Выделено: %d (%s", len(sel), sorter.FormatBytes(size))
+		if sec > 0 {
+			sum += ", выдержка " + sorter.FormatDuration(sec)
+		}
+		t = sum + "). " + t
 	}
 	setLong(w.shownInfo, t)
 }

@@ -77,8 +77,10 @@ func (w *window) localFiles(r row) []string {
 
 // deleteEverywhere deletes the frames of the menu of the row i on this
 // computer, on the receiver and on the ASIAIR, then reads the frames again.
-func (w *window) deleteEverywhere(i int) {
-	rows := w.menuRows(i)
+func (w *window) deleteEverywhere(i int) { w.deleteRows(w.menuRows(i)) }
+
+// deleteRows deletes the frames of the rows everywhere, once asked.
+func (w *window) deleteRows(rows []row) {
 	if w.busy || len(rows) == 0 {
 		return
 	}

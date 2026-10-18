@@ -160,7 +160,7 @@ func (w *window) installUpdate(u *sorterUpdate) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	w.cancel = cancel
 	w.setBusy(true)
-	w.progress.SetValue(0)
+	w.setProgress(0)
 	w.setStatus(fmt.Sprintf("Скачиваю сортировщик %s %s…", u.version, u.from))
 	log.Printf("Обновление: скачиваю сортировщик %s, %s", u.version, u.where)
 	shown := int64(-1)
@@ -174,7 +174,7 @@ func (w *window) installUpdate(u *sorterUpdate) {
 		}
 		shown = v
 		w.mw.Synchronize(func() {
-			w.progress.SetValue(int(v))
+			w.setProgress(int(v))
 			w.setStatus(fmt.Sprintf("Скачиваю сортировщик %s %s… %d%%", u.version, u.from, v/10))
 		})
 	}
@@ -190,7 +190,7 @@ func (w *window) installUpdate(u *sorterUpdate) {
 		}
 		w.mw.Synchronize(func() {
 			w.setBusy(false)
-			w.progress.SetValue(0)
+			w.setProgress(0)
 			if err != nil {
 				if ctx.Err() == context.Canceled {
 					w.setStatus("Обновление остановлено.")

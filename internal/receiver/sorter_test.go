@@ -152,6 +152,28 @@ func TestSorterFromReceiver(t *testing.T) {
 		}
 	}
 
+	// paused from the start: nothing comes until resumed, then all of it
+	pausedOut := t.TempDir()
+	gate := sorter.NewGate()
+	gate.SetPaused(true)
+	resCh := make(chan sorter.Result, 1)
+	go func() {
+		resCh <- sorter.Plan(frames).Apply(ctx, pausedOut, sorter.Options{Parallel: 2, Pause: gate}, nil)
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if n, _ := sorter.Plan(frames).Missing(pausedOut); n != 4 {
+		t.Fatalf("downloaded while paused: %d missing", n)
+	}
+	gate.SetPaused(false)
+	select {
+	case res := <-resCh:
+		if len(res.Errors) > 0 || res.Placed != 4 {
+			t.Fatalf("after the pause: %+v", res)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the downloads did not go on after the pause")
+	}
+
 	// the next run: the headers come from the cache, nothing is downloaded
 	os.Remove(filepath.Join(root, "Autorun", "Dark", "Dark_300.0s_Bin1_gain100_20260801-120000_-10.0C_0001.fit")) // gone on the receiver
 	r2, _ := sorter.NewReceiver(ts.URL, pinned, r.Session())
