@@ -6,12 +6,14 @@ import (
 
 // Keys of the table «Кадры» for looking at the frames: ← → the previous and
 // the next frame, the space starts and stops the blink, + − zoom, 0 fits
-// the frame in, 1 shows it at 100%.
+// the frame in, 1 shows it at 100%, Del or X marks the frame bad.
 
 const (
 	vkSpace    = 0x20
 	vkLeft     = 0x25
 	vkRight    = 0x27
+	vkDelete   = 0x2E
+	vkX        = 0x58
 	vk0        = 0x30
 	vk1        = 0x31
 	vkNumpad0  = 0x60
@@ -44,6 +46,10 @@ func (w *window) frameKey(vk uintptr, repeat bool) bool {
 		w.zoom.fitAll()
 	case vk1, vkNumpad1:
 		w.zoom.actual()
+	case vkDelete, vkX:
+		if !repeat {
+			w.toggleReject()
+		}
 	default:
 		return false
 	}

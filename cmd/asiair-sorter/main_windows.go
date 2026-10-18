@@ -184,6 +184,7 @@ type window struct {
 	nights                     *nightModel
 	nightTotals, onlyInfo      *walk.Label
 	btnAll, btnGone, btnDelete *walk.PushButton
+	btnRejects                 *walk.PushButton
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
 	shownText                  string // the line under the table, without the selection
@@ -385,6 +386,8 @@ func main() {
 				Children: []Widget{
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
+					PushButton{AssignTo: &w.btnRejects, Visible: false, OnClicked: w.rejectsMenu,
+						ToolTipText: "Кадры, помеченные клавишей Del или X в таблице: показать только их, отложить, удалить везде, снять пометки"},
 					HSpacer{},
 					CheckBox{AssignTo: &w.newBox, Text: "Только новые",
 						ToolTipText: "Только кадры, которых ещё нет в выходном каталоге: пришедшие после прошлого «Разложить» (не скачанные с приёмника, не разложенные)",
@@ -450,6 +453,8 @@ func main() {
 									StyleCell: func(c *walk.CellStyle) {
 										if w.model.marked(c.Row()) {
 											c.BackgroundColor = walk.RGB(255, 205, 205)
+										} else if w.model.rejected(c.Row()) {
+											c.BackgroundColor = walk.RGB(255, 232, 160)
 										}
 									}},
 								Label{AssignTo: &w.shownInfo, EllipsisMode: EllipsisEnd, TextColor: walk.RGB(90, 90, 90)},
@@ -859,6 +864,7 @@ func (w *window) scan() {
 			w.scannedOnly = strings.Join(only, "\n")
 			w.offline = offline
 			w.model.set(l, remote && !offline, s.Out)
+			w.rejectsChanged()
 			w.objectsChanged()
 			w.filtersChanged()
 			w.btnGone.SetText(goneOn)
@@ -1357,6 +1363,9 @@ func (w *window) filterChanged() {
 		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
 		if w.model.mark {
 			t += " Красным — кадры, удалённые или помеченные на удаление на приёмнике."
+		}
+		if len(w.rejectRows()) > 0 {
+			t += " Жёлтым — помеченные плохими (Del или X)."
 		}
 	}
 	w.shownText = t

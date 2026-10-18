@@ -96,6 +96,10 @@ type frameModel struct {
 	// onlyNew shows only the frames not in the output yet
 	onlyNew bool
 	fresh   int // how many of all are
+	// rejects: the frames marked bad (rejectKey), kept when looked at
+	// again; onlyRejects shows only them
+	rejects     map[string]bool
+	onlyRejects bool
 }
 
 // goneText is the column «Куда» of a frame deleted on the receiver.
@@ -431,6 +435,9 @@ func (m *frameModel) filter() {
 			continue
 		}
 		if m.onlyNew && !r.fresh {
+			continue
+		}
+		if m.onlyRejects && !m.rejects[rejectKey(r.f)] {
 			continue
 		}
 		m.rows = append(m.rows, r)
