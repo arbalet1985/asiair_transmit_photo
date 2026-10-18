@@ -456,6 +456,9 @@ func main() {
 										} else if w.model.rejected(c.Row()) {
 											c.BackgroundColor = walk.RGB(255, 232, 160)
 										}
+										if w.model.worst(c.Row(), c.Col()) {
+											c.TextColor = walk.RGB(200, 30, 30)
+										}
 									}},
 								Label{AssignTo: &w.shownInfo, EllipsisMode: EllipsisEnd, TextColor: walk.RGB(90, 90, 90)},
 							}},
@@ -1360,7 +1363,7 @@ func (w *window) filterChanged() {
 		if w.model.fresh > 0 {
 			t += fmt.Sprintf(", новых (ещё нет в выходном каталоге) %d", w.model.fresh)
 		}
-		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
+		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка; красные HFR, звёзды, округлость, пересвет — заметно хуже остальных кадров той же сессии."
 		if w.model.mark {
 			t += " Красным — кадры, удалённые или помеченные на удаление на приёмнике."
 		}
