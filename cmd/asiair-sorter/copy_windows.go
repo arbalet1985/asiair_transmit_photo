@@ -16,9 +16,10 @@ import (
 // The right button on a cell of a table: a menu to copy the cell, the whole
 // row and, for frames, the paths of the file and what can be done with it.
 //
-// The menu is shown by the table itself, not as the context menu of walk:
-// a TableView of walk is made of list views walk does not know, and the
-// WM_CONTEXTMENU they send names one of them, so walk never showed its menu.
+// A TableView of walk is made of list views walk does not know, and the
+// WM_CONTEXTMENU they send names one of them, so walk never shows a menu of
+// its own. The list views are subclassed here and their WM_CONTEXTMENU (the
+// right button, the menu key, Shift+F10) shows the menu right away.
 
 // copyItem is a line of the menu: its label and what it copies, or, with
 // run, what it does; a line without a label is a separator.
@@ -27,12 +28,98 @@ type copyItem struct {
 	run         func()
 }
 
+// The subclassed list views (touched by the UI thread only): the window
+// procedure they had and what their WM_CONTEXTMENU does.
+var (
+	lvOrigProc = map[win.HWND]uintptr{}
+	lvMenu     = map[win.HWND]func(hwnd win.HWND, x, y int32){}
+	lvFound    []win.HWND
+	lvProcPtr  = syscall.NewCallback(lvMenuProc)
+	lvEnumPtr  = syscall.NewCallback(func(h win.HWND, _ uintptr) uintptr {
+		buf := make([]uint16, 64)
+		if n, _ := win.GetClassName(h, &buf[0], len(buf)); n > 0 && syscall.UTF16ToString(buf[:n]) == "SysListView32" {
+			lvFound = append(lvFound, h)
+		}
+		return 1
+	})
+)
+
+// rclick: a right click on a list view is going on (on) and its menu has
+// been shown already (shown). Should a list view send no WM_CONTEXTMENU,
+// the menu is shown once the button is up: shown while the button is down,
+// its release would pick a line or close the menu at once.
+var rclick struct{ on, shown bool }
+
+func lvMenuProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
+	orig := lvOrigProc[hwnd]
+	show := lvMenu[hwnd]
+	switch msg {
+	case win.WM_CONTEXTMENU:
+		if show == nil {
+			break
+		}
+		if rclick.on {
+			if rclick.shown {
+				return 0
+			}
+			rclick.shown = true
+		}
+		show(hwnd, win.GET_X_LPARAM(lp), win.GET_Y_LPARAM(lp))
+		return 0
+	case win.WM_RBUTTONDOWN:
+		if show == nil {
+			break
+		}
+		rclick.on, rclick.shown = true, false
+		r := win.CallWindowProc(orig, hwnd, msg, wp, lp)
+		// the list view may wait for the release itself
+		if rclick.on && win.GetKeyState(win.VK_RBUTTON) >= 0 {
+			rclick.on = false
+			if !rclick.shown {
+				var pt win.POINT
+				win.GetCursorPos(&pt)
+				show(hwnd, pt.X, pt.Y)
+			}
+		}
+		return r
+	case win.WM_RBUTTONUP:
+		if show == nil || !rclick.on {
+			break
+		}
+		r := win.CallWindowProc(orig, hwnd, msg, wp, lp)
+		if rclick.on {
+			rclick.on = false
+			if !rclick.shown {
+				pt := win.POINT{X: win.GET_X_LPARAM(lp), Y: win.GET_Y_LPARAM(lp)}
+				win.ClientToScreen(hwnd, &pt)
+				show(hwnd, pt.X, pt.Y)
+			}
+		}
+		return r
+	case win.WM_NCDESTROY:
+		win.SetWindowLongPtr(hwnd, win.GWLP_WNDPROC, orig)
+		delete(lvOrigProc, hwnd)
+		delete(lvMenu, hwnd)
+	}
+	return win.CallWindowProc(orig, hwnd, msg, wp, lp)
+}
+
 // copyMenu gives the table the menu; extra adds the lines of a row (nil:
 // none). Ctrl+C copies the rows selected.
 func copyMenu(tv *walk.TableView, extra func(row int) []copyItem) {
-	show := func(row, col int, at func() (int32, int32)) {
+	show := func(hwnd win.HWND, x, y int32) {
 		m, ok := tv.Model().(walk.TableModel)
-		if !ok || row < 0 || row >= m.RowCount() {
+		if !ok {
+			return
+		}
+		row, col := -1, -1
+		if x == -1 && y == -1 { // from the keyboard: the current row
+			row, col = tv.CurrentIndex(), firstColumn(tv)
+			x, y = rowCorner(tv, hwnd, row)
+		} else {
+			row, col = cellAt(tv, hwnd, x, y)
+		}
+		if row < 0 || row >= m.RowCount() {
 			return
 		}
 		var items []copyItem
@@ -48,32 +135,22 @@ func copyMenu(tv *walk.TableView, extra func(row int) []copyItem) {
 		if extra != nil {
 			items = append(items, extra(row)...)
 		}
-		x, y := at()
 		popup(tv.Form().Handle(), x, y, items)
 	}
-	cursor := func() (int32, int32) {
-		var pt win.POINT
-		win.GetCursorPos(&pt)
-		return pt.X, pt.Y
-	}
-	// the menu is shown once the list view has selected the row clicked
-	tv.MouseDown().Attach(func(x, y int, b walk.MouseButton) {
-		if b == walk.RightButton {
-			row, col := cellAt(tv)
-			tv.Synchronize(func() { show(row, col, cursor) })
+	lvFound = nil
+	win.EnumChildWindows(tv.Handle(), lvEnumPtr, 0)
+	for _, h := range lvFound {
+		if _, done := lvOrigProc[h]; done {
+			continue
 		}
-	})
+		if orig := win.SetWindowLongPtr(h, win.GWLP_WNDPROC, lvProcPtr); orig != 0 {
+			lvOrigProc[h] = orig
+			lvMenu[h] = show
+		}
+	}
+	lvFound = nil
 	tv.KeyDown().Attach(func(k walk.Key) {
-		switch {
-		case k == walk.KeyApps || k == walk.KeyF10 && walk.ShiftDown():
-			row := tv.CurrentIndex()
-			tv.Synchronize(func() {
-				show(row, firstColumn(tv), func() (int32, int32) {
-					p := tv.ContextMenuLocation()
-					return int32(p.X), int32(p.Y)
-				})
-			})
-		case k == walk.KeyC && walk.ControlDown():
+		if k == walk.KeyC && walk.ControlDown() {
 			if m, ok := tv.Model().(walk.TableModel); ok {
 				if t := selectedText(tv, m); t != "" {
 					walk.Clipboard().SetText(t)
@@ -81,6 +158,22 @@ func copyMenu(tv *walk.TableView, extra func(row int) []copyItem) {
 			}
 		}
 	})
+}
+
+// rowCorner: the point of the screen under the left end of the row (for
+// the menu from the keyboard), the corner of the table if it is not seen.
+func rowCorner(tv *walk.TableView, hwnd win.HWND, row int) (int32, int32) {
+	rc := win.RECT{Left: win.LVIR_BOUNDS}
+	pt := win.POINT{}
+	if row >= 0 && win.SendMessage(hwnd, win.LVM_GETITEMRECT, uintptr(row), uintptr(unsafe.Pointer(&rc))) != 0 {
+		var cl win.RECT
+		win.GetClientRect(hwnd, &cl)
+		if rc.Bottom > cl.Top && rc.Bottom <= cl.Bottom {
+			pt = win.POINT{X: max(rc.Left, cl.Left), Y: rc.Bottom}
+		}
+	}
+	win.ClientToScreen(hwnd, &pt)
+	return pt.X, pt.Y
 }
 
 // popup shows the menu at the point of the screen and does what is chosen.
@@ -151,19 +244,13 @@ func selectedText(tv *walk.TableView, m walk.TableModel) string {
 	return strings.Join(lines, "\n")
 }
 
-// cellAt: the row and the column of the model under the mouse, -1 if none.
-func cellAt(tv *walk.TableView) (row, col int) {
-	var pt win.POINT
-	if !win.GetCursorPos(&pt) {
-		return -1, -1
-	}
-	h := win.WindowFromPoint(pt)
-	if h == 0 || !win.IsChild(tv.Handle(), h) {
-		return -1, -1
-	}
-	win.ScreenToClient(h, &pt)
+// cellAt: the row and the column of the model at the point of the screen
+// in the list view, -1 if none.
+func cellAt(tv *walk.TableView, hwnd win.HWND, x, y int32) (row, col int) {
+	pt := win.POINT{X: x, Y: y}
+	win.ScreenToClient(hwnd, &pt)
 	hti := win.LVHITTESTINFO{Pt: pt}
-	if int32(win.SendMessage(h, win.LVM_SUBITEMHITTEST, 0, uintptr(unsafe.Pointer(&hti)))) < 0 {
+	if int32(win.SendMessage(hwnd, win.LVM_SUBITEMHITTEST, 0, uintptr(unsafe.Pointer(&hti)))) < 0 {
 		return -1, -1
 	}
 	// the list view has the visible columns only, in the order of the model
