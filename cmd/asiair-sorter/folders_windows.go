@@ -93,6 +93,7 @@ func (w *window) chooseFolders() {
 				w.warn(err.Error())
 				return
 			}
+			w.loginWarned = false
 			w.codeEdit.SetText("")
 			w.passEdit.SetText("")
 			w.setStatus("")

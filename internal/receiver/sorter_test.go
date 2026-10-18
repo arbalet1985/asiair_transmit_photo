@@ -95,6 +95,28 @@ func TestSorterFromReceiver(t *testing.T) {
 		t.Fatalf("pinned %q, receiver %q", pinned, s.fingerprint)
 	}
 
+	// the password changed on the page: the login kept is refused and told once
+	old, _ := sorter.NewReceiver(ts.URL+"/", pinned, r.Session())
+	lost := 0
+	old.OnLoginLost = func() { lost++ }
+	if _, err := old.Files(ctx); err != nil {
+		t.Fatalf("files with the session: %v", err)
+	}
+	if rec := call(t, local, jar, "POST", "/ui/api/remote", map[string]string{"action": "password", "password": "новое небо"}); rec.Code != 200 {
+		t.Fatalf("new password: %d %s", rec.Code, rec.Body)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := old.Files(ctx); !errors.Is(err, sorter.ErrLogin) {
+			t.Fatalf("files after the password changed: %v", err)
+		}
+	}
+	if lost != 1 || old.Session() != "" {
+		t.Fatalf("login lost told %d times, session %q", lost, old.Session())
+	}
+	if err := r.Login(ctx, "новое небо", ""); err != nil {
+		t.Fatal(err)
+	}
+
 	cacheFile := filepath.Join(dir, "headers.json")
 	cache := sorter.LoadHeaderCache(cacheFile)
 	frames, errs := sorter.ScanReceiver(ctx, r, cache, nil)
