@@ -29,10 +29,12 @@ type copyItem struct {
 }
 
 // The subclassed list views (touched by the UI thread only): the window
-// procedure they had and what their WM_CONTEXTMENU does.
+// procedure they had, what their WM_CONTEXTMENU does and the keys they
+// handle themselves (true: the key is done, the list view does not see it).
 var (
 	lvOrigProc = map[win.HWND]uintptr{}
 	lvMenu     = map[win.HWND]func(hwnd win.HWND, x, y int32){}
+	lvKey      = map[win.HWND]func(vk uintptr, repeat bool) bool{}
 	lvFound    []win.HWND
 	lvProcPtr  = syscall.NewCallback(lvMenuProc)
 	lvEnumPtr  = syscall.NewCallback(func(h win.HWND, _ uintptr) uintptr {
@@ -54,6 +56,10 @@ func lvMenuProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 	orig := lvOrigProc[hwnd]
 	show := lvMenu[hwnd]
 	switch msg {
+	case win.WM_KEYDOWN:
+		if key := lvKey[hwnd]; key != nil && key(wp, lp&(1<<30) != 0) {
+			return 0
+		}
 	case win.WM_CONTEXTMENU:
 		if show == nil {
 			break
@@ -100,6 +106,7 @@ func lvMenuProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 		win.SetWindowLongPtr(hwnd, win.GWLP_WNDPROC, orig)
 		delete(lvOrigProc, hwnd)
 		delete(lvMenu, hwnd)
+		delete(lvKey, hwnd)
 	}
 	return win.CallWindowProc(orig, hwnd, msg, wp, lp)
 }
@@ -137,18 +144,9 @@ func copyMenu(tv *walk.TableView, extra func(row int) []copyItem) {
 		}
 		popup(tv.Form().Handle(), x, y, items)
 	}
-	lvFound = nil
-	win.EnumChildWindows(tv.Handle(), lvEnumPtr, 0)
-	for _, h := range lvFound {
-		if _, done := lvOrigProc[h]; done {
-			continue
-		}
-		if orig := win.SetWindowLongPtr(h, win.GWLP_WNDPROC, lvProcPtr); orig != 0 {
-			lvOrigProc[h] = orig
-			lvMenu[h] = show
-		}
+	for _, h := range subclassTable(tv) {
+		lvMenu[h] = show
 	}
-	lvFound = nil
 	tv.KeyDown().Attach(func(k walk.Key) {
 		if k == walk.KeyC && walk.ControlDown() {
 			if m, ok := tv.Model().(walk.TableModel); ok {
@@ -158,6 +156,33 @@ func copyMenu(tv *walk.TableView, extra func(row int) []copyItem) {
 			}
 		}
 	})
+}
+
+// subclassTable subclasses the list views of the table (once) and returns
+// them.
+func subclassTable(tv *walk.TableView) []win.HWND {
+	lvFound = nil
+	win.EnumChildWindows(tv.Handle(), lvEnumPtr, 0)
+	var hs []win.HWND
+	for _, h := range lvFound {
+		if _, done := lvOrigProc[h]; !done {
+			orig := win.SetWindowLongPtr(h, win.GWLP_WNDPROC, lvProcPtr)
+			if orig == 0 {
+				continue
+			}
+			lvOrigProc[h] = orig
+		}
+		hs = append(hs, h)
+	}
+	lvFound = nil
+	return hs
+}
+
+// tableKeys gives the table keys of its own (see lvKey).
+func tableKeys(tv *walk.TableView, key func(vk uintptr, repeat bool) bool) {
+	for _, h := range subclassTable(tv) {
+		lvKey[h] = key
+	}
 }
 
 // rowCorner: the point of the screen under the left end of the row (for

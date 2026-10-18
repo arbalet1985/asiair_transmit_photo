@@ -559,6 +559,7 @@ func main() {
 		w.restoreColumns(name, tv)
 	}
 	copyMenu(w.table, w.frameCopies)
+	tableKeys(w.table, w.frameKey)
 	copyMenu(w.nightTable, nil)
 	copyMenu(w.pl.targetTable, nil)
 	copyMenu(w.pl.stepTable, nil)
