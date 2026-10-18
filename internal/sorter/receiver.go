@@ -44,7 +44,7 @@ func IsURL(s string) bool {
 }
 
 // ErrLogin: the receiver wants the password (and the one-time code, when on).
-var ErrLogin = errors.New("приёмник просит войти: введите пароль доступа с телефона")
+var ErrLogin = errors.New("приёмник просит войти: вход устарел (пароль доступа сменили?) или его не было — введите пароль доступа с телефона")
 
 // FingerprintError: the receiver presented another self-signed certificate
 // than the one remembered at the first connection.
@@ -65,6 +65,9 @@ type Receiver struct {
 	session string // the login cookie
 	// OnPin is told the fingerprint trusted at the first connection.
 	OnPin func(fp string)
+	// OnLoginLost is told the receiver refused the login kept (its
+	// password was changed or the login is over); called once a login.
+	OnLoginLost func()
 }
 
 // NewReceiver prepares a connection. fingerprint is the certificate
@@ -153,7 +156,8 @@ func (r *Receiver) url(p string, q url.Values) string {
 }
 
 func (r *Receiver) do(req *http.Request) (*http.Response, error) {
-	if s := r.Session(); s != "" {
+	s := r.Session()
+	if s != "" {
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s})
 	}
 	resp, err := r.client.Do(req)
@@ -169,6 +173,18 @@ func (r *Receiver) do(req *http.Request) (*http.Response, error) {
 		resp.Body.Close()
 		if basic {
 			return nil, errors.New("страница приёмника защищена логином (ui_password): укажите его в адресе, например http://логин:пароль@127.0.0.1:8080/")
+		}
+		if s != "" {
+			r.mu.Lock()
+			lost := r.session == s
+			if lost {
+				r.session = ""
+			}
+			tell := r.OnLoginLost
+			r.mu.Unlock()
+			if lost && tell != nil {
+				tell()
+			}
 		}
 		return nil, ErrLogin
 	}

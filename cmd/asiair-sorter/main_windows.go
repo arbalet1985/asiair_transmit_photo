@@ -185,6 +185,7 @@ type window struct {
 	busy                       bool
 	cancel                     context.CancelFunc
 	askedUpdate                string // the version of the sorter offered already
+	loginWarned                bool   // told the login to the receiver is lost
 	previewGen                 atomic.Int64
 	previews                   previewCache
 	btnPlay                    *walk.PushButton
@@ -655,6 +656,11 @@ func (w *window) connect(ctx context.Context, addr, password, code string) (*sor
 		w.setLogin(addr, func(l *receiverLogin) { l.Fingerprint = fp })
 		log.Printf("Сертификат приёмника %s: %s", addr, fp)
 	}
+	r.OnLoginLost = func() {
+		w.setLogin(addr, func(l *receiverLogin) { l.Session = "" })
+		log.Printf("Приёмник %s больше не принимает вход: пароль доступа сменили или вход устарел", addr)
+		w.mw.Synchronize(w.loginLost)
+	}
 	if saved.Session == "" && password != "" {
 		if err := r.Login(ctx, password, code); err != nil {
 			return nil, err
@@ -662,6 +668,22 @@ func (w *window) connect(ctx context.Context, addr, password, code string) (*sor
 		w.setLogin(addr, func(l *receiverLogin) { l.Session = r.Session() })
 	}
 	return r, nil
+}
+
+const loginLostText = "Приёмник больше не принимает вход сортировщика: пароль доступа сменили или вход устарел.\n\n" +
+	"Введите пароль доступа с телефона (и одноразовый код, если он включён) и нажмите «Просмотреть кадры»."
+
+// loginLost tells, once a login, that the receiver refused the login kept:
+// with its password changed every request fails until the new one is typed.
+func (w *window) loginLost() {
+	w.passEdit.SetFocus()
+	if w.busy || w.loginWarned {
+		// a scan going on says it itself, with what it shows instead
+		return
+	}
+	w.loginWarned = true
+	w.setStatus(strings.ReplaceAll(loginLostText, "\n\n", " "))
+	w.warn(loginLostText)
 }
 
 // blinkSpeed: the speed of the blink kept, 2 frames per second at first.
@@ -740,6 +762,7 @@ func (w *window) scan() {
 				return
 			}
 			if !offline {
+				w.loginWarned = false // the receiver let us in
 				w.codeEdit.SetText("")
 				w.passEdit.SetText("")
 			}
@@ -762,11 +785,17 @@ func (w *window) scan() {
 				msg = fmt.Sprintf("Приёмник недоступен (%v). Показаны кадры, уже скачанные в выходной каталог: %d, сессий: %d, объём %s. "+
 					"Раскладка и скачивание — после подключения к приёмнику (снова «Просмотреть кадры»).",
 					fatal, l.Frames(), len(l.Sessions), sorter.FormatBytes(l.TotalBytes))
-				if errors.Is(fatal, sorter.ErrLogin) {
-					w.passEdit.SetFocus()
-				}
 				if len(errs) > 0 {
 					msg += fmt.Sprintf(" Не прочитано: %d (%v).", len(errs), errs[0])
+				}
+				if errors.Is(fatal, sorter.ErrLogin) {
+					msg = fmt.Sprintf("Приёмник просит войти заново (пароль доступа сменили?) — введите пароль и снова «Просмотреть кадры». "+
+						"Пока показаны кадры, уже скачанные в выходной каталог: %d.", l.Frames())
+					w.setStatus(msg)
+					w.passEdit.SetFocus()
+					w.loginWarned = true
+					w.warn(loginLostText + fmt.Sprintf("\n\nПока показаны кадры, уже скачанные в выходной каталог: %d.", l.Frames()))
+					return
 				}
 				w.setStatus(msg)
 				return
