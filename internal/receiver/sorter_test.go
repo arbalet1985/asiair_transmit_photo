@@ -135,7 +135,7 @@ func TestSorterFromReceiver(t *testing.T) {
 		t.Fatalf("missing %d", n)
 	}
 	var last sorter.Progress
-	res := l.Apply(ctx, out, sorter.Options{FillCalibration: true}, func(p sorter.Progress) { last = p })
+	res := l.Apply(ctx, out, sorter.Options{FillCalibration: true, Parallel: 3}, func(p sorter.Progress) { last = p })
 	if len(res.Errors) > 0 || res.Placed != 4 || res.Calibration != 2 || last.Bytes != last.TotalBytes || last.TotalBytes == 0 {
 		t.Fatalf("%+v %+v", res, last)
 	}
