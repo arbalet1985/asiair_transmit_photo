@@ -160,6 +160,7 @@ type window struct {
 	wheelList                  []string       // the values of the lines of wheelBox (m.wheel)
 	fillBox                    *walk.CheckBox
 	autoBox                    *walk.CheckBox
+	newBox                     *walk.CheckBox
 	parBox                     *walk.ComboBox
 	speed                      *speedLog // the download going on or the last one
 	speedDlg                   *walk.Dialog
@@ -185,6 +186,7 @@ type window struct {
 	btnAll, btnGone, btnDelete *walk.PushButton
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
+	shownText                  string // the line under the table, without the selection
 	filterEdit                 *walk.LineEdit
 	previewInfo                *walk.Label
 	previewFull                bool // the preview shown has the full resolution
@@ -383,6 +385,12 @@ func main() {
 					Label{AssignTo: &w.onlyInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 					PushButton{AssignTo: &w.btnAll, Text: "Показать все", Visible: false, OnClicked: w.showAll},
 					HSpacer{},
+					CheckBox{AssignTo: &w.newBox, Text: "Только новые",
+						ToolTipText: "Только кадры, которых ещё нет в выходном каталоге: пришедшие после прошлого «Разложить» (не скачанные с приёмника, не разложенные)",
+						OnCheckedChanged: func() {
+							w.model.onlyNew = w.newBox.Checked()
+							w.filterChanged()
+						}},
 					Label{Text: "Показать:"},
 					ComboBox{AssignTo: &w.kindBox, Model: kinds, CurrentIndex: 0, OnCurrentIndexChanged: func() {
 						w.model.kind = kindFilters[w.kindBox.CurrentIndex()].kind
@@ -437,7 +445,8 @@ func main() {
 						Pages: []TabPage{
 							{Title: "Кадры", Layout: VBox{}, Children: []Widget{
 								TableView{AssignTo: &w.table, Model: w.model, Columns: cols, AlternatingRowBG: true, MultiSelection: true,
-									OnCurrentIndexChanged: w.showPreview, StyleCell: func(c *walk.CellStyle) {
+									OnCurrentIndexChanged: w.showPreview, OnSelectedIndexesChanged: w.selectionChanged,
+									StyleCell: func(c *walk.CellStyle) {
 										if w.model.marked(c.Row()) {
 											c.BackgroundColor = walk.RGB(255, 205, 205)
 										}
@@ -844,7 +853,7 @@ func (w *window) scan() {
 			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
 			w.scannedOnly = strings.Join(only, "\n")
 			w.offline = offline
-			w.model.set(l, remote && !offline)
+			w.model.set(l, remote && !offline, s.Out)
 			w.objectsChanged()
 			w.filtersChanged()
 			w.btnGone.SetText(goneOn)
@@ -1337,10 +1346,36 @@ func (w *window) filterChanged() {
 		if w.model.shown.seconds > 0 {
 			t += ", суммарная выдержка " + sorter.FormatDuration(w.model.shown.seconds)
 		}
+		if w.model.fresh > 0 {
+			t += fmt.Sprintf(", новых (ещё нет в выходном каталоге) %d", w.model.fresh)
+		}
 		t += ". «В папке» — сколько кадров в папке файла и их суммарная выдержка."
 		if w.model.mark {
 			t += " Красным — кадры, удалённые или помеченные на удаление на приёмнике."
 		}
+	}
+	w.shownText = t
+	w.selectionChanged()
+}
+
+// selectionChanged adds what the rows selected hold to the line under the
+// table: how many frames, their size and exposure.
+func (w *window) selectionChanged() {
+	t := w.shownText
+	if sel := w.table.SelectedIndexes(); len(sel) > 1 {
+		var size int64
+		var sec float64
+		for _, i := range sel {
+			if i >= 0 && i < len(w.model.rows) {
+				size += w.model.rows[i].f.Size
+				sec += w.model.rows[i].f.Exposure
+			}
+		}
+		sum := fmt.Sprintf("Выделено: %d (%s", len(sel), sorter.FormatBytes(size))
+		if sec > 0 {
+			sum += ", выдержка " + sorter.FormatDuration(sec)
+		}
+		t = sum + "). " + t
 	}
 	setLong(w.shownInfo, t)
 }

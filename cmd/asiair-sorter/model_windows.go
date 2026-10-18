@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,8 @@ type row struct {
 	f    *sorter.Frame
 	it   *sorter.Item
 	moon float64 // lit fraction of the Moon when the frame was taken, -1 = unknown
+	// fresh: not in the output yet (not downloaded, not laid out)
+	fresh bool
 }
 
 // the columns of the table
@@ -89,6 +93,9 @@ type frameModel struct {
 	// (nil when the input is a folder); mark highlights them
 	gone map[*sorter.Item]bool
 	mark bool
+	// onlyNew shows only the frames not in the output yet
+	onlyNew bool
+	fresh   int // how many of all are
 }
 
 // goneText is the column «Куда» of a frame deleted on the receiver.
@@ -237,14 +244,34 @@ func (m *frameModel) Sort(col int, order walk.SortOrder) error {
 	return m.SorterBase.Sort(col, order)
 }
 
-// set replaces the frames shown; remote: they were read from a receiver.
-func (m *frameModel) set(l *sorter.Layout, remote bool) {
-	m.all, m.only, m.gone, m.mark = nil, nil, nil, false
+// notInOutput: a frame not laid out yet: neither at its place in the
+// output nor in the output's library.
+func notInOutput(it *sorter.Item, out string) bool {
+	if it.Dup || it.Frame.InLibrary || out == "" {
+		return false
+	}
+	if it.Existing != "" {
+		if st, err := os.Stat(it.Existing); err == nil && st.Size() == it.Frame.Size {
+			return false
+		}
+	}
+	st, err := os.Stat(filepath.Join(out, filepath.FromSlash(it.Dest)))
+	return err != nil || st.Size() != it.Frame.Size
+}
+
+// set replaces the frames shown; remote: they were read from a receiver;
+// out is the output, to tell the frames not laid out yet.
+func (m *frameModel) set(l *sorter.Layout, remote bool, out string) {
+	m.all, m.only, m.gone, m.mark, m.fresh = nil, nil, nil, false, 0
 	m.folders = map[string]folderTotal{}
 	if l != nil {
 		for _, it := range l.Items {
 			if !it.InPlace() {
-				m.all = append(m.all, row{f: it.Frame, it: it, moon: moonOf(it.Frame)})
+				r := row{f: it.Frame, it: it, moon: moonOf(it.Frame), fresh: notInOutput(it, out)}
+				if r.fresh {
+					m.fresh++
+				}
+				m.all = append(m.all, r)
 			}
 		}
 		for _, f := range l.Unknown {
@@ -401,6 +428,9 @@ func (m *frameModel) filter() {
 			continue
 		}
 		if !m.wheelMatches(r.f) {
+			continue
+		}
+		if m.onlyNew && !r.fresh {
 			continue
 		}
 		m.rows = append(m.rows, r)
