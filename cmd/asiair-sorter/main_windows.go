@@ -198,6 +198,7 @@ type window struct {
 	offline                    bool   // the receiver was not reached: the output is shown, nothing laid out
 	busy                       bool
 	cancel                     context.CancelFunc
+	busySince                  time.Time // when the job going on began
 	askedUpdate                string    // the version of the sorter offered already
 	loginWarned                bool      // told the login to the receiver is lost
 	checkingGitHub             bool      // a look for a new sorter on GitHub is going on
@@ -667,6 +668,9 @@ func (w *window) foldersChanged() {
 }
 
 func (w *window) setBusy(b bool) {
+	if b != w.busy {
+		w.taskbarBusy(b)
+	}
 	w.busy = b
 	w.btnScan.SetEnabled(!b)
 	w.btnStop.SetEnabled(b)
@@ -830,7 +834,7 @@ func (w *window) scan() {
 		nights := l.Nights(s.Out)
 		w.mw.Synchronize(func() {
 			w.progress.SetMarqueeMode(false)
-			w.progress.SetValue(0)
+			w.setProgress(0)
 			w.setBusy(false)
 			down := remote && fatal != nil && !errors.Is(fatal, sorter.ErrLogin) && !errors.Is(fatal, context.Canceled)
 			if down && !w.receiverDown {
@@ -1062,7 +1066,7 @@ func (w *window) apply() {
 // showProgress: by bytes while downloading from a receiver, else by files.
 func (w *window) showProgress(p sorter.Progress, start time.Time) {
 	if p.TotalBytes > 0 {
-		w.progress.SetValue(int(p.Bytes * 1000 / p.TotalBytes))
+		w.setProgress(int(p.Bytes * 1000 / p.TotalBytes))
 		t := fmt.Sprintf("Скачано %s из %s", sorter.FormatBytes(p.Bytes), sorter.FormatBytes(p.TotalBytes))
 		if sec := time.Since(start).Seconds(); sec > 2 && p.Bytes > 0 {
 			speed := float64(p.Bytes) / sec
@@ -1071,7 +1075,7 @@ func (w *window) showProgress(p sorter.Progress, start time.Time) {
 		w.setStatus(fmt.Sprintf("%s — %d из %d: %s", t, p.Done, p.Total, p.Name))
 		return
 	}
-	w.progress.SetValue(p.Done * 1000 / max(p.Total, 1))
+	w.setProgress(p.Done * 1000 / max(p.Total, 1))
 	w.setStatus(fmt.Sprintf("%d из %d: %s", p.Done, p.Total, p.Name))
 }
 

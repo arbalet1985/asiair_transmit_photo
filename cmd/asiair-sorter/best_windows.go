@@ -486,13 +486,13 @@ func (w *window) makeBest(l *sorter.Layout, out string, q sorter.BestQuery) {
 			}
 			last = time.Now()
 			w.mw.Synchronize(func() {
-				w.progress.SetValue(done * 1000 / max(total, 1))
+				w.setProgress(done * 1000 / max(total, 1))
 				w.setStatus(fmt.Sprintf("Лучшие кадры: %d из %d", done, total))
 			})
 		})
 		w.mw.Synchronize(func() {
 			w.setBusy(false)
-			w.progress.SetValue(0)
+			w.setProgress(0)
 			dir := filepath.Join(out, filepath.FromSlash(sorter.BestDir(q.Object)))
 			msg := fmt.Sprintf("Лучшие кадры %s (%s): %d из %d положены в\n%s", path.Base(q.Object), filterLabel(q.Filter), r.Placed, p.All, dir)
 			if r.Calibration > 0 {
