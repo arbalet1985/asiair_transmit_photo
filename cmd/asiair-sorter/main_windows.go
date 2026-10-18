@@ -184,8 +184,11 @@ type window struct {
 	offline                    bool   // the receiver was not reached: the output is shown, nothing laid out
 	busy                       bool
 	cancel                     context.CancelFunc
-	askedUpdate                string // the version of the sorter offered already
-	loginWarned                bool   // told the login to the receiver is lost
+	askedUpdate                string    // the version of the sorter offered already
+	loginWarned                bool      // told the login to the receiver is lost
+	checkingGitHub             bool      // a look for a new sorter on GitHub is going on
+	gitHubChecked              time.Time // when GitHub was looked at last
+	receiverDown               bool      // the last look at the frames did not reach the receiver
 	previewGen                 atomic.Int64
 	previews                   previewCache
 	btnPlay                    *walk.PushButton
@@ -518,6 +521,7 @@ func main() {
 	copyMenu(w.pl.targetTable, nil)
 	copyMenu(w.pl.stepTable, nil)
 	cleanupUpdate()
+	w.watchGitHub()
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
 			w.cancel()
@@ -753,6 +757,11 @@ func (w *window) scan() {
 			w.progress.SetMarqueeMode(false)
 			w.progress.SetValue(0)
 			w.setBusy(false)
+			down := remote && fatal != nil && !errors.Is(fatal, sorter.ErrLogin) && !errors.Is(fatal, context.Canceled)
+			if down && !w.receiverDown {
+				defer w.maybeCheckGitHub(true) // no receiver to ask for a new sorter
+			}
+			w.receiverDown = down
 			if fatal != nil && !offline {
 				w.setStatus(fatal.Error())
 				if errors.Is(fatal, sorter.ErrLogin) {
