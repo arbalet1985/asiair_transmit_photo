@@ -70,8 +70,9 @@ type settings struct {
 	Out             string  `json:"out"`
 	Mode            int     `json:"mode"`
 	FillCalibration bool    `json:"fill_calibration"`
-	Parallel        int     `json:"parallel,omitempty"`    // frames of a receiver downloaded at once; 0: the default
-	BlinkSpeed      int     `json:"blink_speed,omitempty"` // half frames per second
+	NoAutoScan      bool    `json:"no_auto_scan,omitempty"` // not «Просмотреть кадры» at the start
+	Parallel        int     `json:"parallel,omitempty"`     // frames of a receiver downloaded at once; 0: the default
+	BlinkSpeed      int     `json:"blink_speed,omitempty"`  // half frames per second
 	ShowMoon        bool    `json:"show_moon,omitempty"`
 	ShowTilt        bool    `json:"show_tilt,omitempty"`
 	ShowSaturated   bool    `json:"show_saturated,omitempty"` // the saturated areas circled on the preview
@@ -158,6 +159,7 @@ type window struct {
 	wheelBox                   *walk.ComboBox // the filter of the filter wheel
 	wheelList                  []string       // the values of the lines of wheelBox (m.wheel)
 	fillBox                    *walk.CheckBox
+	autoBox                    *walk.CheckBox
 	parBox                     *walk.ComboBox
 	speed                      *speedLog // the download going on or the last one
 	speedDlg                   *walk.Dialog
@@ -320,6 +322,8 @@ func main() {
 								ToolTipText: "Синхронизировать не всё, а только отмеченные папки входного каталога или приёмника (например, только нужные объекты)."},
 							Label{AssignTo: &w.foldersInfo, EllipsisMode: EllipsisEnd, MinSize: Size{Width: 50}},
 							HSpacer{},
+							CheckBox{AssignTo: &w.autoBox, Text: "Просматривать кадры при запуске", Checked: !s.NoAutoScan,
+								ToolTipText: "Сразу после запуска делать «Просмотреть кадры», если указаны вход и выходной каталог: с приёмником сразу видно, что пришло за ночь"},
 						},
 					},
 					Label{Text: "Выходной каталог:"},
@@ -550,6 +554,7 @@ func main() {
 	copyMenu(w.pl.stepTable, nil)
 	cleanupUpdate()
 	w.watchGitHub()
+	w.mw.Synchronize(w.autoScan) // once the window is shown
 	w.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if w.cancel != nil {
 			w.cancel()
@@ -578,6 +583,7 @@ func (w *window) settings() settings {
 	s := w.saved
 	s.In, s.Out = strings.TrimSpace(w.inEdit.Text()), strings.TrimSpace(w.outEdit.Text())
 	s.Mode, s.FillCalibration = w.modeBox.CurrentIndex(), w.fillBox.Checked()
+	s.NoAutoScan = !w.autoBox.Checked()
 	if i := w.parBox.CurrentIndex(); i >= 0 && i < len(parallelChoices) {
 		s.Parallel = parallelChoices[i]
 	}
@@ -737,6 +743,25 @@ func blinkSpeed(s settings) int {
 		return 4
 	}
 	return s.BlinkSpeed
+}
+
+// autoScan looks at the frames at the start when both places are set and
+// there; a folder not there (a disk not plugged in) is only told.
+func (w *window) autoScan() {
+	s := w.settings()
+	if s.NoAutoScan || s.In == "" || s.Out == "" || w.busy {
+		return
+	}
+	if !sorter.IsURL(s.In) {
+		if st, err := os.Stat(s.In); err != nil || !st.IsDir() {
+			w.setStatus("Входной каталог " + s.In + " недоступен — кадры не просмотрены при запуске.")
+			return
+		}
+	}
+	if sorter.CheckDirs(s.In, s.Out) != nil {
+		return
+	}
+	w.scan()
 }
 
 func (w *window) scan() {
