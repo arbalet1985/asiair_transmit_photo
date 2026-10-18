@@ -93,6 +93,10 @@ type settings struct {
 	// encrypted by Windows for this computer (config.Seal)
 	SpaceTrackUser string `json:"spacetrack_user,omitempty"`
 	SpaceTrackPass string `json:"spacetrack_pass,omitempty"`
+	// the window as it was left: walk's state of the window, the splitter
+	// and the tabs; the columns of the tables
+	UI      map[string]string     `json:"ui,omitempty"`
+	Columns map[string][]colState `json:"columns,omitempty"`
 }
 
 func configDir() string {
@@ -269,12 +273,16 @@ func main() {
 		ncols = append(ncols, col)
 	}
 
+	ui := newUIStore(s.UI)
+	walk.App().SetSettings(ui)
 	err := MainWindow{
-		AssignTo: &w.mw,
-		Title:    windowTitle(),
-		Size:     Size{Width: 1280, Height: 840},
-		MinSize:  Size{Width: 800, Height: 500},
-		Layout:   VBox{},
+		AssignTo:   &w.mw,
+		Name:       "sorter",
+		Persistent: true,
+		Title:      windowTitle(),
+		Size:       Size{Width: 1280, Height: 840},
+		MinSize:    Size{Width: 800, Height: 500},
+		Layout:     VBox{},
 		Children: []Widget{
 			Composite{
 				Layout: Grid{Columns: 3, MarginsZero: true},
@@ -404,10 +412,14 @@ func main() {
 			ProgressBar{AssignTo: &w.progress, MaxValue: 1000},
 			Label{AssignTo: &w.status, EllipsisMode: EllipsisEnd, Text: "Укажите, откуда брать кадры и куда их разложить, и нажмите «Просмотреть кадры»."},
 			HSplitter{
+				Name:          "split",
+				Persistent:    true,
 				StretchFactor: 1,
 				Children: []Widget{
 					TabWidget{
 						AssignTo:      &w.tabs,
+						Name:          "tabs",
+						Persistent:    true,
 						StretchFactor: 3,
 						OnCurrentIndexChanged: func() {
 							// the planner takes the whole width
@@ -528,6 +540,10 @@ func main() {
 	w.speedChanged()
 	w.inputChanged()
 	w.pl.init()
+	w.pl.weatherNeeded() // the planner may be the tab restored
+	for name, tv := range w.keptTables() {
+		w.restoreColumns(name, tv)
+	}
 	copyMenu(w.table, w.frameCopies)
 	copyMenu(w.nightTable, nil)
 	copyMenu(w.pl.targetTable, nil)
@@ -541,9 +557,18 @@ func main() {
 		if w.measureCancel != nil {
 			w.measureCancel()
 		}
+		for name, tv := range w.keptTables() {
+			w.keepColumns(name, tv)
+		}
 		w.settings().save()
 	})
 	w.mw.Run()
+	// walk writes the state of the window as it closes, after Closing
+	w.mu.Lock()
+	w.saved.UI = ui.all()
+	s = w.saved
+	w.mu.Unlock()
+	s.save()
 }
 
 // settings are the saved ones with the fields of the window.
