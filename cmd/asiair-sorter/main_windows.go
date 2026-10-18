@@ -66,21 +66,24 @@ type receiverLogin struct {
 }
 
 type settings struct {
-	In              string  `json:"in"`
-	Out             string  `json:"out"`
-	Mode            int     `json:"mode"`
-	FillCalibration bool    `json:"fill_calibration"`
-	NoAutoScan      bool    `json:"no_auto_scan,omitempty"` // not «Просмотреть кадры» at the start
-	Parallel        int     `json:"parallel,omitempty"`     // frames of a receiver downloaded at once; 0: the default
-	BlinkSpeed      int     `json:"blink_speed,omitempty"`  // half frames per second
-	ShowMoon        bool    `json:"show_moon,omitempty"`
-	ShowTilt        bool    `json:"show_tilt,omitempty"`
-	ShowSaturated   bool    `json:"show_saturated,omitempty"` // the saturated areas circled on the preview
-	HideTracks      bool    `json:"hide_tracks,omitempty"`    // the tracks of satellites are not drawn on the preview
-	ShowHist        bool    `json:"show_hist,omitempty"`
-	HistMode        int     `json:"hist_mode,omitempty"`
-	LinkedChannels  bool    `json:"linked_channels,omitempty"` // the colour channels stretched together
-	BestPercent     float64 `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
+	In              string `json:"in"`
+	Out             string `json:"out"`
+	Mode            int    `json:"mode"`
+	FillCalibration bool   `json:"fill_calibration"`
+	NoAutoScan      bool   `json:"no_auto_scan,omitempty"` // not «Просмотреть кадры» at the start
+	// the inputs and outputs looked at before, the last first
+	RecentIn       []string `json:"recent_in,omitempty"`
+	RecentOut      []string `json:"recent_out,omitempty"`
+	Parallel       int      `json:"parallel,omitempty"`    // frames of a receiver downloaded at once; 0: the default
+	BlinkSpeed     int      `json:"blink_speed,omitempty"` // half frames per second
+	ShowMoon       bool     `json:"show_moon,omitempty"`
+	ShowTilt       bool     `json:"show_tilt,omitempty"`
+	ShowSaturated  bool     `json:"show_saturated,omitempty"` // the saturated areas circled on the preview
+	HideTracks     bool     `json:"hide_tracks,omitempty"`    // the tracks of satellites are not drawn on the preview
+	ShowHist       bool     `json:"show_hist,omitempty"`
+	HistMode       int      `json:"hist_mode,omitempty"`
+	LinkedChannels bool     `json:"linked_channels,omitempty"` // the colour channels stretched together
+	BestPercent    float64  `json:"best_percent,omitempty"`    // share of the best frames picked into Stars
 	// frames left out of the pick: stretched stars, too much saturated
 	BestRoundOn  bool                     `json:"best_round_on,omitempty"`
 	BestMinRound float64                  `json:"best_min_round,omitempty"`
@@ -185,6 +188,7 @@ type window struct {
 	nightTotals, onlyInfo      *walk.Label
 	btnAll, btnGone, btnDelete *walk.PushButton
 	btnRejects                 *walk.PushButton
+	btnRecentIn, btnRecentOut  *walk.PushButton
 	zoom                       *zoomView
 	zoomLabel, shownInfo       *walk.Label
 	shownText                  string // the line under the table, without the selection
@@ -299,7 +303,14 @@ func main() {
 							"Или адрес приёмника asiair-receiver, чтобы брать кадры по сети с другого компьютера:\n" +
 							"https://<адрес>:8443/ или адрес Tailscale — с паролем «Доступ с телефона»;\n" +
 							"http://127.0.0.1:8080/ — на компьютере с приёмником."},
-					PushButton{AssignTo: &w.btnBrowseIn, Text: "Обзор…", OnClicked: func() { w.browse(w.inEdit, "Входной каталог: где искать кадры FITS") }},
+					Composite{
+						Layout: HBox{MarginsZero: true},
+						Children: []Widget{
+							PushButton{AssignTo: &w.btnBrowseIn, Text: "Обзор…", OnClicked: func() { w.browse(w.inEdit, "Входной каталог: где искать кадры FITS") }},
+							PushButton{AssignTo: &w.btnRecentIn, Text: "▾", MaxSize: Size{Width: 28}, ToolTipText: "Прежние входные каталоги и адреса приёмников",
+								OnClicked: func() { w.recentMenu(w.inEdit, w.btnRecentIn, false) }},
+						},
+					},
 					Label{Text: ""},
 					Composite{
 						AssignTo:   &w.loginRow,
@@ -333,9 +344,16 @@ func main() {
 					Label{Text: "Выходной каталог:"},
 					LineEdit{AssignTo: &w.outEdit, Text: s.Out, OnTextChanged: w.foldersChanged,
 						ToolTipText: "Куда разложить: Objects\\… (сессии для Siril) и Library\\… (дарки, флеты, биасы). Библиотека, собранная здесь раньше, тоже используется для подбора калибровки."},
-					PushButton{Text: "Обзор…", OnClicked: func() {
-						w.browse(w.outEdit, "Выходной каталог: куда разложить кадры для Siril")
-					}},
+					Composite{
+						Layout: HBox{MarginsZero: true},
+						Children: []Widget{
+							PushButton{Text: "Обзор…", OnClicked: func() {
+								w.browse(w.outEdit, "Выходной каталог: куда разложить кадры для Siril")
+							}},
+							PushButton{AssignTo: &w.btnRecentOut, Text: "▾", MaxSize: Size{Width: 28}, ToolTipText: "Прежние выходные каталоги",
+								OnClicked: func() { w.recentMenu(w.outEdit, w.btnRecentOut, true) }},
+						},
+					},
 					Label{Text: "Как класть файлы:"},
 					Composite{
 						Layout:     HBox{MarginsZero: true},
@@ -568,7 +586,10 @@ func main() {
 	}
 	copyMenu(w.table, w.frameCopies)
 	tableKeys(w.table, w.frameKey)
-	copyMenu(w.nightTable, nil)
+	copyMenu(w.nightTable, w.nightOpens)
+	w.inEdit.DropFiles().Attach(func(f []string) { dropped(w.inEdit, f) })
+	w.outEdit.DropFiles().Attach(func(f []string) { dropped(w.outEdit, f) })
+	w.mw.DropFiles().Attach(func(f []string) { dropped(w.inEdit, f) })
 	copyMenu(w.pl.targetTable, nil)
 	copyMenu(w.pl.stepTable, nil)
 	cleanupUpdate()
@@ -689,6 +710,8 @@ func (w *window) setBusy(b bool) {
 	w.codeEdit.SetReadOnly(b)
 	w.btnForget.SetEnabled(!b)
 	w.btnBrowseIn.SetEnabled(!b)
+	w.btnRecentIn.SetEnabled(!b)
+	w.btnRecentOut.SetEnabled(!b)
 	w.btnFolders.SetEnabled(!b)
 	w.modeBox.SetEnabled(!b)
 	w.fillBox.SetEnabled(!b)
@@ -807,6 +830,10 @@ func (w *window) scan() {
 	}
 	password, code := w.passEdit.Text(), w.codeEdit.Text()
 	only := w.chosenFolders(s.In)
+	w.mu.Lock()
+	w.saved.RecentIn, w.saved.RecentOut = remember(w.saved.RecentIn, s.In), remember(w.saved.RecentOut, s.Out)
+	s.RecentIn, s.RecentOut = w.saved.RecentIn, w.saved.RecentOut
+	w.mu.Unlock()
 	s.save()
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel

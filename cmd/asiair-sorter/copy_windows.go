@@ -362,6 +362,10 @@ func (w *window) frameCopies(i int) []copyItem {
 	if r.it != nil && !r.it.Dup && w.scannedOut != "" {
 		items = append(items, copyItem{label: "Копировать путь «Куда»", text: filepath.Join(w.scannedOut, filepath.FromSlash(r.it.Dest))})
 	}
+	if opens := w.openItems(r); len(opens) > 0 {
+		items = append(items, copyItem{})
+		items = append(items, opens...)
+	}
 	if sats := w.satInfoItems(i); len(sats) > 0 {
 		items = append(items, copyItem{})
 		items = append(items, sats...)

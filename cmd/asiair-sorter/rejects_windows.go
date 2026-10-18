@@ -120,9 +120,14 @@ func (w *window) rejectsMenu() {
 	if w.busy {
 		items = slicesWithout(items, 2, 3)
 	}
-	b := w.btnRejects.BoundsPixels()
+	popupUnder(w, w.btnRejects, items)
+}
+
+// popupUnder shows a menu under the button.
+func popupUnder(w *window, btn *walk.PushButton, items []copyItem) {
+	b := btn.BoundsPixels()
 	pt := win.POINT{X: int32(b.X), Y: int32(b.Y + b.Height)}
-	win.ClientToScreen(win.GetParent(w.btnRejects.Handle()), &pt)
+	win.ClientToScreen(win.GetParent(btn.Handle()), &pt)
 	popup(w.mw.Handle(), pt.X, pt.Y, items)
 }
 
