@@ -82,7 +82,7 @@ func TestMeasureTracks(t *testing.T) {
 	cache := LoadQualityCache(filepath.Join(dir, "stars.json"))
 	f := &Frame{Kind: Light}
 	var got []Measurement
-	MeasureFrames(context.Background(), []*Frame{f}, []string{p}, cache, func(m Measurement) { got = append(got, m) })
+	MeasureFrames(context.Background(), []*Frame{f}, []string{p}, cache, nil, func(m Measurement) { got = append(got, m) })
 	if len(got) != 1 || len(got[0].Tracks) != 1 || got[0].start != time.Date(2026, 10, 9, 15, 55, 25, 0, time.UTC).UnixMilli() {
 		t.Fatalf("%+v", got)
 	}
@@ -100,7 +100,7 @@ func TestMeasureTracks(t *testing.T) {
 	}
 	cache = LoadQualityCache(filepath.Join(dir, "stars.json"))
 	got = nil
-	MeasureFrames(context.Background(), []*Frame{f}, []string{p}, cache, func(m Measurement) { got = append(got, m) })
+	MeasureFrames(context.Background(), []*Frame{f}, []string{p}, cache, nil, func(m Measurement) { got = append(got, m) })
 	if len(got) != 1 || len(got[0].Tracks) != 1 || got[0].key == "" {
 		t.Fatalf("%+v", got)
 	}

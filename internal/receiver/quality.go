@@ -61,8 +61,9 @@ type qualityEntry struct {
 
 // qualityVersion: 2 takes the background of each star around it, 3 tells
 // saturated stars as Siril does (counted, but not for the HFR), 4 adds the
-// background, the shape of the stars, the saturated pixels and the time.
-const qualityVersion = 4
+// background, the shape of the stars, the saturated pixels and the time, 5
+// leaves the hot pixels out of the saturated ones.
+const qualityVersion = 5
 
 // quality keeps the star measurements of the received Light frames in
 // quality.json in the data folder. A background worker measures new frames
@@ -155,8 +156,8 @@ func (q *quality) poke() {
 }
 
 // measureFrame finds the stars and the tracks of a frame file, reading it
-// once.
-func measureFrame(local string) qualityEntry {
+// once; the hot pixels of hot are not counted as saturated.
+func measureFrame(local string, hot *fits.HotCache) qualityEntry {
 	e := qualityEntry{V: qualityVersion, TV: trackVersion}
 	f, err := os.Open(local)
 	if err != nil {
@@ -164,7 +165,10 @@ func measureFrame(local string) qualityEntry {
 		return e
 	}
 	defer f.Close()
-	img, err := fits.Preview(f, stars.MaxWidth)
+	img, err := fits.PreviewHot(f, stars.MaxWidth, func(h *fits.Header) *fits.HotPixels {
+		hp, _ := hot.For(h, true)
+		return hp
+	})
 	if err != nil {
 		e.Err = err.Error()
 		return e
@@ -248,7 +252,11 @@ func (s *Server) measurePending(ctx context.Context) int {
 	}
 	keep := map[string]bool{}
 	var todo, hdrTodo []LocalFile
+	var darks []string
 	for _, f := range local {
+		if isFITS(f.Path) && protocol.FrameKind(f.Path) == "dark" {
+			darks = append(darks, store.Local(f.Path))
+		}
 		if !measurable(f.Path) {
 			continue
 		}
@@ -260,6 +268,7 @@ func (s *Server) measurePending(ctx context.Context) int {
 		}
 	}
 	s.quality.forget(keep)
+	s.hot.SetDarks(darks)
 	// newest first
 	sort.Slice(todo, func(i, j int) bool { return todo[i].ModTime.After(todo[j].ModTime) })
 	n, tracks, static := 0, 0, 0
@@ -267,7 +276,7 @@ func (s *Server) measurePending(ctx context.Context) int {
 		if ctx.Err() != nil {
 			break
 		}
-		e := measureFrame(store.Local(f.Path))
+		e := measureFrame(store.Local(f.Path), &s.hot)
 		e.Size, e.MTime = f.Size, f.ModTime.UnixNano()
 		if old, ok := s.quality.get(f.Path, f.Size, f.ModTime); ok && old.TV == trackVersion && e.TV == trackVersion {
 			// measured again for the rest: the tracks are the same, so

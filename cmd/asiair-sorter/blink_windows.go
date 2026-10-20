@@ -158,7 +158,7 @@ func readPreview(f *sorter.Frame, local []string, maxW int, linked bool) *previe
 	} else {
 		var fh *os.File
 		if fh, err = os.Open(file); err == nil {
-			im, err = fits.Preview(fh, maxW)
+			im, err = fits.PreviewHot(fh, maxW, hotFor(false))
 			fh.Close()
 		}
 		if err == nil {

@@ -28,6 +28,12 @@ type SaturatedAreas struct {
 	Pixels     int64           `json:"pixels"` // all saturated pixels
 	Count      int             `json:"count"`  // all areas, Spots may be fewer
 	Spots      []SaturatedSpot `json:"spots"`
+	// Hot: saturated pixels left out as hot (not in Pixels); HotDarks: the
+	// darks they were told by (0: only lone pixels with no light around);
+	// HotPending: the darks are being read, asked again later it may be more
+	Hot        int64 `json:"hot,omitempty"`
+	HotDarks   int   `json:"hot_darks,omitempty"`
+	HotPending bool  `json:"hot_pending,omitempty"`
 }
 
 // MaxSaturatedSpots: the areas told at most, the biggest.
@@ -46,8 +52,9 @@ type run struct{ a, b, id int }
 
 // ReadSaturated reads the whole frame row by row and finds its saturated
 // areas: pixels at or above the level of saturation (as the statistics of
-// the frame count them), in any colour.
-func ReadSaturated(f io.ReaderAt, size int64) (*SaturatedAreas, error) {
+// the frame count them), in any colour. Hot pixels are left out: those of
+// hot (nil: none known) and the lone ones.
+func ReadSaturated(f io.ReaderAt, size int64, hot func(*Header) *HotPixels) (*SaturatedAreas, error) {
 	sr := io.NewSectionReader(f, 0, size)
 	h, err := ReadHeader(sr)
 	if err != nil {
@@ -74,6 +81,12 @@ func ReadSaturated(f io.ReaderAt, size int64) (*SaturatedAreas, error) {
 	}
 	bottomUp := strings.EqualFold(h.Get("ROWORDER"), "BOTTOM-UP")
 	res := &SaturatedAreas{Width: w, Height: ht, Saturation: sat}
+	var hp *HotPixels
+	if hot != nil {
+		if m := hot(h); m.usable(w, ht) {
+			hp, res.HotDarks = m, m.Darks
+		}
+	}
 
 	cw := (w + 1) / 2
 	cnt := make([]int, cw) // saturated pixels of each cell of the row of cells
@@ -81,7 +94,12 @@ func ReadSaturated(f io.ReaderAt, size int64) (*SaturatedAreas, error) {
 	sy := make([]float64, cw)
 	row := make([]byte, w*bpp)
 	dec := make([]float64, w)
-	mask := make([]bool, w)
+	// the brightest colour of the last 5 rows: a row is looked at when the
+	// two below it are read, to tell its lone pixels
+	var win [5][]float64
+	for i := range win {
+		win[i] = make([]float64, w)
+	}
 	planeBytes := int64(w) * int64(ht) * int64(bpp)
 	var spots []spot
 	var prev, cur []run
@@ -142,32 +160,56 @@ func ReadSaturated(f io.ReaderAt, size int64) (*SaturatedAreas, error) {
 		}
 		prev, cur = cur, prev
 	}
-	for y := 0; y < ht; y++ {
-		fy := y
+	for y := 0; y < ht+2; y++ {
+		if y < ht {
+			fy := y
+			if bottomUp {
+				fy = ht - 1 - y
+			}
+			cur := win[y%5]
+			for p := 0; p < planes; p++ {
+				off := start + int64(p)*planeBytes + int64(fy)*int64(w)*int64(bpp)
+				if _, err := f.ReadAt(row, off); err != nil {
+					return nil, fmt.Errorf("файл обрезан: %w", err)
+				}
+				decodeRow(row, bitpix, bscale, bzero, dec)
+				for x, v := range dec {
+					// a pixel saturated in several colours counts once
+					if p == 0 || v > cur[x] {
+						cur[x] = v
+					}
+				}
+			}
+		}
+		py := y - 2
+		if py < 0 {
+			continue
+		}
+		fy := py
 		if bottomUp {
-			fy = ht - 1 - y
+			fy = ht - 1 - py
 		}
-		for p := 0; p < planes; p++ {
-			off := start + int64(p)*planeBytes + int64(fy)*int64(w)*int64(bpp)
-			if _, err := f.ReadAt(row, off); err != nil {
-				return nil, fmt.Errorf("файл обрезан: %w", err)
+		for x, v := range win[py%5] {
+			if !(v >= sat) {
+				continue
 			}
-			decodeRow(row, bitpix, bscale, bzero, dec)
-			for x, v := range dec {
-				// a pixel saturated in several colours counts once
-				mask[x] = mask[x] || v >= sat
+			at := func(dx, dy int) (float64, bool) {
+				xx, yy := x+dx, py+dy
+				if xx < 0 || xx >= w || yy < 0 || yy >= ht {
+					return 0, false
+				}
+				return win[yy%5][xx], true
 			}
+			if (hp != nil && hp.has(x, fy)) || lone(at, sat) {
+				res.Hot++
+				continue
+			}
+			cnt[x/2]++
+			sx[x/2] += float64(x)
+			sy[x/2] += float64(py)
 		}
-		for x, m := range mask {
-			if m {
-				cnt[x/2]++
-				sx[x/2] += float64(x)
-				sy[x/2] += float64(y)
-				mask[x] = false
-			}
-		}
-		if y%2 == 1 || y == ht-1 {
-			endCells(y / 2)
+		if py%2 == 1 || py == ht-1 {
+			endCells(py / 2)
 		}
 	}
 	for i := range spots {

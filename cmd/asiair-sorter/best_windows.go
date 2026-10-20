@@ -32,7 +32,8 @@ func (w *window) measureStars() {
 	if l == nil {
 		return
 	}
-	frames, paths := l.ToMeasure(w.scannedOut)
+	out := w.scannedOut
+	frames, paths := l.ToMeasure(out)
 	w.measureLeft = len(frames)
 	if len(frames) == 0 {
 		return
@@ -117,7 +118,8 @@ func (w *window) measureStars() {
 				}
 			}
 		}()
-		sorter.MeasureFrames(ctx, frames, paths, cache, func(m sorter.Measurement) {
+		setDarks(l, out)
+		sorter.MeasureFrames(ctx, frames, paths, cache, &hotPixels, func(m sorter.Measurement) {
 			mu.Lock()
 			pending = append(pending, m)
 			all = append(all, m)
