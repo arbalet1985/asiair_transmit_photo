@@ -122,8 +122,14 @@ func (a *Agent) commandLoop(ctx context.Context) {
 	retry := time.NewTicker(5 * time.Second)
 	defer retry.Stop()
 	for ctx.Err() == nil {
+		// while the ASIAIR is out of reach the commands wait in the queue
+		// instead of failing one by one
+		up := a.asiairUp()
 		r.mu.Lock()
 		n := min(len(r.queue), cmdBatch)
+		if !up {
+			n = 0
+		}
 		batch := append([]protocol.Command(nil), r.queue[:n]...)
 		r.queue = r.queue[n:]
 		for _, c := range batch {
@@ -189,10 +195,38 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	marked := a.markDeleted(targets)
 
 	src := a.source()
-	// skipped: not started because deleting was paused meanwhile
+	// skipped: not started because deleting was paused meanwhile;
+	// deferred: not done because the ASIAIR went out of reach, done later
 	skipped := make([]bool, len(batch))
+	deferred := make([]bool, len(batch))
+	var offMu sync.Mutex
+	offline, probed := false, false
+	// reachable tells a failed delete from a lost ASIAIR: one quick check
+	// per batch, after the first failure
+	reachable := func() bool {
+		offMu.Lock()
+		defer offMu.Unlock()
+		if !probed && ctx.Err() == nil {
+			probed = true
+			pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			_, err := src.Probe(pctx)
+			cancel()
+			if err != nil {
+				offline = true
+				a.asiairLost(err)
+			}
+		}
+		return !offline
+	}
 	remove := func(i int) {
 		c := batch[i]
+		offMu.Lock()
+		off := offline
+		offMu.Unlock()
+		if off {
+			deferred[i] = true
+			return
+		}
 		r.mu.Lock()
 		paused := r.paused
 		if !paused {
@@ -220,6 +254,10 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 		}
 		if errors.Is(err, fs.ErrNotExist) {
 			err = nil // already gone
+		}
+		if err != nil && ctx.Err() == nil && !reachable() {
+			deferred[i] = true
+			return
 		}
 		if err != nil {
 			results[i].OK, results[i].Error = false, err.Error()
@@ -265,10 +303,14 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	r.mu.Unlock()
 
 	var gone, failed []delTarget
+	var again []protocol.Command
 	nSkipped := 0
 	for _, i := range valid {
 		t := delTarget{batch[i].Path, batch[i].Type == protocol.CmdDeleteDir}
-		if skipped[i] {
+		if deferred[i] {
+			again = append(again, batch[i])
+			failed = append(failed, t) // still on the ASIAIR
+		} else if skipped[i] {
 			nSkipped++
 			failed = append(failed, t) // not deleted: uploads may go on
 		} else if results[i].OK {
@@ -285,19 +327,34 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	r.mu.Lock()
 	for i, c := range batch {
 		delete(r.running, c.ID)
-		if skipped[i] {
+		if deferred[i] {
+			continue // back to the queue below
+		} else if skipped[i] {
 			delete(r.known, c.ID) // taken again after the pause
 		} else {
 			r.results = append(r.results, results[i])
 		}
 	}
 	r.prog.Total -= nSkipped
+	r.prog.Current = ""
+	if len(again) > 0 && r.paused {
+		// paused meanwhile: dropped like the rest of the queue, sent again after the pause
+		for _, c := range again {
+			delete(r.known, c.ID)
+		}
+		r.prog.Total -= len(again)
+		again = nil
+	}
+	r.queue = append(again, r.queue...)
 	last := len(r.queue) == 0
 	prog := r.prog
 	if last {
 		r.prog = protocol.DeleteProgress{}
 	}
 	r.mu.Unlock()
+	if len(again) > 0 {
+		a.event("warn", "ASIAIR недоступен: удаление отложено до его возвращения (выполнено %d, ждут %d)", prog.Done-prog.Failed, len(again))
+	}
 	if last {
 		level := ""
 		if prog.Failed > 0 {
@@ -462,4 +519,25 @@ func (a *Agent) forgetDeleted(gone, failed []delTarget, marked []string) {
 	a.queue = q
 	a.updateQueueStatus()
 	a.saveState()
+}
+
+// asiairUp: the last look at the ASIAIR found it.
+func (a *Agent) asiairUp() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.status.Connected
+}
+
+// asiairLost marks the ASIAIR out of reach until the next scan finds it:
+// the receiver holds the delete commands meanwhile.
+func (a *Agent) asiairLost(err error) {
+	a.mu.Lock()
+	was := a.status.Connected
+	a.status.Connected = false
+	a.status.ASIAIRError = err.Error()
+	a.mu.Unlock()
+	if was {
+		a.event("warn", "ASIAIR перестал отвечать: %v", err)
+	}
+	a.kickSync()
 }

@@ -82,7 +82,12 @@ func Fetch(ctx context.Context, client *http.Client, userAgent string, lat, lon 
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		// the long address of the request says nothing to the user
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("Open-Meteo: %w", err)
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))

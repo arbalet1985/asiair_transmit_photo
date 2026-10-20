@@ -153,3 +153,20 @@ func TestSyncDir(t *testing.T) {
 		t.Fatalf("fetch after off: %v", f)
 	}
 }
+
+// Deletes wait on the receiver while the agent does not reach the ASIAIR.
+func TestDeletesWaitForASIAIR(t *testing.T) {
+	s, err := LoadState(filepath.Join(t.TempDir(), "state.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.QueueDelete([]string{"EMMC Images/a.fit"}, protocol.CmdDelete, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(s.Sync(protocol.SyncRequest{Status: protocol.AgentStatus{ASIAIRError: "нет связи"}}).Commands); n != 0 {
+		t.Fatalf("ASIAIR out of reach: %d commands sent", n)
+	}
+	if n := len(s.Sync(protocol.SyncRequest{Status: protocol.AgentStatus{Connected: true}}).Commands); n != 1 {
+		t.Fatalf("ASIAIR back: %d commands sent, want 1", n)
+	}
+}

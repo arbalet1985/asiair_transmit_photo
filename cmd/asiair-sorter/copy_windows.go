@@ -26,6 +26,7 @@ import (
 type copyItem struct {
 	label, text string
 	run         func()
+	off         bool // shown greyed out: not possible now
 }
 
 // The subclassed list views (touched by the UI thread only): the window
@@ -241,6 +242,10 @@ func popup(owner win.HWND, x, y int32, items []copyItem) {
 		}
 		mii := win.MENUITEMINFO{FMask: win.MIIM_FTYPE | win.MIIM_ID | win.MIIM_STRING, FType: win.MFT_STRING,
 			WID: uint32(len(actions)), DwTypeData: u}
+		if it.off {
+			mii.FMask |= win.MIIM_STATE
+			mii.FState = win.MFS_GRAYED
+		}
 		mii.CbSize = uint32(unsafe.Sizeof(mii))
 		win.InsertMenuItem(menu, uint32(win.GetMenuItemCount(menu)), true, &mii)
 	}
@@ -370,8 +375,11 @@ func (w *window) frameCopies(i int) []copyItem {
 		items = append(items, copyItem{})
 		items = append(items, sats...)
 	}
-	if !w.busy {
-		items = append(items, copyItem{}, copyItem{label: w.deleteLabel(i), run: func() { w.deleteEverywhere(i) }})
+	// while a job goes on the line stays, greyed out, so it is not lost
+	del := copyItem{label: w.deleteLabel(i), run: func() { w.deleteEverywhere(i) }}
+	if w.busy {
+		del.label, del.off = strings.TrimSuffix(del.label, "…")+" — после текущей работы", true
 	}
+	items = append(items, copyItem{}, del)
 	return items
 }
