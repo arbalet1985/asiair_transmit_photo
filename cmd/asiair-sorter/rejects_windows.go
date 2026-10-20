@@ -118,7 +118,10 @@ func (w *window) rejectsMenu() {
 		}},
 	}
 	if w.busy {
-		items = slicesWithout(items, 2, 3)
+		// shown greyed out while a job goes on
+		for _, k := range []int{2, 3} {
+			items[k].label, items[k].off = strings.TrimSuffix(items[k].label, "…")+" — после текущей работы", true
+		}
 	}
 	popupUnder(w, w.btnRejects, items)
 }
@@ -129,20 +132,6 @@ func popupUnder(w *window, btn *walk.PushButton, items []copyItem) {
 	pt := win.POINT{X: int32(b.X), Y: int32(b.Y + b.Height)}
 	win.ClientToScreen(win.GetParent(btn.Handle()), &pt)
 	popup(w.mw.Handle(), pt.X, pt.Y, items)
-}
-
-func slicesWithout(items []copyItem, drop ...int) []copyItem {
-	var out []copyItem
-	for i, it := range items {
-		skip := false
-		for _, d := range drop {
-			skip = skip || i == d
-		}
-		if !skip {
-			out = append(out, it)
-		}
-	}
-	return out
 }
 
 // putAside moves the marked frames read from disk into Rejected in the

@@ -85,6 +85,8 @@
   .field .value { flex: 1 1 260px; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
   .label { color: var(--muted); font-size: 12px; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  /* a long error (an address) under a chart is broken: once it widened the page, and on a phone everything, the viewer too, got small */
+  .line, .hint { overflow-wrap: anywhere; }
   dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); padding: 16px; width: min(640px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   dialog h2 { font-size: 15px; margin: 0 0 10px; }

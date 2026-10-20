@@ -235,8 +235,10 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 		}
 	}
 	s.logsForSync(&resp)
+	// while the agent does not reach the ASIAIR the deletes wait here: they
+	// would only fail
 	for _, c := range s.p.Commands {
-		if s.p.DeletePaused {
+		if s.p.DeletePaused || !s.p.Status.Connected {
 			break
 		}
 		if c.Status == StatusPending && len(resp.Commands) < maxSyncCommands {
