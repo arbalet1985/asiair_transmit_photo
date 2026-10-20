@@ -27,6 +27,8 @@ type ChannelStats struct {
 	// saturated as in the measurement of an area (0: the level is unknown)
 	Saturation float64 `json:"saturation,omitempty"`
 	Saturated  int64   `json:"saturated,omitempty"`
+	// Hot: saturated samples left out of Saturated as hot pixels
+	Hot int64 `json:"hot,omitempty"`
 }
 
 func channelNames(channels int) []string {
@@ -180,6 +182,16 @@ func StatsTable(st []ChannelStats) string {
 			get  func(ChannelStats) string
 		}{"saturated", func(c ChannelStats) string { return SaturatedText(c) }})
 	}
+	hot := false
+	for _, c := range st {
+		hot = hot || c.Hot > 0
+	}
+	if hot {
+		rows = append(rows, struct {
+			name string
+			get  func(ChannelStats) string
+		}{"hot", func(c ChannelStats) string { return strconv.FormatInt(c.Hot, 10) }})
+	}
 	var b strings.Builder
 	for _, r := range rows {
 		fmt.Fprintf(&b, "%-8s", r.name)
@@ -190,6 +202,9 @@ func StatsTable(st []ChannelStats) string {
 	}
 	if st[0].Saturation > 0 {
 		fmt.Fprintf(&b, "saturated — пикселей не ниже уровня насыщения %s (доля от count)\r\n", num(st[0].Saturation))
+	}
+	if hot {
+		b.WriteString("hot — горячие пиксели (одиночные или по даркам): не считаются в saturated\r\n")
 	}
 	return b.String()
 }

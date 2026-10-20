@@ -75,10 +75,16 @@ func (s *Server) handleUISaturated(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a, err := fits.ReadSaturated(f, st.Size())
+	pending := false
+	a, err := fits.ReadSaturated(f, st.Size(), func(h *fits.Header) *fits.HotPixels {
+		hp, p := s.hot.For(h, false)
+		pending = p
+		return hp
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
+	a.HotPending = pending
 	writeJSON(w, a)
 }

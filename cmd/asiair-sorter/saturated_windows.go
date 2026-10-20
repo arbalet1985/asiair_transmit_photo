@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"sync"
@@ -105,7 +106,30 @@ func satAreasOf(f *sorter.Frame, local []string) (*fits.SaturatedAreas, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fits.ReadSaturated(fh, st.Size())
+	return fits.ReadSaturated(fh, st.Size(), hotFor(true))
+}
+
+// hotPixels: the hot pixels of the cameras, found on the darks of the
+// frames read (a frame of a receiver gets them there).
+var hotPixels fits.HotCache
+
+// hotFor: the hot pixels of a frame; wait: read the darks now if not yet.
+func hotFor(wait bool) func(*fits.Header) *fits.HotPixels {
+	return func(h *fits.Header) *fits.HotPixels {
+		hp, _ := hotPixels.For(h, wait)
+		return hp
+	}
+}
+
+// setDarks tells the darks of the layout (in the background: their headers
+// are read).
+func setDarks(l *sorter.Layout, out string) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("Дарки для горячих пикселей не прочитаны: %v", p)
+		}
+	}()
+	hotPixels.SetDarks(l.DarkFiles(out))
 }
 
 // showSatAreas shows the areas found (nil: none) or a note, with the rest
@@ -123,12 +147,23 @@ func (w *window) satAreasText() string {
 		return ""
 	case a == nil:
 		return w.satAreasNote
-	case a.Count == 0:
-		return "пересвеченных пикселей нет"
-	case a.Count > len(a.Spots):
-		return fmt.Sprintf("пересвеченных областей %d (%d пикс.), обведены %d крупнейших", a.Count, a.Pixels, len(a.Spots))
 	}
-	return fmt.Sprintf("пересвеченных областей %d (%d пикс.)", a.Count, a.Pixels)
+	t := fmt.Sprintf("пересвеченных областей %d (%d пикс.)", a.Count, a.Pixels)
+	switch {
+	case a.Count == 0:
+		t = "пересвеченных пикселей нет"
+	case a.Count > len(a.Spots):
+		t += fmt.Sprintf(", обведены %d крупнейших", len(a.Spots))
+	}
+	if a.Hot > 0 {
+		t += fmt.Sprintf("; горячих пикселей не считается: %d", a.Hot)
+		if a.HotDarks > 0 {
+			t += fmt.Sprintf(" (по даркам: %d, и одиночные)", a.HotDarks)
+		} else {
+			t += " (одиночные, без света вокруг)"
+		}
+	}
+	return t
 }
 
 // paintSatAreas circles the saturated areas in red.

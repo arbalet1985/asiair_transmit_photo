@@ -110,6 +110,9 @@ type Image struct {
 	// the preview), normalised as Data; nil when unknown. Binning lowers
 	// the peaks of the preview, the level of saturation is known from it.
 	Max []float32
+	// HotDarks: the darks the hot pixels left out of Stats were told by
+	// (0: only lone pixels with no light around)
+	HotDarks int
 }
 
 // bayer colour index (0=R,1=G,2=B) for a pattern at (x%2, y%2).
@@ -132,7 +135,12 @@ func bayerIndex(pattern string, xOff, yOff int) ([2][2]int, error) {
 
 // Preview reads a FITS image and bins it so that it is at most maxWidth
 // pixels wide. Bayer frames (BAYERPAT keyword) become RGB.
-func Preview(r io.Reader, maxWidth int) (*Image, error) {
+func Preview(r io.Reader, maxWidth int) (*Image, error) { return PreviewHot(r, maxWidth, nil) }
+
+// PreviewHot is Preview whose statistics leave hot pixels out of the
+// saturated ones: those of hot (nil: none known) and the lone ones (16-bit
+// data only).
+func PreviewHot(r io.Reader, maxWidth int, hot func(*Header) *HotPixels) (*Image, error) {
 	br := bufio.NewReaderSize(r, 1<<20)
 	h, err := ReadHeader(br)
 	if err != nil {
@@ -190,7 +198,7 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 		usePlanes = 1 // ignore extra planes of a mono cube
 	}
 	if bitpix == 16 && step <= 256 { // the sum of a preview pixel fits 32 bits
-		return preview16(br, img, w, ht, usePlanes, isBayer, pattern, bscale, bzero, saturation(h, bitpix, bscale, bzero))
+		return preview16(br, img, w, ht, usePlanes, isBayer, pattern, bscale, bzero, saturation(h, bitpix, bscale, bzero), hot)
 	}
 	sum := make([]float32, ow*oh*channels)
 	cnt := make([]float32, ow*oh*channels)
@@ -258,7 +266,7 @@ func Preview(r io.Reader, maxWidth int) (*Image, error) {
 // samples are binned as integers and counted in a histogram per channel
 // for the statistics. The data is read whole and worked on in bands of
 // rows at once.
-func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, pattern [2][2]int, bscale, bzero, sat float64) (*Image, error) {
+func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, pattern [2][2]int, bscale, bzero, sat float64, hot func(*Header) *HotPixels) (*Image, error) {
 	ow, oh, ch, step := img.Width, img.Height, img.Channels, img.Binning
 	data := make([]byte, w*ht*2*planes)
 	if _, err := io.ReadFull(br, data); err != nil {
@@ -372,7 +380,70 @@ func preview16(br io.Reader, img *Image, w, ht, planes int, isBayer bool, patter
 		img.Stats = append(img.Stats, histStats(name, hist[c], bscale, bzero, sat))
 		img.Max = append(img.Max, histTop(hist[c], bscale < 0))
 	}
+	leaveOutHot(img, data, w, ht, isBayer, pattern, bscale, bzero, sat, hot)
 	return img, nil
+}
+
+// maxHotChecks: with more saturated samples the frame is overexposed
+// anyway, the hot pixels are not looked for.
+const maxHotChecks = 1 << 20
+
+// leaveOutHot takes the hot pixels out of the saturated samples of the
+// statistics of img: those of hot and the lone ones.
+func leaveOutHot(img *Image, data []byte, w, ht int, isBayer bool, pattern [2][2]int, bscale, bzero, sat float64, hot func(*Header) *HotPixels) {
+	var n int64
+	for _, c := range img.Stats {
+		n += c.Saturated
+	}
+	if n == 0 || n > maxHotChecks {
+		return
+	}
+	// satU: the first saturated sample as unsigned
+	val := func(u int) float64 { return bzero + bscale*float64(u-32768) }
+	satU := min(max(int(math.Ceil((sat-bzero)/bscale+32768)), 0), 65536)
+	for satU > 0 && val(satU-1) >= sat {
+		satU--
+	}
+	for satU < 65536 && val(satU) < sat {
+		satU++
+	}
+	var hp *HotPixels
+	if hot != nil {
+		if m := hot(img.Header); m.usable(w, ht) {
+			hp, img.HotDarks = m, m.Darks
+		}
+	}
+	u := func(p, x, y int) float64 {
+		i := ((p*ht+y)*w + x) * 2
+		return float64(uint16(data[i])<<8 | uint16(data[i+1]) ^ 0x8000)
+	}
+	// the saturated samples are few: looked for in the data again
+	for i, left := 0, n; i < len(data) && left > 0; i += 2 {
+		if int(uint16(data[i])<<8|uint16(data[i+1])^0x8000) < satU {
+			continue
+		}
+		left--
+		k := i / 2
+		x, y, p := k%w, k/w%ht, k/(w*ht)
+		at := func(dx, dy int) (float64, bool) {
+			xx, yy := x+dx, y+dy
+			if xx < 0 || xx >= w || yy < 0 || yy >= ht {
+				return 0, false
+			}
+			return u(p, xx, yy), true
+		}
+		if !(hp != nil && hp.has(x, y)) && !lone(at, float64(satU)) {
+			continue
+		}
+		c := p
+		if isBayer {
+			c = pattern[y%2][x%2]
+		}
+		if c < len(img.Stats) {
+			img.Stats[c].Saturated--
+			img.Stats[c].Hot++
+		}
+	}
 }
 
 // histTop is the brightest sample of a histogram of 16-bit samples,

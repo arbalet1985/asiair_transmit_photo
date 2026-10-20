@@ -49,8 +49,9 @@ type qualityEntry struct {
 }
 
 // qualityVersion: 1 tells saturated stars as Siril does (counted, but not
-// for the HFR), 2 adds the shape of the stars and the saturated pixels.
-const qualityVersion = 2
+// for the HFR), 2 adds the shape of the stars and the saturated pixels, 3
+// leaves the hot pixels out of the saturated ones.
+const qualityVersion = 3
 
 // LoadQualityCache reads the cache file ("" = keep in memory only).
 func LoadQualityCache(file string) *QualityCache {
@@ -186,11 +187,40 @@ func (l *Layout) ToMeasure(out string) (frames []*Frame, paths []string) {
 	return frames, paths
 }
 
+// DarkFiles lists the dark frames of the layout that can be read on disk
+// (a file of the input, or a frame of a receiver already in the output):
+// they tell the hot pixels of the camera.
+func (l *Layout) DarkFiles(out string) []string {
+	var paths []string
+	for _, it := range l.Items {
+		f := it.Frame
+		if it.Dup || f.Kind != Dark {
+			continue
+		}
+		if f.Src == nil {
+			paths = append(paths, f.Path)
+			continue
+		}
+		cands := []string{it.Existing}
+		if out != "" {
+			cands = append(cands, filepath.Join(out, filepath.FromSlash(it.Dest)))
+		}
+		for _, c := range cands {
+			if st, err := os.Stat(c); c != "" && err == nil && st.Size() == f.Size {
+				paths = append(paths, c)
+				break
+			}
+		}
+	}
+	return paths
+}
+
 // MeasureFrames measures the stars of the frames read from paths, several
 // at a time, the ones in the cache without reading. got is called for each
 // frame measured (from the measuring goroutines). The frames themselves are
-// not changed: the caller applies the measurements.
-func MeasureFrames(ctx context.Context, frames []*Frame, paths []string, cache *QualityCache, got func(Measurement)) {
+// not changed: the caller applies the measurements. The hot pixels of hot
+// (nil: only the lone ones) are not counted as saturated.
+func MeasureFrames(ctx context.Context, frames []*Frame, paths []string, cache *QualityCache, hot *fits.HotCache, got func(Measurement)) {
 	work := make(chan int)
 	var wg sync.WaitGroup
 	n := max(1, runtime.NumCPU()/2)
@@ -199,7 +229,7 @@ func MeasureFrames(ctx context.Context, frames []*Frame, paths []string, cache *
 		go func() {
 			defer wg.Done()
 			for i := range work {
-				m, ok := measureOne(frames[i], paths[i], cache)
+				m, ok := measureOne(frames[i], paths[i], cache, hot)
 				if ok {
 					got(m)
 				}
@@ -219,7 +249,7 @@ func MeasureFrames(ctx context.Context, frames []*Frame, paths []string, cache *
 	wg.Wait()
 }
 
-func measureOne(f *Frame, p string, cache *QualityCache) (Measurement, bool) {
+func measureOne(f *Frame, p string, cache *QualityCache, hot *fits.HotCache) (Measurement, bool) {
 	st, err := os.Stat(p)
 	if err != nil {
 		return Measurement{}, false
@@ -234,7 +264,7 @@ func measureOne(f *Frame, p string, cache *QualityCache) (Measurement, bool) {
 			return m, true
 		}
 	}
-	e, err := measureFile(p)
+	e, err := measureFile(p, hot)
 	if err != nil {
 		return Measurement{}, false
 	}
@@ -244,13 +274,16 @@ func measureOne(f *Frame, p string, cache *QualityCache) (Measurement, bool) {
 }
 
 // measureFile finds the stars and the tracks of a frame, reading it once.
-func measureFile(p string) (qualityEntry, error) {
+func measureFile(p string, hot *fits.HotCache) (qualityEntry, error) {
 	fh, err := os.Open(p)
 	if err != nil {
 		return qualityEntry{}, err
 	}
 	defer fh.Close()
-	img, err := fits.Preview(fh, stars.MaxWidth)
+	img, err := fits.PreviewHot(fh, stars.MaxWidth, func(h *fits.Header) *fits.HotPixels {
+		hp, _ := hot.For(h, true)
+		return hp
+	})
 	if err != nil {
 		return qualityEntry{}, err
 	}

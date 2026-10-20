@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/satinfo"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
@@ -73,6 +74,7 @@ type Server struct {
 
 	speed      speedLog       // the agent speed of the last hours, for the chart
 	quality    *quality       // stars and HFR of the received Light frames
+	hot        fits.HotCache  // the hot pixels of the cameras, from the darks received
 	sats       *satState      // orbits of the satellites, for the tracks on the frames
 	satAbout   *satinfo.Store // what open sources tell about the satellites
 	planes     *planeState    // the planes near the observatory (OpenSky)

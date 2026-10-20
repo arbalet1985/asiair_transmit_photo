@@ -4778,7 +4778,9 @@ async function showSaturated(f, im) {
         if (!resp.ok) throw new Error(await resp.text());
         a = await resp.json();
         if (satCache.size > 200) satCache.clear();
-        satCache.set(f.path, a);
+        // the darks are still being read: asked again soon, it may leave out more
+        if (a.hot_pending) setTimeout(() => { if (V.img === im && V.satOn) { im.satAreas = null; showSaturated(f, im); } }, 4000);
+        else satCache.set(f.path, a);
       }
     } catch (e) {
       if (V.img === im) box.textContent = "Пересвет: " + e.message;
@@ -4789,8 +4791,10 @@ async function showSaturated(f, im) {
     renderViewer();
   }
   const a = im.satAreas;
-  box.textContent = !a.count ? "Пересвеченных пикселей нет"
-    : `Пересвеченных областей: ${a.count} (${a.pixels} пикс. не ниже ${ru(a.saturation)})` + (a.count > a.spots.length ? `, обведены ${a.spots.length} крупнейших` : "");
+  const hot = a.hot ? `; горячих пикселей не считается: ${a.hot}` + (a.hot_darks ? ` (по даркам: ${a.hot_darks}, и одиночные)` : " (одиночные, без света вокруг)") : "";
+  box.textContent = (!a.count ? "Пересвеченных пикселей нет"
+    : `Пересвеченных областей: ${a.count} (${a.pixels} пикс. не ниже ${ru(a.saturation)})` + (a.count > a.spots.length ? `, обведены ${a.spots.length} крупнейших` : "")) + hot +
+    (a.hot_pending ? "; читаю дарки…" : "");
 }
 // the tracks found on the frame, with what left them
 function drawTracks(ctx, im) {
@@ -4942,7 +4946,9 @@ function statsRows(st, only) {
     return `${c.saturated} (${p >= 1 ? p.toFixed(1) : p >= 0.01 ? p.toFixed(2) : "<0.01"}%)`;
   };
   if (st[0].saturation > 0) rows.push(["saturated", satText,
-    `Пикселей не ниже уровня насыщения ${num(st[0].saturation)} (SATURATE/DATAMAX заголовка или 99% диапазона), в скобках — доля от count`]);
+    `Пикселей не ниже уровня насыщения ${num(st[0].saturation)} (SATURATE/DATAMAX заголовка или 99% диапазона), в скобках — доля от count; горячие пиксели не считаются`]);
+  if (st.some(c => c.hot > 0)) rows.push(["hot", c => String(c.hot || 0),
+    "Горячие пиксели, пересвеченные без света: одиночные (вокруг только фон) или найденные на дарках этой камеры; в saturated не считаются"]);
   return [el("tr", {}, el("th", { textContent: st[0].no_median ? "" : "ADU" }), ...st.map(c => el("th", { textContent: c.name }))),
     ...rows.filter(([name]) => !only || only.includes(name)).map(([name, get, tip]) =>
       el("tr", tip ? { title: tip } : {}, el("td", { textContent: name }), ...st.map(c => el("td", { textContent: get(c) }))))];

@@ -895,6 +895,7 @@ func (w *window) scan() {
 				w.passEdit.SetText("")
 			}
 			w.layout, w.scannedIn, w.scannedOut, w.readErrs = l, s.In, s.Out, len(errs)
+			go setDarks(l, s.Out)
 			w.scannedOnly = strings.Join(only, "\n")
 			w.offline = offline
 			w.model.set(l, remote && !offline, s.Out)

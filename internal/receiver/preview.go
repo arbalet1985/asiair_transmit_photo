@@ -35,6 +35,8 @@ type previewInfo struct {
 	Header   map[string]string `json:"header"` // selected keywords
 	// Stats: of the whole frame, per channel (PixInsight's Statistics)
 	Stats []fits.ChannelStats `json:"stats,omitempty"`
+	// HotDarks: the darks the hot pixels left out of Stats were told by
+	HotDarks int `json:"hot_darks,omitempty"`
 }
 
 // headerKeys are shown under the preview.
@@ -110,13 +112,18 @@ func (s *Server) buildPreview(p string, maxWidth int) (*cachedPreview, error) {
 		return nil, err
 	}
 	defer f.Close()
-	im, err := fits.Preview(f, maxWidth)
+	pending := false
+	im, err := fits.PreviewHot(f, maxWidth, func(h *fits.Header) *fits.HotPixels {
+		hp, p := s.hot.For(h, false)
+		pending = p
+		return hp
+	})
 	if err != nil {
 		return nil, err
 	}
 	info := previewInfo{
 		Width: im.Width, Height: im.Height, Channels: im.Channels, Binning: im.Binning, Bayer: im.Bayer,
-		Header: map[string]string{}, Stats: im.Stats,
+		Header: map[string]string{}, Stats: im.Stats, HotDarks: im.HotDarks,
 	}
 	info.Source[0], _ = strconv.Atoi(im.Header.Get("NAXIS1"))
 	info.Source[1], _ = strconv.Atoi(im.Header.Get("NAXIS2"))
@@ -126,7 +133,9 @@ func (s *Server) buildPreview(p string, maxWidth int) (*cachedPreview, error) {
 		}
 	}
 	c := &cachedPreview{key: key, info: info, data: im.Uint16()}
-	s.previews.put(c)
+	if !pending { // the darks are being read: the next look leaves out more
+		s.previews.put(c)
+	}
 	return c, nil
 }
 
