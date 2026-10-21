@@ -23,6 +23,9 @@ type Target struct {
 	Priority int     `json:"priority"` // 1 is the most important
 	Filter   string  `json:"filter,omitempty"`
 	Off      bool    `json:"off,omitempty"` // left out of the plan
+	// Angle: the camera angle of the framing, degrees from north through
+	// east (0 = not chosen)
+	Angle float64 `json:"angle,omitempty"`
 }
 
 // Params are the night and what the work costs. Durations in minutes

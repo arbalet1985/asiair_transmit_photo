@@ -48,8 +48,14 @@ type Frame struct {
 	Temp     float64 // sensor temperature (°C, rounded); NaN = unknown
 	Bin      int
 	Camera   string
-	Time     time.Time // local time at the observatory (the UTC fields hold it)
-	Night    string    // YYYY-MM-DD of the evening the night began
+	// the optics: focal length (FOCALLEN, mm), the size of a pixel of the
+	// image (XPIXSZ, µm, with the binning) and of the image (NAXIS1/2);
+	// 0 = unknown
+	Focal         float64
+	PixelUm       float64
+	Width, Height int
+	Time          time.Time // local time at the observatory (the UTC fields hold it)
+	Night         string    // YYYY-MM-DD of the evening the night began
 	// UTC is the moment of the frame: DATE-OBS, else Time in this
 	// computer's zone
 	UTC time.Time
@@ -180,6 +186,14 @@ func describe(get func(string) string, rel string, mtime time.Time) Frame {
 
 	fr.Filter = strings.TrimSpace(get("FILTER"))
 	fr.Camera = strings.TrimSpace(get("INSTRUME"))
+	fr.Focal, _ = num(get("FOCALLEN"))
+	fr.PixelUm, _ = num(get("XPIXSZ"))
+	if v, ok := num(get("NAXIS1")); ok {
+		fr.Width = int(v)
+	}
+	if v, ok := num(get("NAXIS2")); ok {
+		fr.Height = int(v)
+	}
 
 	if fr.Kind == Light {
 		fr.Object = objectOf(get("OBJECT"), rel)

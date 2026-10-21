@@ -58,6 +58,14 @@ func TestDescribeHeader(t *testing.T) {
 	if !f.HasTarget || f.RA != 10.68 || !f.HasSite || f.Lat != 55.75 || !f.UTC.Equal(time.Date(2026, 9, 26, 20, 10, 0, 123e6, time.UTC)) {
 		t.Fatalf("coordinates: %+v", f)
 	}
+	if f.Focal != 0 || f.Width != 0 {
+		t.Fatalf("no optics in the header: %+v", f)
+	}
+	keys["FOCALLEN"], keys["XPIXSZ"], keys["NAXIS1"], keys["NAXIS2"] = "400", "3.76", "6248", "4176"
+	f = describe(func(k string) string { return keys[k] }, "x/Light_1.fit", time.Now())
+	if f.Focal != 400 || f.PixelUm != 3.76 || f.Width != 6248 || f.Height != 4176 {
+		t.Fatalf("optics: %+v", f)
+	}
 }
 
 func TestDescribeFromName(t *testing.T) {
