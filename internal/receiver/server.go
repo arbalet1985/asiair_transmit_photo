@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/atlas"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
@@ -513,6 +514,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	for _, p := range publicFiles {
 		mux.HandleFunc(p, s.handleStatic)
 	}
+	mux.HandleFunc("/ui/atlas.js", func(w http.ResponseWriter, r *http.Request) { atlas.Static(w, "atlas.js") })
 	mux.HandleFunc("/ui/api/remote", s.handleUIRemote)
 	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)

@@ -16,16 +16,21 @@ func TestUIPlanner(t *testing.T) {
 	for i := 0; i < 36; i++ {
 		ut := start.Add(time.Duration(i) * 5 * time.Minute)
 		s.quality.set(time.Duration(i).String(), qualityEntry{Sky: &skyEntry{Object: "M 31", Night: "2026-10-15", UTC: ut.UnixMilli(),
-			Wall: ut.Add(3 * time.Hour).UnixMilli(), Exp: 300, RA: 10.68, Dec: 41.27, Lat: 55.75, Lon: 37.62}})
+			Wall: ut.Add(3 * time.Hour).UnixMilli(), Exp: 300, RA: 10.68, Dec: 41.27, Lat: 55.75, Lon: 37.62,
+			Cam: "ZWO ASI533MC Pro", Focal: 400, Pix: 3.76, W: 3008, H: 3008}})
 	}
 	var got struct {
 		State   PlannerState `json:"state"`
 		TZ      float64      `json:"tz_guess"`
 		Objects []plannerObject
 		Guess   plannerGuess
+		Setups  []planner.Setup
 	}
 	if uiCall(t, ui, "GET", "/ui/api/planner", nil, &got) != 200 {
 		t.Fatal("planner")
+	}
+	if len(got.Setups) != 1 || got.Setups[0].Frames != 36 || got.Setups[0].Focal != 400 || got.Setups[0].Width != 3008 {
+		t.Fatalf("setups: %+v", got.Setups)
 	}
 	if got.TZ != 3 || len(got.Objects) != 1 || got.Objects[0].Name != "M 31" || len(got.Guess.Points) != 36 || len(got.State.Sky.Horizon) == 0 {
 		t.Fatalf("planner: %+v", got)
@@ -57,8 +62,16 @@ func TestUIPlanner(t *testing.T) {
 	if len(plan.Steps) == 0 || len(plan.Scope) == 0 || len(plan.Tracks) != 1 || len(plan.Moon) != len(plan.Scope) || plan.Text == "" {
 		t.Fatalf("plan: %d steps, %d samples", len(plan.Steps), len(plan.Scope))
 	}
-	// kept
+	// kept, with the framing and the optics of the atlas
+	st.Targets[0].Angle = 30
+	st.Optics = &planner.Optics{Focal: 400, Reducer: 0.8, Pixel: 3.76, Width: 3008, Height: 3008}
 	if code := uiCall(t, ui, "POST", "/ui/api/planner", st, nil); code != http.StatusNoContent || len(s.state.Planner().Targets) != 1 {
 		t.Fatalf("not kept: %d", code)
+	}
+	if p := s.state.Planner(); p.Targets[0].Angle != 30 || p.Optics == nil || p.Optics.Reducer != 0.8 {
+		t.Fatalf("framing not kept: %+v", p)
+	}
+	if uiCall(t, ui, "GET", "/ui/atlas.js", nil, nil) != 200 {
+		t.Fatal("atlas.js")
 	}
 }

@@ -29,6 +29,8 @@ type PlannerState struct {
 	Targets []planner.Target `json:"targets"`
 	Params  *planner.Params  `json:"params,omitempty"`
 	TZ      *float64         `json:"tz,omitempty"` // hours from UTC of the observatory clock
+	// Optics: of the frames of the atlas (nil: the last setup of the frames)
+	Optics *planner.Optics `json:"optics,omitempty"`
 }
 
 // skyEntry is where a Light frame was taken, read from its header.
@@ -42,6 +44,13 @@ type skyEntry struct {
 	Dec    float64 `json:"dec"`
 	Lat    float64 `json:"lat"`
 	Lon    float64 `json:"lon"`
+	// the optics of the frame (for the atlas): the camera, FOCALLEN (mm),
+	// XPIXSZ (µm) and the image (W×H); W = 0: read before they were kept
+	Cam   string  `json:"c,omitempty"`
+	Focal float64 `json:"f,omitempty"`
+	Pix   float64 `json:"px,omitempty"`
+	W     int     `json:"wd,omitempty"`
+	H     int     `json:"ht,omitempty"`
 }
 
 // readSky reads the header of the frame at file (rel: its path here).
@@ -51,7 +60,7 @@ func readSky(file, rel string) (*skyEntry, bool) {
 		return nil, true
 	}
 	return &skyEntry{Object: f.Object, Night: f.Night, UTC: f.UTC.UnixMilli(), Wall: f.Time.UnixMilli(), Exp: f.Exposure,
-		RA: f.RA, Dec: f.Dec, Lat: f.Lat, Lon: f.Lon}, false
+		RA: f.RA, Dec: f.Dec, Lat: f.Lat, Lon: f.Lon, Cam: f.Camera, Focal: f.Focal, Pix: f.PixelUm, W: f.Width, H: f.Height}, false
 }
 
 func (s *State) Planner() PlannerState {
@@ -202,7 +211,21 @@ func (s *Server) handleUIPlanner(w http.ResponseWriter, r *http.Request) {
 		"guess":    out,
 		"objects":  frameObjects(sk),
 		"frames":   len(sk),
+		"setups":   frameSetups(sk),
 	})
+}
+
+// frameSetups: the optics of the frames received, the last used first.
+func frameSetups(sk []skyEntry) []planner.Setup {
+	fr := make([]planner.SetupFrame, 0, len(sk))
+	for _, e := range sk {
+		fr = append(fr, planner.SetupFrame{Camera: e.Cam, Focal: e.Focal, Pixel: e.Pix, Width: e.W, Height: e.H, Time: time.UnixMilli(e.UTC)})
+	}
+	out := planner.SetupsOf(fr)
+	if out == nil {
+		out = []planner.Setup{}
+	}
+	return out
 }
 
 func tzName(h float64) string {

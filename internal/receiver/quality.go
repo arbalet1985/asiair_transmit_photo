@@ -263,8 +263,8 @@ func (s *Server) measurePending(ctx context.Context) int {
 		keep[f.Path] = true
 		if e, ok := s.quality.get(f.Path, f.Size, f.ModTime); !ok || e.V < qualityVersion || e.TV < trackVersion {
 			todo = append(todo, f) // new, or measured the old way (shown until then)
-		} else if e.Sky == nil && !e.NoSky {
-			hdrTodo = append(hdrTodo, f) // measured by an older version
+		} else if (e.Sky == nil && !e.NoSky) || (e.Sky != nil && e.Sky.W == 0) {
+			hdrTodo = append(hdrTodo, f) // measured by an older version (or without the optics)
 		}
 	}
 	s.quality.forget(keep)

@@ -12,6 +12,7 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 
+	"github.com/arbalet1985/asiair_transmit_photo/internal/atlas"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/catalog"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/moon"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/planner"
@@ -34,6 +35,8 @@ type plannerSettings struct {
 	SkySet  bool             `json:"sky_set,omitempty"` // edited by hand: the frames do not replace it
 	Targets []planner.Target `json:"targets,omitempty"`
 	Params  *planner.Params  `json:"params,omitempty"`
+	// Optics: of the frames of the atlas (nil: the last setup of the frames)
+	Optics *planner.Optics `json:"optics,omitempty"`
 }
 
 // frameTarget is an object of the frames taken, as a suggestion.
@@ -88,6 +91,9 @@ type plannerUI struct {
 	wxKey  string
 	wxAt   time.Time
 	wxBusy bool
+
+	atlas  *atlas.Server   // the atlas page, once opened
+	setups []planner.Setup // the optics of the frames read
 }
 
 func newPlanner(w *window, s plannerSettings) *plannerUI {
@@ -257,6 +263,8 @@ func (p *plannerUI) page() TabPage {
 							PushButton{Text: "↑", MaxSize: Size{Width: 30}, OnClicked: func() { p.moveTarget(-1) }, ToolTipText: "Важнее"},
 							PushButton{Text: "↓", MaxSize: Size{Width: 30}, OnClicked: func() { p.moveTarget(1) }, ToolTipText: "Менее важно"},
 							HSpacer{},
+							PushButton{Text: "Атлас…", OnClicked: p.openAtlas,
+								ToolTipText: "Атлас неба в браузере: рамки поля зрения объектов плана (оптика по кадрам, редьюсер) и кадрирование — сдвиг и поворот рамки"},
 						}},
 						TableView{AssignTo: &p.targetTable, Model: p.targets, Columns: tcols, CheckBoxes: true, NotSortableByHeaderClick: true,
 							OnCurrentIndexChanged: p.targetChosen, StretchFactor: 1},
@@ -428,8 +436,12 @@ func (p *plannerUI) setFrames(frames []sorter.Frame) {
 	offsets := map[int]int{}
 	seen := map[string]bool{}
 	p.frameObjs = nil
+	var sf []planner.SetupFrame
 	for i := range frames {
 		f := &frames[i]
+		if f.Kind == sorter.Light {
+			sf = append(sf, planner.SetupFrame{Camera: f.Camera, Focal: f.Focal, Pixel: f.PixelUm, Width: f.Width, Height: f.Height, Time: f.UTC})
+		}
 		if f.Kind != sorter.Light || !f.HasTarget || !f.HasSite || f.UTC.IsZero() {
 			continue
 		}
@@ -445,6 +457,8 @@ func (p *plannerUI) setFrames(frames []sorter.Frame) {
 			p.frameObjs = append(p.frameObjs, frameTarget{f.Object, f.RA, f.Dec})
 		}
 	}
+	p.setups = planner.SetupsOf(sf)
+	p.atlasChanged()
 	if len(obs) == 0 {
 		return
 	}
@@ -610,6 +624,7 @@ func (p *plannerUI) renumber() {
 	p.steps.PublishRowsReset()
 	p.targets.PublishRowsReset()
 	p.sky.invalidate()
+	p.atlasChanged()
 }
 
 func (p *plannerUI) addTarget() {
@@ -633,6 +648,7 @@ func (p *plannerUI) updateTarget() {
 		return
 	}
 	t.Off = p.state.Targets[i].Off
+	t.Angle = p.state.Targets[i].Angle
 	p.state.Targets[i] = t
 	p.renumber()
 	p.targetTable.SetCurrentIndex(i)
@@ -675,6 +691,7 @@ func (p *plannerUI) targetChosen() {
 	p.wantEdit.SetValue(t.WantSec / 3600)
 	p.filterEdit.SetText(t.Filter)
 	p.sky.invalidate()
+	p.atlasChanged()
 }
 
 func (p *plannerUI) makePlan() {
@@ -892,6 +909,7 @@ func (m *targetModel) SetChecked(i int, on bool) error {
 			m.p.makePlan()
 		}
 		m.p.sky.invalidate()
+		m.p.atlasChanged()
 	})
 	return nil
 }

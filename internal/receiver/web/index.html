@@ -356,6 +356,9 @@
   #plSteps tr.plhead td { background: var(--bg); font-weight: 600; border-top: 1px solid var(--border); }
   .plsw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
   #plTargets button { padding: 1px 7px; }
+  .platlas { margin-top: 10px; }
+  .platlas > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+  .platlas[open] > summary { margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -591,6 +594,11 @@
         <thead><tr><th title="В плане">✓</th><th>№</th><th>Объект</th><th>RA</th><th>Dec</th><th>Выдержка</th><th>Нужно</th><th>Фильтр</th><th>Макс. высота</th><th>В плане</th><th></th></tr></thead>
         <tbody id="plTargets"></tbody>
       </table></div>
+      <details id="plAtlasBox" class="platlas">
+        <summary>Атлас — рамки объектов плана и кадрирование</summary>
+        <div id="plAtlas"></div>
+        <div class="hint">Атлас неба — Aladin Lite (CDS, Страсбург), загружается из интернета при открытии. Рамка — поле зрения камеры с телескопом (оптика по заголовкам кадров, редьюсер — множитель фокуса). «Кадрировать»: рамка выбранного объекта встаёт в центр, двигайте небо под ней и поворачивайте её; «Применить» записывает координаты и угол объекта.</div>
+      </details>
       <div class="hint">Порядок строк — приоритет: в каждый момент снимается самый верхний объект, который виден (над горизонтом, вне закрытых зон, не ближе заданного к Луне) и которому ещё нужна выдержка. Если объект закрыт ненадолго — ожидание, если надолго — переход на следующий, а когда более важный снова виден — возврат к нему.</div>
       <div class="toolbar" style="margin-top:12px">
         <button class="primary" id="plMake">Составить план</button>
@@ -1087,6 +1095,7 @@
 </dialog>
 <div id="toast"></div>
 
+<script src="/ui/atlas.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -3472,7 +3481,7 @@ async function plLoad() {
     const r = await fetch("/ui/api/planner");
     if (!r.ok) throw new Error(await r.text());
     const d = await r.json();
-    PL.st = d.state; PL.guess = d.guess; PL.objects = d.objects || []; PL.tzGuess = d.tz_guess; PL.frames = d.frames;
+    PL.st = d.state; PL.guess = d.guess; PL.objects = d.objects || []; PL.tzGuess = d.tz_guess; PL.frames = d.frames; PL.setups = d.setups || [];
     // empty lists are left out of the answer
     PL.st.sky.zones = PL.st.sky.zones || []; PL.st.sky.horizon = PL.st.sky.horizon || []; PL.st.targets = PL.st.targets || [];
     PL.loaded = true;
@@ -3487,6 +3496,7 @@ async function plLoad() {
       else $(id).value = p[key];
     }
     plRenderTargets();
+    plAtlasOpen();
     await plMakePlan();
   } catch (e) {
     $("plInfo").textContent = "Планировщик: " + e.message;
@@ -3641,18 +3651,58 @@ function plRenderTargets() {
       el("td", { textContent: t.filter || "" }), el("td", { textContent: best }), el("td", { textContent: inPlan }),
       el("td", {}, btn("↑", "Важнее", () => move(-1)), " ", btn("↓", "Менее важно", () => move(1)), " ",
         btn("✕", "Удалить", () => { PL.st.targets.splice(i, 1); PL.sel = -1; plChanged(); })));
-    tr.onclick = () => {
-      PL.sel = i;
-      $("plName").value = t.name; $("plRA").value = plFmtRA(t.ra); $("plDec").value = plFmtDec(t.dec);
-      $("plExp").value = t.exposure; $("plWant").value = (t.want_sec || 0) / 3600; $("plFilter").value = t.filter || "";
-      $("plFound").replaceChildren(); PL.found = [];
-      plRenderTargets();
-    };
+    tr.onclick = () => plSelect(i);
     tb.append(tr);
   });
   if (!PL.st.targets.length) tb.append(el("tr", {}, el("td", { colSpan: 11, className: "muted", textContent: "Найдите объект по названию и нажмите «Добавить»." })));
   $("plUpdate").disabled = PL.sel < 0 || PL.sel >= PL.st.targets.length;
+  plAtlasSync();
 }
+
+// plSelect: target i into the fields, and the atlas to it
+function plSelect(i) {
+  const t = PL.st.targets[i];
+  if (!t) return;
+  PL.sel = i;
+  $("plName").value = t.name; $("plRA").value = plFmtRA(t.ra); $("plDec").value = plFmtDec(t.dec);
+  $("plExp").value = t.exposure; $("plWant").value = (t.want_sec || 0) / 3600; $("plFilter").value = t.filter || "";
+  $("plFound").replaceChildren(); PL.found = [];
+  if (PL.atlas) PL.atlas.setPreview(null);
+  plRenderTargets();
+  if (PL.atlas) PL.atlas.goTo(i);
+}
+
+// ---- the atlas (internal/atlas): the frames of the targets on the sky and
+// their framing; Aladin is loaded once the atlas is opened
+function plAtlasSync() {
+  if (!PL.atlas || !PL.st) return;
+  PL.atlas.setOptics(PL.st.optics || null, PL.setups || []);
+  PL.atlas.setTargets(PL.st.targets, PL.st.targets.map((t, i) => plColor(i)), PL.sel);
+}
+function plAtlasOpen() {
+  if (!$("plAtlasBox").open || !PL.st || !window.Atlas) return;
+  if (!PL.atlas) {
+    PL.atlas = Atlas.create($("plAtlas"), {
+      onFrame: (i, ra, dec, angle) => {
+        const t = PL.st.targets[i];
+        if (!t) return;
+        t.ra = ra; t.dec = dec; t.angle = angle;
+        if (PL.sel === i) { $("plRA").value = plFmtRA(ra); $("plDec").value = plFmtDec(dec); }
+        toast(`${t.name}: рамка ${plFmtRA(ra)} ${plFmtDec(dec)}, угол ${angle}°`);
+        plChanged();
+      },
+      onSelect: i => plSelect(i),
+      onOptics: o => { PL.st.optics = o; plChanged(); },
+    });
+    plAtlasSync();
+    if (PL.sel >= 0) PL.atlas.goTo(PL.sel);
+  }
+}
+$("plAtlasBox").addEventListener("toggle", () => {
+  try { localStorage.setItem("plAtlasOpen", $("plAtlasBox").open ? "1" : ""); } catch (e) { /* private window */ }
+  plAtlasOpen();
+});
+try { if (localStorage.getItem("plAtlasOpen")) $("plAtlasBox").open = true; } catch (e) { /* private window */ }
 
 function plRenderSteps() {
   const tb = $("plSteps");
@@ -4265,6 +4315,7 @@ $("plFound").onchange = () => {
   const o = PL.found[+$("plFound").value];
   if (!o) return;
   $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
+  if (PL.atlas) PL.atlas.setPreview(o.ra, o.dec);
 };
 function plFieldsTarget() {
   let name = $("plName").value.trim();
@@ -4283,12 +4334,15 @@ $("plAdd").onclick = () => {
   if (!t) return;
   PL.st.targets.push(t);
   PL.sel = PL.st.targets.length - 1;
+  if (PL.atlas) PL.atlas.setPreview(null);
   plChanged();
+  if (PL.atlas) PL.atlas.goTo(PL.sel);
 };
 $("plUpdate").onclick = () => {
   const i = PL.sel, t = plFieldsTarget();
   if (!t || i < 0 || i >= PL.st.targets.length) return;
   t.off = PL.st.targets[i].off;
+  t.angle = PL.st.targets[i].angle;
   PL.st.targets[i] = t;
   plChanged();
 };
