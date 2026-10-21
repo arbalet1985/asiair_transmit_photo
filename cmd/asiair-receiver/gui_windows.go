@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -60,6 +61,7 @@ func guiMain(cfgPath string) error {
 		autorun.Refresh(runName, cmd)
 	}
 
+	var ui func(func()) // runs on the window thread, once the tray is ready
 	return gui.RunTray(gui.TrayOptions{
 		Title: "ASIAIR Receiver",
 		Page:  p.page,
@@ -101,6 +103,7 @@ func guiMain(cfgPath string) error {
 				}
 			}},
 			{Text: "Открыть журнал", Do: func() { gui.Open(logFile) }},
+			{Text: "Проверить обновления", Do: func() { checkUpdates(p, ui) }},
 			{},
 			{Text: "Перезапустить приёмник", Do: func() {
 				if walk.MsgBox(nil, "ASIAIR Receiver", "Перезапустить приёмник? Передача прервётся на несколько секунд и продолжится с того же места.",
@@ -113,9 +116,69 @@ func guiMain(cfgPath string) error {
 				}
 			}},
 		},
-		OnReady: func(quit func()) {
+		OnReady: func(quit func(), sync func(func())) {
+			ui = sync
 			p.control.quit = quit
 			svc.SetQuit(quit) // closes the tray when a new version restarts
 		},
 	})
+}
+
+// checking: a check from the tray is going on (the window thread only)
+var checking bool
+
+// checkUpdates asks GitHub for a new release now and tells what it found;
+// a newer receiver is installed when the user agrees.
+func checkUpdates(p *prepared, ui func(func())) {
+	const title = "ASIAIR Receiver"
+	if checking || ui == nil {
+		return
+	}
+	checking = true
+	asked := time.Now()
+	p.srv.CheckUpdates(false)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Обновление: сбой проверки из трея: %v", r)
+			}
+		}()
+		// the check is a request to GitHub; the agent and the sorter it
+		// downloads may take longer, the answer does not wait for them
+		deadline := time.Now().Add(2 * time.Minute)
+		st := p.srv.UpdateState()
+		for st.Answered.Before(asked) && time.Now().Before(deadline) {
+			time.Sleep(time.Second)
+			st = p.srv.UpdateState()
+		}
+		late := st.Answered.Before(asked)
+		ui(func() {
+			checking = false
+			switch {
+			case late:
+				walk.MsgBox(nil, title, "GitHub пока не ответил — проверка продолжается, её итог будет на странице приёмника.", walk.MsgBoxIconInformation)
+			case st.Error != "":
+				walk.MsgBox(nil, title, "Не удалось проверить обновления: "+st.Error, walk.MsgBoxIconWarning)
+			case st.Newer && st.CanInstall && st.Auto:
+				// the check installs it itself (or tells why not)
+				msg := fmt.Sprintf("Вышла версия %s (установлена %s) — включены автоматические обновления, приёмник обновится и перезапустится сам.", st.Latest, st.Version)
+				if st.Status != "" {
+					msg += "\n\nСейчас: " + st.Status + "."
+				}
+				walk.MsgBox(nil, title, msg, walk.MsgBoxIconInformation)
+			case st.Newer && st.CanInstall:
+				if walk.MsgBox(nil, title, fmt.Sprintf("Вышла версия %s (установлена %s).\n\nУстановить сейчас? Приёмник перезапустится, передача прервётся на несколько секунд и продолжится с того же места.", st.Latest, st.Version),
+					walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
+					log.Printf("Приёмник: обновление до %s из значка в трее", st.Latest)
+					p.srv.CheckUpdates(true)
+				}
+			case st.Newer:
+				walk.MsgBox(nil, title, fmt.Sprintf("Вышла версия %s (установлена %s). Сам приёмник обновиться не может — установите его со страницы релиза (ссылка на странице приёмника, раздел «Обновления»).", st.Latest, st.Version), walk.MsgBoxIconInformation)
+			case st.Unchanged:
+				walk.MsgBox(nil, title, fmt.Sprintf("Вышла версия %s, но в приёмнике изменений нет — обновлять его не нужно. Агент и сортировщик получат её через приёмник.", st.Latest), walk.MsgBoxIconInformation)
+			default:
+				walk.MsgBox(nil, title, fmt.Sprintf("Установлена последняя версия: %s.", st.Version), walk.MsgBoxIconInformation)
+			}
+		})
+	}()
 }

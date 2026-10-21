@@ -57,6 +57,7 @@ type updater struct {
 	manual     bool // "Обновить сейчас": hand out the agent even with auto off
 	checking   bool
 	checked    time.Time
+	answered   time.Time // GitHub answered (or failed) the last request of the latest release
 	latest     *update.Release
 	builds     map[string]string // of latest: the build of each program (nil = unknown)
 	err        string
@@ -210,6 +211,7 @@ func (u *updater) check(ctx context.Context, install, asked bool) {
 	c := u.client()
 	rel, err := c.Latest(ctx)
 	u.mu.Lock()
+	u.answered = time.Now()
 	if err != nil {
 		u.err = err.Error()
 	} else {
@@ -466,6 +468,34 @@ func (u *updater) info() updateInfo {
 	in.ReceiverSame = update.Unchanged(u.builds, update.ReceiverAsset, protocol.Build)
 	in.AgentSame = update.Unchanged(u.builds, update.AgentAsset, u.s.state.AgentBuild())
 	return in
+}
+
+// UpdateState is what the last check of the updates found, for the tray.
+type UpdateState struct {
+	Checking        bool
+	Version, Latest string // this receiver, the latest release ("" not known)
+	// Newer: the latest release is newer and changes the receiver;
+	// Unchanged: newer, but only for the other programs
+	Newer, Unchanged bool
+	CanInstall       bool      // the receiver can update itself
+	Auto             bool      // automatic updates: a check installs a newer receiver itself
+	Error, Status    string    // of the last check
+	Answered         time.Time // when GitHub answered the last check
+}
+
+// CheckUpdates asks GitHub now; install also installs a newer receiver.
+func (s *Server) CheckUpdates(install bool) { s.updater.trigger(install) }
+
+// UpdateState tells the updates found.
+func (s *Server) UpdateState() UpdateState {
+	in := s.updater.info()
+	s.updater.mu.Lock()
+	answered := s.updater.answered
+	s.updater.mu.Unlock()
+	newer := in.Latest != "" && update.Newer(in.Latest, in.Version)
+	return UpdateState{Checking: in.Checking, Version: in.Version, Latest: in.Latest, Newer: newer && !in.ReceiverSame,
+		Unchanged: newer && in.ReceiverSame, CanInstall: in.CanSelfUpdate, Error: in.Error, Status: in.Status, Answered: answered,
+		Auto: in.Auto}
 }
 
 func (s *Server) handleUIUpdate(w http.ResponseWriter, r *http.Request) {
