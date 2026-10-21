@@ -170,3 +170,20 @@ func TestDeletesWaitForASIAIR(t *testing.T) {
 		t.Fatalf("ASIAIR back: %d commands sent, want 1", n)
 	}
 }
+
+// A search for the ASIAIR asked on the page goes to the agent with the sync.
+func TestRediscoverAsked(t *testing.T) {
+	s, err := LoadState(filepath.Join(t.TempDir(), "state.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Sync(protocol.SyncRequest{}).Rediscover != 0 || !s.RediscoverAsked().IsZero() {
+		t.Fatal("asked by itself")
+	}
+	rev := s.Sync(protocol.SyncRequest{}).Rev
+	s.AskRediscover()
+	resp := s.Sync(protocol.SyncRequest{})
+	if resp.Rediscover == 0 || resp.Rev == rev || s.RediscoverAsked().IsZero() {
+		t.Fatalf("not asked: %+v", resp)
+	}
+}

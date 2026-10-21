@@ -74,17 +74,65 @@ type quality struct {
 	m     map[string]qualityEntry
 	dirty bool
 	wake  chan struct{}
+	// gone: the measurements of the frames no longer here (deleted), kept
+	// in quality-deleted.json for the history of their nights
+	gone      map[string]goneEntry
+	goneFile  string
+	goneDirty bool
+	goneRev   int64 // changes with gone, so the page knows to load it again
 }
 
+// goneEntry is what is kept of a deleted frame: when it was found gone and
+// its measurement.
+type goneEntry struct {
+	Gone   int64   `json:"gone"`  // unix ms
+	MTime  int64   `json:"mtime"` // unix nanoseconds of the file
+	HFR    float64 `json:"hfr,omitempty"`
+	Stars  int     `json:"stars"`
+	Bg     float64 `json:"bg,omitempty"`
+	Round  float64 `json:"round,omitempty"`
+	SatPct float64 `json:"satpct,omitempty"`
+	Start  int64   `json:"start,omitempty"`
+}
+
+// maxGone: the deleted frames remembered at most (the last ones).
+const maxGone = 30000
+
 func newQuality(file string) *quality {
-	q := &quality{file: file, m: map[string]qualityEntry{}, wake: make(chan struct{}, 1)}
+	q := &quality{file: file, m: map[string]qualityEntry{}, wake: make(chan struct{}, 1),
+		gone: map[string]goneEntry{}, goneFile: strings.TrimSuffix(file, ".json") + "-deleted.json"}
 	if b, err := os.ReadFile(file); err == nil {
 		if err := json.Unmarshal(b, &q.m); err != nil {
 			log.Printf("Приёмник: оценки кадров %s не прочитаны: %v", file, err)
 			q.m = map[string]qualityEntry{}
 		}
 	}
+	if b, err := os.ReadFile(q.goneFile); err == nil {
+		if err := json.Unmarshal(b, &q.gone); err != nil {
+			log.Printf("Приёмник: оценки удалённых кадров %s не прочитаны: %v", q.goneFile, err)
+			q.gone = map[string]goneEntry{}
+		}
+	}
+	q.goneRev = time.Now().UnixMilli()
 	return q
+}
+
+// deleted: the measurements of the deleted frames and their revision.
+func (q *quality) deleted() (map[string]goneEntry, int64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make(map[string]goneEntry, len(q.gone))
+	for p, e := range q.gone {
+		out[p] = e
+	}
+	return out, q.goneRev
+}
+
+// deletedRev: the revision of the deleted frames and how many there are.
+func (q *quality) deletedRev() (int64, int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.goneRev, len(q.gone)
 }
 
 // get returns the measurement of the file if it is up to date.
@@ -117,33 +165,76 @@ func (q *quality) skies() []skyEntry {
 
 func (q *quality) save() {
 	q.mu.Lock()
-	if !q.dirty {
-		q.mu.Unlock()
-		return
+	var b, gb []byte
+	var err, gerr error
+	dirty, goneDirty := q.dirty, q.goneDirty
+	if dirty {
+		b, err = json.Marshal(q.m)
 	}
-	b, err := json.Marshal(q.m)
-	q.dirty = false
+	if goneDirty {
+		gb, gerr = json.Marshal(q.gone)
+	}
+	q.dirty, q.goneDirty = false, false
 	q.mu.Unlock()
-	if err == nil {
-		tmp := q.file + ".tmp"
-		if err = os.WriteFile(tmp, b, 0o644); err == nil {
-			err = os.Rename(tmp, q.file)
+	write := func(file string, b []byte, err error, what string) {
+		if err == nil {
+			tmp := file + ".tmp"
+			if err = os.WriteFile(tmp, b, 0o644); err == nil {
+				err = os.Rename(tmp, file)
+			}
+		}
+		if err != nil {
+			log.Printf("Приёмник: %s не сохранены: %v", what, err)
 		}
 	}
-	if err != nil {
-		log.Printf("Приёмник: оценки кадров не сохранены: %v", err)
+	if dirty {
+		write(q.file, b, err, "оценки кадров")
+	}
+	if goneDirty {
+		write(q.goneFile, gb, gerr, "оценки удалённых кадров")
 	}
 }
 
-// forget drops the files that are no longer here.
+// forget drops the files that are no longer here; the measurement of a
+// frame deleted is kept for the history of its night, and dropped again
+// when the frame comes back.
 func (q *quality) forget(keep map[string]bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for p := range q.m {
-		if !keep[p] {
-			delete(q.m, p)
-			q.dirty = true
+	now := time.Now().UnixMilli()
+	changed := false
+	for p, e := range q.m {
+		if keep[p] {
+			continue
 		}
+		delete(q.m, p)
+		q.dirty = true
+		if e.Err == "" && e.V > 0 {
+			q.gone[p] = goneEntry{Gone: now, MTime: e.MTime, HFR: e.HFR, Stars: e.Stars, Bg: e.Bg, Round: e.Round,
+				SatPct: e.SatPct, Start: e.Start}
+			changed = true
+		}
+	}
+	for p := range q.gone {
+		if keep[p] {
+			delete(q.gone, p)
+			changed = true
+		}
+	}
+	if len(q.gone) > maxGone {
+		ps := make([]string, 0, len(q.gone))
+		for p := range q.gone {
+			ps = append(ps, p)
+		}
+		sort.Slice(ps, func(i, j int) bool { return q.gone[ps[i]].Gone < q.gone[ps[j]].Gone })
+		for _, p := range ps[:len(ps)-maxGone] {
+			delete(q.gone, p)
+		}
+		changed = true
+	}
+	if changed {
+		q.goneDirty = true
+		q.goneRev = max(q.goneRev+1, now)
 	}
 }
 
@@ -220,10 +311,8 @@ func (s *Server) qualityWorker(ctx context.Context) {
 	q := s.quality
 	defer q.save()
 	for {
-		n := s.measurePending(ctx)
-		if n > 0 {
-			q.save()
-		}
+		s.measurePending(ctx)
+		q.save() // nothing is written when nothing changed (frames measured or deleted)
 		select {
 		case <-ctx.Done():
 			return

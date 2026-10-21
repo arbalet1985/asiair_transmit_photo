@@ -233,6 +233,9 @@ type SyncResponse struct {
 	// Fetch lists files requested from the receiver page: they are sent
 	// even while the transfer is paused or not started, and first otherwise.
 	Fetch []string `json:"fetch,omitempty"`
+	// Rediscover: look for the ASIAIR in the network now, asked on the
+	// receiver page (once per value; older agents ignore it)
+	Rediscover int64 `json:"rediscover,omitempty"`
 	// DiskFull: the receiver keeps too little free space and accepts no
 	// files until it is freed; the text says why.
 	DiskFull string `json:"disk_full,omitempty"`

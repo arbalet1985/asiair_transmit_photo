@@ -116,6 +116,10 @@ type State struct {
 
 	speedTest *protocol.SpeedTest   // asked on the page, until the agent reports it
 	logsReq   *protocol.LogsRequest // likewise
+	// the search for the ASIAIR asked on the page: sent to the agent for
+	// a few minutes (the agent does it once per value)
+	rediscover   int64
+	rediscoverAt time.Time
 }
 
 // bump marks a change for the agent. Caller holds s.mu.
@@ -235,6 +239,9 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 		}
 	}
 	s.logsForSync(&resp)
+	if s.rediscover != 0 && time.Since(s.rediscoverAt) < rediscoverKeep {
+		resp.Rediscover = s.rediscover
+	}
 	// while the agent does not reach the ASIAIR the deletes wait here: they
 	// would only fail
 	for _, c := range s.p.Commands {
@@ -635,4 +642,26 @@ func (s *State) Snapshot() persisted {
 	cp.SyncDirs = append([]string{}, s.p.SyncDirs...)
 	cp.Events = append([]AgentEvent(nil), s.p.Events...)
 	return cp
+}
+
+// rediscoverKeep: how long a search asked on the page is offered to the agent.
+const rediscoverKeep = 5 * time.Minute
+
+// AskRediscover asks the agent to look for the ASIAIR in the network.
+func (s *State) AskRediscover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rediscover, s.rediscoverAt = time.Now().UnixNano(), time.Now()
+	s.bump()
+}
+
+// RediscoverAsked: when the search was asked, while it is offered (zero
+// otherwise).
+func (s *State) RediscoverAsked() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rediscover == 0 || time.Since(s.rediscoverAt) >= rediscoverKeep {
+		return time.Time{}
+	}
+	return s.rediscoverAt
 }
