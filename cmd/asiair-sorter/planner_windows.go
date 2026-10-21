@@ -100,6 +100,10 @@ type plannerUI struct {
 
 	atlas  *atlas.Server   // the atlas page, once opened
 	setups []planner.Setup // the optics of the frames read
+	// the frame over the sky of the atlas and the framing asked for it
+	photo            *atlas.Photo
+	photoV, frameReq int64
+	frameI           int
 }
 
 func newPlanner(w *window, s plannerSettings) *plannerUI {

@@ -25,6 +25,21 @@ type State struct {
 	Sel     int              `json:"sel"`
 	Optics  *planner.Optics  `json:"optics"`
 	Setups  []planner.Setup  `json:"setups"`
+	// Photo: a frame laid over the sky (nil: none), its picture at
+	// /photo.jpg (SetPhoto)
+	Photo *Photo `json:"photo,omitempty"`
+	// FrameReq: start the framing of target FrameI (once per value)
+	FrameReq int64 `json:"frame_req,omitempty"`
+	FrameI   int   `json:"frame_i"`
+}
+
+// Photo describes the frame over the sky: V changes with its picture.
+type Photo struct {
+	V      int64          `json:"v"`
+	Name   string         `json:"name"`
+	WCS    map[string]any `json:"wcs"`
+	Width  float64        `json:"width"` // degrees
+	Height float64        `json:"height"`
 }
 
 // Server serves the atlas page to the browser of this computer only
@@ -40,6 +55,22 @@ type Server struct {
 	st    State
 	wake  chan struct{} // closed when the state changes
 	url   string
+	photo []byte    // the picture of State.Photo
+	seen  time.Time // the last request of the page
+}
+
+// Watched: a page of the atlas asked for the state lately (it is open).
+func (s *Server) Watched() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Since(s.seen) < 40*time.Second
+}
+
+// SetPhoto keeps the picture served at /photo.jpg.
+func (s *Server) SetPhoto(jpg []byte) {
+	s.mu.Lock()
+	s.photo = jpg
+	s.mu.Unlock()
 }
 
 // pollWait: how long a request for the state waits for a change.
@@ -110,6 +141,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Static(w, "atlas.js")
 	case "/state":
 		s.handleState(w, r)
+	case "/photo.jpg":
+		s.mu.Lock()
+		jpg := s.photo
+		s.mu.Unlock()
+		if jpg == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpg)
 	case "/frame", "/optics", "/select":
 		if r.Method != http.MethodPost {
 			http.Error(w, "нужен POST", http.StatusMethodNotAllowed)
@@ -126,6 +167,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	rev, _ := strconv.ParseUint(r.URL.Query().Get("rev"), 10, 64)
 	s.mu.Lock()
 	st, wake := s.st, s.wake
+	s.seen = time.Now()
 	s.mu.Unlock()
 	if st.Rev == rev {
 		select {
@@ -136,6 +178,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		st = s.st
+		s.seen = time.Now()
 		s.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")

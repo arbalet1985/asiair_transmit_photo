@@ -993,6 +993,7 @@
     <span class="title" id="vTitle"></span>
     <span class="muted" id="vPos"></span>
     <button id="vOpen" title="Открыть папку с этим файлом на этом компьютере">📂 В папке</button>
+    <button id="vPlan" title="В планировщик: объект с центром и углом этого кадра, снимок поверх неба в атласе — чтобы снять так же" hidden>🧭 В планировщик</button>
     <label class="muted" title="Листать дальше в следующую папку, а не только в этой"><input type="checkbox" id="vCross"> все папки</label>
     <button id="vClose" title="Закрыть (Esc)">✕</button>
   </div>
@@ -1508,7 +1509,7 @@ function renderFiles() {
       el("td", { className: "finfo" }, el("span", { textContent: fmtTime(f.mtime) }), " ", moonTag(f), " ", qualityTag(f)),
       el("td", {}, statusBadge(f), fetchControl(f)),
       el("td", {}, remote),
-      el("td", {})));
+      el("td", { className: "acts" }, canPlan(f) ? miniButton("🧭", "В планировщик: объект с центром и углом этого кадра, снимок поверх неба в атласе", () => plFromFrame(f.path)) : "")));
   }
   const sel = [...selected];
   const selSize = state.files.filter(f => selected.has(f.path)).reduce((a, f) => a + f.size, 0);
@@ -2535,6 +2536,9 @@ async function openFolder(path) {
   catch (e) { alert("Не удалось открыть: " + e.message); }
 }
 $("vOpen").onclick = () => { const f = V.list[V.idx]; if (f) openFolder(f.path); };
+$("vPlan").onclick = () => { const f = V.list[V.idx]; if (f) { $("viewer").close(); plFromFrame(f.path); } };
+// canPlan: a Light frame here whose framing the planner can take
+const canPlan = f => f.local && /\.fits?$/i.test(f.name) && frameKind(f.name) === "light";
 
 let view = store.get("view", "list"), galleryLimit = 120;
 function setView(v) {
@@ -4382,6 +4386,39 @@ $("plFound").onchange = () => {
   $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
   if (PL.atlas) PL.atlas.setPreview(o.ra, o.dec);
 };
+// plFromFrame: a frame to the planner — its object with the centre and the
+// camera angle of the frame (added, or the one of that name moved), the
+// frame laid over the sky of the atlas, and the framing started there
+async function plFromFrame(p) {
+  let d;
+  try {
+    const r = await fetch("/ui/api/framing?path=" + encodeURIComponent(p));
+    if (!r.ok) throw new Error((await r.text()).trim());
+    d = await r.json();
+  } catch (e) { toast("Кадр не перенесён в планировщик: " + e.message); return; }
+  if ($("plannerPanel").classList.contains("folded")) $("plannerHead").click();
+  if (!PL.loaded) await plLoad();
+  if (!PL.st) { toast("Планировщик не загрузился"); return; }
+  const ra = Math.round(d.ra * 1e5) / 1e5, dec = Math.round(d.dec * 1e5) / 1e5, angle = Math.round(d.angle * 10) / 10;
+  let i = PL.st.targets.findIndex(t => t.name === d.name);
+  if (i >= 0) Object.assign(PL.st.targets[i], { ra, dec, angle });
+  else {
+    PL.st.targets.push({ name: d.name, ra, dec, angle, exposure: d.exposure > 0 ? d.exposure : 300, want_sec: 0, filter: d.filter || "", priority: 0 });
+    i = PL.st.targets.length - 1;
+  }
+  PL.sel = i;
+  plChanged();
+  plSelect(i);
+  $("plAtlasBox").open = true;
+  plAtlasOpen();
+  if (PL.atlas) {
+    PL.atlas.setPhoto({ url: d.image, wcs: d.wcs, name: p.split("/").pop(), width: d.width, height: d.height });
+    PL.atlas.frame(i);
+  }
+  $("plAtlasBox").scrollIntoView({ behavior: "smooth", block: "start" });
+  toast(`${d.name}: центр и угол взяты из кадра` + (d.approx ? " — по наведению (кадр не решён, центр может отличаться)" : " — по решению кадра"));
+}
+
 // plShotList: the objects already shot, to plan them again; a pick fills
 // the fields with the last pointing and exposure
 function plShotList() {
@@ -5166,6 +5203,7 @@ const imBytes = im => im.data.byteLength + im.width * im.height * 4;
 async function showFile() {
   const f = V.list[V.idx], req = ++V.req;
   $("vTitle").textContent = f.path;
+  $("vPlan").hidden = !canPlan(f);
   $("vPos").textContent = `${V.idx + 1} / ${V.list.length}`;
   $("vPrev").disabled = V.idx === 0;
   $("vNext").disabled = V.idx === V.list.length - 1;
