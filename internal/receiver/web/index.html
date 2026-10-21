@@ -602,6 +602,7 @@
         <input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" style="width:12em">
         <button id="plFind">Найти</button>
         <select id="plFound" aria-label="Найденное" style="max-width:22em"></select>
+        <select id="plShot" aria-label="Снятые объекты" style="max-width:22em" title="Объекты, уже снятые (по полученным кадрам): координаты последнего наведения и выдержка — чтобы продолжить съёмку"></select>
       </div>
       <div class="toolbar">
         <label title="Прямое восхождение J2000, часы: 07 29 03 или 7.484">RA <input type="text" id="plRA" style="width:7em"></label>
@@ -3518,6 +3519,7 @@ async function plLoad() {
       else $(id).value = p[key];
     }
     plRenderTargets();
+    plShotList();
     plAtlasOpen();
     await plMakePlan();
   } catch (e) {
@@ -4338,6 +4340,30 @@ $("plFound").onchange = () => {
   if (!o) return;
   $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
   if (PL.atlas) PL.atlas.setPreview(o.ra, o.dec);
+};
+// plShotList: the objects already shot, to plan them again; a pick fills
+// the fields with the last pointing and exposure
+function plShotList() {
+  const sel = $("plShot");
+  const objs = PL.objects.filter(o => o.kind === "кадры");
+  sel.hidden = !objs.length;
+  sel.replaceChildren(el("option", { value: "", textContent: `снятые объекты (${objs.length})…` }),
+    ...objs.map(o => el("option", { value: o.name,
+      textContent: `${o.name} — ${o.total ? fmtHours(o.total) : "?"}, кадров ${o.frames || 0}` + (o.night ? `, посл. ${o.night.slice(8, 10)}.${o.night.slice(5, 7)}` : "") })));
+}
+$("plShot").onchange = () => {
+  const o = PL.objects.find(x => x.kind === "кадры" && x.name === $("plShot").value);
+  $("plShot").value = "";
+  if (!o) return;
+  PL.found = [o];
+  $("plFound").replaceChildren(el("option", { value: 0, textContent: o.name + " (из кадров)" }));
+  $("plName").value = o.name;
+  $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
+  if (o.exp > 0) $("plExp").value = o.exp;
+  if (PL.atlas) PL.atlas.setPreview(o.ra, o.dec);
+  const i = PL.st.targets.findIndex(t => t.name === o.name);
+  $("plInfo").textContent = i >= 0 ? `«${o.name}» уже в списке (строка ${i + 1}) — «Изменить» запишет поля в выбранную строку.`
+    : `«${o.name}»: последнее наведение и выдержка из кадров — нажмите «Добавить».`;
 };
 function plFieldsTarget() {
   let name = $("plName").value.trim();

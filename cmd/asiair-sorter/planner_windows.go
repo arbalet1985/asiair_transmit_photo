@@ -39,10 +39,16 @@ type plannerSettings struct {
 	Optics *planner.Optics `json:"optics,omitempty"`
 }
 
-// frameTarget is an object of the frames taken, as a suggestion.
+// frameTarget is an object of the frames taken, as a suggestion: where it
+// was last pointed at, the exposure of the last frame, how much was shot.
 type frameTarget struct {
 	name    string
 	ra, dec float64
+	exp     float64
+	frames  int
+	total   float64 // seconds
+	last    time.Time
+	night   string
 }
 
 type plannerUI struct {
@@ -61,7 +67,7 @@ type plannerUI struct {
 
 	startEdit                             *walk.LineEdit
 	nameEdit, raEdit, decEdit, filterEdit *walk.LineEdit
-	foundBox                              *walk.ComboBox
+	foundBox, shotBox                     *walk.ComboBox
 	expEdit, wantEdit                     *walk.NumberEdit
 	targetTable, stepTable                *walk.TableView
 	targets                               *targetModel
@@ -243,6 +249,9 @@ func (p *plannerUI) page() TabPage {
 							PushButton{Text: "Найти", OnClicked: p.find, MaxSize: Size{Width: 60}},
 							ComboBox{AssignTo: &p.foundBox, MinSize: Size{Width: 160}, OnCurrentIndexChanged: p.foundChosen,
 								ToolTipText: "Найденное в каталоге (OpenNGC, Sh2), в кадрах и, если нет, в SIMBAD"},
+							ComboBox{AssignTo: &p.shotBox, MinSize: Size{Width: 170}, Model: []string{"снятые объекты…"}, CurrentIndex: 0,
+								OnCurrentIndexChanged: p.shotChosen,
+								ToolTipText:           "Объекты, уже снятые (по прочитанным кадрам): координаты последнего наведения и выдержка — чтобы продолжить съёмку"},
 						}},
 						Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
 							Label{Text: "RA:"},
@@ -434,7 +443,7 @@ func (p *plannerUI) setFrames(frames []sorter.Frame) {
 	var obs []planner.Obs
 	var lats, lons []float64
 	offsets := map[int]int{}
-	seen := map[string]bool{}
+	objIdx := map[string]int{}
 	p.frameObjs = nil
 	var sf []planner.SetupFrame
 	for i := range frames {
@@ -452,11 +461,23 @@ func (p *plannerUI) setFrames(frames []sorter.Frame) {
 		wall := time.Date(f.Time.Year(), f.Time.Month(), f.Time.Day(), f.Time.Hour(), f.Time.Minute(), f.Time.Second(), 0, time.UTC)
 		off := int(math.Round(wall.Sub(f.UTC).Minutes()/15)) * 15
 		offsets[off]++
-		if !seen[f.Object] && f.Object != "" {
-			seen[f.Object] = true
-			p.frameObjs = append(p.frameObjs, frameTarget{f.Object, f.RA, f.Dec})
+		if f.Object != "" {
+			k, ok := objIdx[f.Object]
+			if !ok {
+				k = len(p.frameObjs)
+				objIdx[f.Object] = k
+				p.frameObjs = append(p.frameObjs, frameTarget{name: f.Object})
+			}
+			o := &p.frameObjs[k]
+			o.frames++
+			o.total += f.Exposure
+			if f.UTC.After(o.last) { // the last pointing
+				o.ra, o.dec, o.exp, o.last, o.night = f.RA, f.Dec, f.Exposure, f.UTC, f.Night
+			}
 		}
 	}
+	sort.Slice(p.frameObjs, func(i, j int) bool { return p.frameObjs[i].name < p.frameObjs[j].name })
+	p.showShot()
 	p.setups = planner.SetupsOf(sf)
 	p.atlasChanged()
 	if len(obs) == 0 {
@@ -579,6 +600,44 @@ func (p *plannerUI) foundChosen() {
 	o := p.found[i]
 	p.raEdit.SetText(formatRA(o.RA))
 	p.decEdit.SetText(formatDec(o.Dec))
+}
+
+// showShot lists the objects already shot in their box.
+func (p *plannerUI) showShot() {
+	labels := []string{fmt.Sprintf("снятые объекты (%d)…", len(p.frameObjs))}
+	for _, o := range p.frameObjs {
+		l := fmt.Sprintf("%s — %s, кадров %d", o.name, planner.Hours(o.total), o.frames)
+		if len(o.night) == 10 {
+			l += ", посл. " + o.night[8:10] + "." + o.night[5:7]
+		}
+		labels = append(labels, l)
+	}
+	p.shotBox.SetModel(labels)
+	p.shotBox.SetCurrentIndex(0)
+}
+
+// shotChosen puts an object already shot into the fields: its last
+// pointing and exposure, to plan it again.
+func (p *plannerUI) shotChosen() {
+	i := p.shotBox.CurrentIndex() - 1
+	if i < 0 || i >= len(p.frameObjs) {
+		return
+	}
+	o := p.frameObjs[i]
+	p.shotBox.SetCurrentIndex(0)
+	p.nameEdit.SetText(o.name)
+	p.showFound([]catalog.Object{{Name: o.name, RA: o.ra, Dec: o.dec, Kind: "кадры"}})
+	if o.exp > 0 {
+		p.expEdit.SetValue(o.exp)
+	}
+	msg := fmt.Sprintf("«%s»: последнее наведение и выдержка из кадров — нажмите «Добавить».", o.name)
+	for k, t := range p.state.Targets {
+		if t.Name == o.name {
+			msg = fmt.Sprintf("«%s» уже в списке (строка %d) — «Изменить» запишет поля в выбранную строку.", o.name, k+1)
+			break
+		}
+	}
+	setLong(p.planInfo, msg)
 }
 
 func formatRA(deg float64) string {
