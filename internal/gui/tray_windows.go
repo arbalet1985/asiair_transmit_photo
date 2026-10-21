@@ -20,8 +20,9 @@ type TrayOptions struct {
 	// Tooltip and State are polled every few seconds (State: StateIdle, ...).
 	Tooltip func() string
 	State   func() string
-	// OnReady receives a function that exits the program.
-	OnReady func(quit func())
+	// OnReady receives a function that exits the program and one that runs
+	// a function on the window thread (for message boxes from goroutines).
+	OnReady func(quit func(), ui func(func()))
 	// Items are the commands of the menu between "Открыть страницу" and
 	// "Выход".
 	Items []TrayItem
@@ -146,7 +147,7 @@ func RunTray(opt TrayOptions) error {
 		}
 	})
 	if opt.OnReady != nil {
-		opt.OnReady(quit)
+		opt.OnReady(quit, mw.Synchronize)
 	}
 
 	go func() {

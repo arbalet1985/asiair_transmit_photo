@@ -113,3 +113,34 @@ func TestAgentUpdate(t *testing.T) {
 		t.Fatalf("old copy: %q", b)
 	}
 }
+
+// The tray tells what the last check found.
+func TestUpdateState(t *testing.T) {
+	v, b := protocol.Version, protocol.Build
+	protocol.Version, protocol.Build = "1.55.0", "abc"
+	defer func() { protocol.Version, protocol.Build = v, b }()
+	s, _ := newTestServer(t)
+	if st := s.UpdateState(); st.Latest != "" || st.Newer || !st.Answered.IsZero() {
+		t.Fatalf("before a check: %+v", st)
+	}
+	u := s.updater
+	u.mu.Lock()
+	u.latest, u.answered = &update.Release{Version: "99.0.0"}, time.Now()
+	u.mu.Unlock()
+	if st := s.UpdateState(); !st.Newer || st.Unchanged || st.Latest != "99.0.0" || st.Version != protocol.Version {
+		t.Fatalf("newer: %+v", st)
+	}
+	// the release changes the other programs only
+	u.mu.Lock()
+	u.builds = map[string]string{update.ReceiverAsset: protocol.Build}
+	u.mu.Unlock()
+	if st := s.UpdateState(); st.Newer || !st.Unchanged {
+		t.Fatalf("unchanged: %+v", st)
+	}
+	u.mu.Lock()
+	u.latest = &update.Release{Version: protocol.Version}
+	u.mu.Unlock()
+	if st := s.UpdateState(); st.Newer || st.Unchanged {
+		t.Fatalf("the same: %+v", st)
+	}
+}
