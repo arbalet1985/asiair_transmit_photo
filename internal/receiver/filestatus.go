@@ -57,6 +57,9 @@ type uiFile struct {
 	SatAge   float64   `json:"sat_age,omitempty"`
 	SatErr   string    `json:"sat_err,omitempty"`
 	FlipRows bool      `json:"flip,omitempty"`
+	// Gone: deleted (unix ms when found gone): only its measurement is
+	// left, for the history of its night
+	Gone int64 `json:"gone,omitempty"`
 }
 
 // uiTotals summarise the transfer of everything the agent transfers.

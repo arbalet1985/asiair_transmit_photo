@@ -207,3 +207,48 @@ func TestRediscoverSeveral(t *testing.T) {
 		t.Fatalf("not switched to the ASIAIR with our images: %q", a.Status().ASIAIR)
 	}
 }
+
+// TestSearchAsked: a search asked on the receiver page runs once per value,
+// in the background, and only when the saved address does not answer.
+func TestSearchAsked(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := writeAgentConfig(t, tmp, `asiair: '\\192.168.1.50\EMMC Images'
+receiver_url: 'https://127.0.0.1:1'
+token: 'x'
+state_file: state.json
+`)
+	a, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.src = &deadSource{}
+	searched := make(chan bool, 4)
+	a.discover = func(context.Context, func(string)) ([]source.Device, error) {
+		searched <- true
+		return nil, nil
+	}
+	wait := func() {
+		t.Helper()
+		for i := 0; i < 200 && a.discovering.Load(); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	a.searchAsked(context.Background(), 7)
+	wait()
+	select {
+	case <-searched:
+	case <-time.After(2 * time.Second):
+		t.Fatal("not searched")
+	}
+	// the same request again: nothing
+	a.searchAsked(context.Background(), 7)
+	wait()
+	select {
+	case <-searched:
+		t.Fatal("searched twice for one request")
+	default:
+	}
+	if a.Status().Searching {
+		t.Fatal("still searching")
+	}
+}

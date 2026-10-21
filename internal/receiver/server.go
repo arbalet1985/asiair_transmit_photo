@@ -517,6 +517,8 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/atlas.js", func(w http.ResponseWriter, r *http.Request) { atlas.Static(w, "atlas.js") })
 	mux.HandleFunc("/ui/api/remote", s.handleUIRemote)
 	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
+	mux.HandleFunc("/ui/api/gone", gzipped(s.handleUIGone))
+	mux.HandleFunc("/ui/api/rediscover", s.handleUIRediscover)
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/delete_local", s.handleUIDeleteLocal)
 	mux.HandleFunc("/ui/api/cameratilt", s.handleUICameraTilt)
@@ -644,6 +646,12 @@ type uiState struct {
 	RemoteAccess  remoteInfo                      `json:"remote_access"`
 	Satellites    satInfo                         `json:"satellites"`
 	Planes        planeInfo                       `json:"planes"`
+	// the measurements of the deleted frames (/ui/api/gone): their
+	// revision, to load them again only when it changes, and how many
+	GoneRev int64 `json:"gone_rev"`
+	GoneN   int   `json:"gone_n"`
+	// RediscoverAt: the search for the ASIAIR asked on the page (zero: none)
+	RediscoverAt time.Time `json:"rediscover_at,omitempty"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -707,7 +715,36 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 		Satellites:    s.satInfo(),
 		Planes:        s.planeInfo(),
 	}
+	out.GoneRev, out.GoneN = s.quality.deletedRev()
+	out.RediscoverAt = s.state.RediscoverAsked()
 	writeJSON(w, out)
+}
+
+// handleUIRediscover asks the agent to look for the ASIAIR in its network.
+func (s *Server) handleUIRediscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "нужен POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if time.Since(s.state.Snapshot().LastSeen) > 2*time.Minute {
+		http.Error(w, "агент не на связи — искать ASIAIR некому", http.StatusConflict)
+		return
+	}
+	s.state.AskRediscover()
+	log.Printf("Приёмник: агента попросили найти ASIAIR в сети")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUIGone answers with the deleted frames whose measurement is kept,
+// for the history of their nights.
+func (s *Server) handleUIGone(w http.ResponseWriter, r *http.Request) {
+	gone, rev := s.quality.deleted()
+	files := make([]uiFile, 0, len(gone))
+	for p, e := range gone {
+		files = append(files, uiFile{Path: p, Folder: path.Dir(p), Name: path.Base(p), MTime: time.Unix(0, e.MTime), Status: "gone",
+			Measured: true, HFR: math.Round(e.HFR*100) / 100, Stars: e.Stars, Bg: e.Bg, Round: e.Round, SatPct: e.SatPct, Start: e.Start, Gone: e.Gone})
+	}
+	writeJSON(w, map[string]any{"rev": rev, "files": files})
 }
 
 func (s *Server) handleUIDelete(w http.ResponseWriter, r *http.Request) {

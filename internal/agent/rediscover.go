@@ -69,6 +69,55 @@ func (a *Agent) scanFailed(ctx context.Context) {
 	}()
 }
 
+// searchAsked looks for the ASIAIR in the network when the receiver page
+// asks (once per id), in the background: the sync loop goes on. The address
+// it has is tried first; the search runs only when it does not answer.
+func (a *Agent) searchAsked(ctx context.Context, id int64) {
+	if id == 0 {
+		return
+	}
+	a.mu.Lock()
+	if id == a.searchID {
+		a.mu.Unlock()
+		return
+	}
+	a.searchID = id
+	link := a.status.ASIAIR
+	a.mu.Unlock()
+	l, err := source.ParseLink(link)
+	if err != nil || l.Kind != "smb" {
+		a.event("", "поиск ASIAIR в сети не нужен: путь %s — не сетевой", link)
+		return
+	}
+	if !a.discovering.CompareAndSwap(false, true) {
+		a.event("", "поиск ASIAIR в сети уже идёт")
+		return
+	}
+	a.setSearching(true)
+	a.event("", "поиск ASIAIR по просьбе приёмника: проверяю адрес %s", l.Host)
+	go func() {
+		defer a.discovering.Store(false)
+		defer a.setSearching(false)
+		defer a.kickSync() // the page sees the search end at once
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Агент: сбой поиска ASIAIR: %v", r)
+			}
+		}()
+		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		_, err := a.source().Probe(pctx)
+		cancel()
+		if err == nil {
+			a.event("", "ASIAIR отвечает по прежнему адресу %s — искать не нужно", l.Host)
+			a.rescan.Store(true)
+			a.wakeUp()
+			return
+		}
+		a.rediscover(ctx)
+	}()
+	a.kickSync()
+}
+
 func (a *Agent) setSearching(on bool) {
 	a.mu.Lock()
 	a.status.Searching = on

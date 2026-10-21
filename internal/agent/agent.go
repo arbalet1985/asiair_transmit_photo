@@ -123,6 +123,7 @@ type Agent struct {
 	lastDiscover time.Time
 	discovering  atomic.Bool
 	rescan       atomic.Bool // scan now, e.g. after a new address was found
+	searchID     int64       // guarded by mu; the last search asked on the receiver page
 	discover     func(context.Context, func(string)) ([]source.Device, error)
 	newSource    func(link, user, pass string) (source.Source, error)
 	updating     bool                  // guarded by mu
@@ -1279,6 +1280,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.startLogs(ctx, resp.Logs)
 	a.ackEvents(resp.EventsAck)
 	a.takeCommands(resp.Commands, resp.BatchResults, resp.DeletePaused)
+	a.searchAsked(ctx, resp.Rediscover)
 	return held, nil
 }
 

@@ -265,6 +265,7 @@
   .chart .nline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; opacity: .7; }
   .chart .npt { fill: var(--accent); cursor: pointer; }
   .chart .npt.bad { fill: var(--warn); }
+  .chart .npt.gone { fill: none; stroke: var(--muted); stroke-width: 1.2; cursor: default; }
   .chart .ntitle { fill: var(--text); font-size: 12px; font-weight: 600; }
   .chart .nband { fill: color-mix(in srgb, var(--warn) 12%, transparent); }
   td.chartbtn button { padding: 0 6px; }
@@ -537,7 +538,7 @@
       <div id="nightBox" hidden>
         <div class="toolbar"><b id="nightTitle"></b><span class="spacer"></span><button id="nightClose" title="Закрыть графики">✕</button></div>
         <div class="chart night" id="nightChart"></div>
-        <div class="hint">Каждая точка — кадр, по времени съёмки (часы обсерватории); щелчок открывает кадр. Оранжевые — кадры с ⚠. <b>Облака и дымка</b>: число звёзд проваливается, фон часто растёт. <b>Роса</b>: HFR медленно растёт, звёзд всё меньше. <b>Фокус уплыл</b> (остыл телескоп): HFR растёт ступенькой или плавно, после автофокуса падает. <b>Ветер и гидирование</b>: округлость падает на отдельных кадрах. <b>Луна, рассвет, засветка</b>: фон растёт, звёзд меньше. Округлость — короткая ось звезды к длинной, как в Siril: 1 — круглые, ниже 0,8 — заметно вытянуты.</div>
+        <div class="hint">Каждая точка — кадр, по времени съёмки (часы обсерватории); щелчок открывает кадр. Оранжевые — кадры с ⚠, серые кружки — уже удалённые кадры (их оценка сохраняется, чтобы было видно, как прошла ночь). <b>Облака и дымка</b>: число звёзд проваливается, фон часто растёт. <b>Роса</b>: HFR медленно растёт, звёзд всё меньше. <b>Фокус уплыл</b> (остыл телескоп): HFR растёт ступенькой или плавно, после автофокуса падает. <b>Ветер и гидирование</b>: округлость падает на отдельных кадрах. <b>Луна, рассвет, засветка</b>: фон растёт, звёзд меньше. Округлость — короткая ось звезды к длинной, как в Siril: 1 — круглые, ниже 0,8 — заметно вытянуты.</div>
       </div>
       <div class="line" id="summaryTotals"></div>
       <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
@@ -602,6 +603,7 @@
         <input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" style="width:12em">
         <button id="plFind">Найти</button>
         <select id="plFound" aria-label="Найденное" style="max-width:22em"></select>
+        <select id="plShot" aria-label="Снятые объекты" style="max-width:22em" title="Объекты, уже снятые (по полученным кадрам): координаты последнего наведения и выдержка — чтобы продолжить съёмку"></select>
       </div>
       <div class="toolbar">
         <label title="Прямое восхождение J2000, часы: 07 29 03 или 7.484">RA <input type="text" id="plRA" style="width:7em"></label>
@@ -1711,6 +1713,19 @@ function renderAsiair(a, stale) {
     : el("span", { className: "badge " + (scanned || a.asiair_error ? "off" : "pend"), textContent: scanned || a.asiair_error ? "недоступен" : "подключение…" });
   const addr = el("b", { textContent: host || what || a.asiair });
   dd.append(badge, " ", addr);
+  // the agent looks for the ASIAIR in its network (a new address after a
+  // restart of the router or of the ASIAIR)
+  if (online && !what) {
+    const asked = state.rediscover_at && Date.now() - new Date(state.rediscover_at).getTime() < 90e3 && !a.searching;
+    const b = el("button", { className: "fetch", textContent: a.searching ? "ищу…" : asked ? "запрошено…" : "🔍 Найти ASIAIR", disabled: a.searching || asked,
+      title: "Агент проверит адрес ASIAIR и, если тот не отвечает, найдёт ASIAIR в сети обсерватории и запомнит новый адрес" });
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await post("/ui/api/rediscover", {}); toast("Агент ищет ASIAIR — итог появится в событиях агента"); refresh(); }
+      catch (e) { b.disabled = false; toast("Не удалось: " + e.message); }
+    };
+    dd.append(" ", b);
+  }
   if (host && a.asiair !== host) dd.append(el("span", { className: "muted", textContent: " · " + a.asiair }));
   if (a.connected) dd.append(el("span", { className: "muted", textContent: " · обход " + ago(a.last_scan) }));
   if (a.searching) dd.append(el("div", { className: "muted", textContent: "агент ищет ASIAIR в сети обсерватории…" }));
@@ -1914,6 +1929,7 @@ async function refresh() {
     const ok = new Set(state.files.filter(canSel).map(f => f.path));
     for (const p of [...selected]) if (!ok.has(p)) selected.delete(p);
     renderStatus(); renderFilterOptions(); renderFiles(); renderSyncBar(); renderCmds();
+    loadGone();
   } catch (e) {
     $("agentBadge").className = "badge off";
     $("agentBadge").textContent = "нет связи с приёмником";
@@ -2914,7 +2930,7 @@ let summaryKey = "";
 function renderSummary() {
   if ($("summaryPanel").classList.contains("folded")) return;
   const key = state.files.length + "|" + state.files.reduce((n, f) => n + (f.local ? 1 : 0), 0) + "|" + $("summaryAll").checked + "|" + JSON.stringify(state.site || {});
-  const key2 = key + "|" + state.files.reduce((n, f) => n + (f.q ? 1 : 0), 0);
+  const key2 = key + "|" + state.files.reduce((n, f) => n + (f.q ? 1 : 0), 0) + "|" + goneRev;
   if (key2 === summaryKey) return; // nothing changed
   summaryKey = key2;
   const groups = new Map(), objects = new Map();
@@ -2936,6 +2952,16 @@ function renderSummary() {
       objects.set(fi.object, o);
     }
   }
+  // the frames deleted since: counted apart, still on the charts of the night
+  for (const f of goneFiles) {
+    const fi = frameInfo(f);
+    if (fi.kind !== "light") continue;
+    const night = nightFmt(fi.when);
+    const k = `${night.key}|${fi.kind}|${fi.object}`;
+    let g = groups.get(k);
+    if (!g) groups.set(k, g = { night, kind: fi.kind, object: fi.object, n: 0, here: 0, total: 0, exps: new Set(), moon: [] });
+    g.del = (g.del || 0) + 1;
+  }
   const order = { light: 0, flat: 1, darkflat: 2, dark: 3, bias: 4 };
   const rows = [...groups.values()].sort((a, b) => b.night.key.localeCompare(a.night.key) || order[a.kind] - order[b.kind] || a.object.localeCompare(b.object));
   const nights = [...new Set(rows.map(r => r.night.key))];
@@ -2948,11 +2974,11 @@ function renderSummary() {
     const tr = el("tr", { className: r.night.key !== prev ? "night" : "" });
     const td = (t, cls) => el("td", { textContent: t, className: cls || "" });
     tr.append(td(r.night.key !== prev ? r.night.label : ""), td(r.object || "—"), td(kindLabel[r.kind] || r.kind),
-      td(String(r.n), "num"), td([...r.exps].sort((a, b) => a - b).map(fmtExp).join(", ") || "—", "num"),
-      td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(qualitySummary(r.q || []), "num"), td(r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
+      td(String(r.n) + (r.del ? ` (удалено ${r.del})` : ""), "num"), td([...r.exps].sort((a, b) => a - b).map(fmtExp).join(", ") || "—", "num"),
+      td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(qualitySummary(r.q || []), "num"), td(!r.n ? "—" : r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
     const cb = el("td", { className: "chartbtn" });
-    if (r.kind === "light" && r.q && r.q.length >= 2) {
-      const b = el("button", { textContent: "📈", title: "Графики ночи: HFR, звёзды, фон, округлость звёзд по времени" });
+    if (r.kind === "light" && (r.q ? r.q.length : 0) + (r.del || 0) >= 2) {
+      const b = el("button", { textContent: "📈", title: "Графики ночи: HFR, звёзды, фон, округлость звёзд по времени" + (r.del ? "; удалённые кадры — серыми кружками" : "") });
       b.onclick = e => { e.stopPropagation(); nightSel = { night: r.night.key, object: r.object, label: r.night.label }; drawNight(); };
       cb.append(b);
     }
@@ -2970,6 +2996,21 @@ function renderSummary() {
   drawNight();
 }
 
+// ---------- the deleted frames: their measurements stay for the history of
+// the night (loaded again only when they change)
+let goneFiles = [], goneRev = null, goneLoading = false;
+async function loadGone() {
+  if (!state || state.gone_rev === goneRev || goneLoading) return;
+  goneLoading = true;
+  try {
+    const r = await fetch("/ui/api/gone");
+    if (!r.ok) return;
+    const d = await r.json();
+    goneFiles = d.files || []; goneRev = d.rev;
+    summaryKey = ""; renderSummary();
+  } catch (e) { /* tried again with the next state */ } finally { goneLoading = false; }
+}
+
 // ---------- the night of an object, frame by frame ----------
 let nightSel = null; // {night, object, label}
 $("nightClose").onclick = () => { nightSel = null; drawNight(); };
@@ -2977,7 +3018,7 @@ $("nightClose").onclick = () => { nightSel = null; drawNight(); };
 function nightFrames() {
   if (!nightSel) return [];
   const out = [];
-  for (const f of state.files) {
+  for (const f of state.files.concat(goneFiles)) {
     if (!f.q) continue;
     const i = infoOf(f);
     if (i.kind !== "light" || i.night.key !== nightSel.night || i.object !== nightSel.object || !i.when) continue;
@@ -2989,7 +3030,8 @@ function drawNight() {
   const pts = nightFrames(), box = $("nightBox");
   box.hidden = !nightSel || pts.length < 2;
   if (box.hidden) return;
-  $("nightTitle").textContent = `${nightSel.object || "без имени"} — ночь ${nightSel.label}: ${pts.length} кадр.`;
+  const del = pts.filter(p => p.f.gone).length;
+  $("nightTitle").textContent = `${nightSel.object || "без имени"} — ночь ${nightSel.label}: ${pts.length} кадр.` + (del ? `, из них удалено ${del}` : "");
   const chart = $("nightChart"), W = chart.clientWidth || 600;
   const strips = [
     { name: "HFR, px", get: f => f.stars > 0 ? f.hfr : null, fmt: v => v.toFixed(2) },
@@ -3011,7 +3053,7 @@ function drawNight() {
   // a break in the line where frames pause (a meridian flip, clouds)
   const gaps = pts.slice(1).map((p, i) => p.t - pts[i].t).sort((a, b) => a - b);
   const brk = 3 * (gaps[gaps.length >> 1] || 60e3);
-  const files = pts.map(p => p.f);
+  const files = pts.map(p => p.f).filter(f => !f.gone); // the viewer goes through the frames still here
   strips.forEach((st, k) => {
     const top = T + k * (SH + GAP), vals = pts.map(p => st.get(p.f)).filter(v => v != null && isFinite(v));
     if (!vals.length) return;
@@ -3035,11 +3077,11 @@ function drawNight() {
     for (const p of pts) {
       const v = st.get(p.f);
       if (v == null) continue;
-      const j = judge(p.f), when = new Date(p.t);
-      const c = mk("circle", { cx: x(p.t), cy: y(v), r: 3, class: "npt" + (j && j.bad ? " bad" : "") });
-      c.append(mk("title", {}, `${hm(when)} · ${p.f.name}\nHFR ${p.f.hfr ? p.f.hfr.toFixed(2) : "—"} · звёзд ${p.f.stars}` +
+      const j = p.f.gone ? null : judge(p.f), when = new Date(p.t);
+      const c = mk("circle", { cx: x(p.t), cy: y(v), r: 3, class: "npt" + (p.f.gone ? " gone" : j && j.bad ? " bad" : "") });
+      c.append(mk("title", {}, (p.f.gone ? "удалён · " : "") + `${hm(when)} · ${p.f.name}\nHFR ${p.f.hfr ? p.f.hfr.toFixed(2) : "—"} · звёзд ${p.f.stars}` +
         (p.f.bg ? ` · фон ${Math.round(p.f.bg)}` : "") + (p.f.round ? ` · округлость ${p.f.round.toFixed(2)}` : "") + (j && j.bad ? "\n⚠ " + j.why : "")));
-      c.onclick = () => openViewer(p.f.path, files);
+      if (!p.f.gone) c.onclick = () => openViewer(p.f.path, files);
       svg.append(c);
     }
   });
@@ -3518,6 +3560,7 @@ async function plLoad() {
       else $(id).value = p[key];
     }
     plRenderTargets();
+    plShotList();
     plAtlasOpen();
     await plMakePlan();
   } catch (e) {
@@ -4338,6 +4381,30 @@ $("plFound").onchange = () => {
   if (!o) return;
   $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
   if (PL.atlas) PL.atlas.setPreview(o.ra, o.dec);
+};
+// plShotList: the objects already shot, to plan them again; a pick fills
+// the fields with the last pointing and exposure
+function plShotList() {
+  const sel = $("plShot");
+  const objs = PL.objects.filter(o => o.kind === "кадры");
+  sel.hidden = !objs.length;
+  sel.replaceChildren(el("option", { value: "", textContent: `снятые объекты (${objs.length})…` }),
+    ...objs.map(o => el("option", { value: o.name,
+      textContent: `${o.name} — ${o.total ? fmtHours(o.total) : "?"}, кадров ${o.frames || 0}` + (o.night ? `, посл. ${o.night.slice(8, 10)}.${o.night.slice(5, 7)}` : "") })));
+}
+$("plShot").onchange = () => {
+  const o = PL.objects.find(x => x.kind === "кадры" && x.name === $("plShot").value);
+  $("plShot").value = "";
+  if (!o) return;
+  PL.found = [o];
+  $("plFound").replaceChildren(el("option", { value: 0, textContent: o.name + " (из кадров)" }));
+  $("plName").value = o.name;
+  $("plRA").value = plFmtRA(o.ra); $("plDec").value = plFmtDec(o.dec);
+  if (o.exp > 0) $("plExp").value = o.exp;
+  if (PL.atlas) PL.atlas.setPreview(o.ra, o.dec);
+  const i = PL.st.targets.findIndex(t => t.name === o.name);
+  $("plInfo").textContent = i >= 0 ? `«${o.name}» уже в списке (строка ${i + 1}) — «Изменить» запишет поля в выбранную строку.`
+    : `«${o.name}»: последнее наведение и выдержка из кадров — нажмите «Добавить».`;
 };
 function plFieldsTarget() {
   let name = $("plName").value.trim();

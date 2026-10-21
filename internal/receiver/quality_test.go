@@ -172,3 +172,55 @@ func TestThumb(t *testing.T) {
 		t.Fatalf("missing: %d", rec.Code)
 	}
 }
+
+// A deleted frame leaves its measurement for the history of the night; it
+// is dropped again when the frame comes back.
+func TestQualityGone(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "quality.json")
+	q := newQuality(file)
+	q.set("a/Light_1.fit", qualityEntry{V: qualityVersion, HFR: 2.5, Stars: 300, Start: 1000})
+	q.set("a/Light_2.fit", qualityEntry{V: qualityVersion, HFR: 2.6, Stars: 280})
+	q.set("a/Light_3.fit", qualityEntry{V: qualityVersion, Err: "broken"})
+	rev0, _ := q.deletedRev()
+	q.forget(map[string]bool{"a/Light_2.fit": true})
+	gone, rev := q.deleted()
+	if len(gone) != 1 || gone["a/Light_1.fit"].HFR != 2.5 || gone["a/Light_1.fit"].Gone == 0 || rev == rev0 {
+		t.Fatalf("%v %d", gone, rev)
+	}
+	if _, ok := q.m["a/Light_1.fit"]; ok {
+		t.Fatal("still measured")
+	}
+	q.save()
+	// kept over a restart
+	q2 := newQuality(file)
+	if g, _ := q2.deleted(); len(g) != 1 {
+		t.Fatalf("not kept: %v", g)
+	}
+	// received again
+	q2.forget(map[string]bool{"a/Light_1.fit": true, "a/Light_2.fit": true})
+	if g, _ := q2.deleted(); len(g) != 0 {
+		t.Fatalf("back: %v", g)
+	}
+}
+
+func TestUIGone(t *testing.T) {
+	s, _ := newTestServer(t)
+	ui := s.uiHandler()
+	s.quality.set("EMMC Images/Autorun/Light/M 31/Light_M 31_300.0s_Bin1_20261015-221000_0001.fit", qualityEntry{V: qualityVersion, HFR: 3.1, Stars: 120})
+	s.quality.forget(map[string]bool{})
+	var st struct {
+		GoneRev int64 `json:"gone_rev"`
+		GoneN   int   `json:"gone_n"`
+	}
+	if uiCall(t, ui, "GET", "/ui/api/state", nil, &st) != 200 || st.GoneN != 1 || st.GoneRev == 0 {
+		t.Fatalf("state: %+v", st)
+	}
+	var got struct {
+		Rev   int64
+		Files []uiFile
+	}
+	if uiCall(t, ui, "GET", "/ui/api/gone", nil, &got) != 200 || got.Rev != st.GoneRev || len(got.Files) != 1 ||
+		got.Files[0].HFR != 3.1 || got.Files[0].Gone == 0 || !got.Files[0].Measured || got.Files[0].Name != "Light_M 31_300.0s_Bin1_20261015-221000_0001.fit" {
+		t.Fatalf("gone: %+v", got)
+	}
+}

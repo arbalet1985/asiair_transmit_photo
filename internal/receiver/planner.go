@@ -115,19 +115,32 @@ type plannerObject struct {
 	RA    float64 `json:"ra"`
 	Dec   float64 `json:"dec"`
 	Kind  string  `json:"kind,omitempty"`
+	// of the frames: the exposure of the last one, how many and their
+	// exposure in all (seconds), the last night
+	Exp    float64 `json:"exp,omitempty"`
+	Frames int     `json:"frames,omitempty"`
+	Total  float64 `json:"total,omitempty"`
+	Night  string  `json:"night,omitempty"`
 }
 
-// frameObjects: the objects of the frames received, where they were.
+// frameObjects: the objects of the frames received, where they were last
+// pointed at and how much was shot.
 func frameObjects(sk []skyEntry) []plannerObject {
-	seen := map[string]bool{}
+	idx := map[string]int{}
 	var out []plannerObject
 	sort.Slice(sk, func(i, j int) bool { return sk[i].UTC > sk[j].UTC }) // the last pointing
 	for _, e := range sk {
-		if e.Object == "" || seen[e.Object] {
+		if e.Object == "" {
 			continue
 		}
-		seen[e.Object] = true
-		out = append(out, plannerObject{Name: e.Object, RA: e.RA, Dec: e.Dec, Kind: "кадры"})
+		i, ok := idx[e.Object]
+		if !ok {
+			i = len(out)
+			idx[e.Object] = i
+			out = append(out, plannerObject{Name: e.Object, RA: e.RA, Dec: e.Dec, Kind: "кадры", Exp: e.Exp, Night: e.Night})
+		}
+		out[i].Frames++
+		out[i].Total += e.Exp
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
