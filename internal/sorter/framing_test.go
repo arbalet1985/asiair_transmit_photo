@@ -3,6 +3,8 @@ package sorter
 import (
 	"context"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
@@ -32,5 +34,30 @@ func TestFramingLocal(t *testing.T) {
 	g, _ := ReadFrame(q, "Light_x.fit")
 	if _, err := Framing(context.Background(), &g, ""); err == nil {
 		t.Fatal("framing without coordinates")
+	}
+}
+
+// The sky of the planner of a receiver: horizon, zones, site, clock.
+func TestPlannerSky(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ui/api/planner" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"state":{"sky":{"horizon":[{"az":0,"alt":20},{"az":180,"alt":25}],"zones":[{"az1":10,"az2":40,"alt1":0,"alt2":30}],"min_alt":15},
+			"sky_set":true,"tz":5},"site":{"lat":56.8,"lon":60.3,"set":true}}`))
+	}))
+	defer srv.Close()
+	r, err := NewReceiver(srv.URL, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sky, err := r.PlannerSky(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sky.Sky.Horizon) != 2 || len(sky.Sky.Zones) != 1 || sky.Sky.MinAlt != 15 || !sky.SiteSet || sky.Lat != 56.8 ||
+		sky.TZ == nil || *sky.TZ != 5 || !sky.Edited {
+		t.Fatalf("%+v", sky)
 	}
 }

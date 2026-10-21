@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/planner"
 )
 
 // FrameFraming is a Light frame for the planner: its target with the centre
@@ -101,4 +102,43 @@ func (r *Receiver) framing(ctx context.Context, p string) (*FrameFraming, error)
 		return nil, err
 	}
 	return &fr, nil
+}
+
+// ReceiverSky is the sky of the observatory kept on a receiver: its
+// horizon and the zones hidden by wires, and the site.
+type ReceiverSky struct {
+	Sky     planner.Sky
+	Lat     float64
+	Lon     float64
+	SiteSet bool
+	TZ      *float64 // hours from UTC of the observatory clock (nil: not set there)
+	Edited  bool     // corrected on the page, not only guessed from the frames
+}
+
+// PlannerSky asks the receiver for the sky of its planner.
+func (r *Receiver) PlannerSky(ctx context.Context) (*ReceiverSky, error) {
+	resp, err := r.get(ctx, "/ui/api/planner", nil, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "ответил 404: страницы нет") {
+			return nil, errors.New("на приёмнике нет планировщика: нужен приёмник новой версии")
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var v struct {
+		State struct {
+			Sky    planner.Sky `json:"sky"`
+			SkySet bool        `json:"sky_set"`
+			TZ     *float64    `json:"tz"`
+		} `json:"state"`
+		Site struct {
+			Lat float64 `json:"lat"`
+			Lon float64 `json:"lon"`
+			Set bool    `json:"set"`
+		} `json:"site"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, err
+	}
+	return &ReceiverSky{Sky: v.State.Sky, Lat: v.Site.Lat, Lon: v.Site.Lon, SiteSet: v.Site.Set, TZ: v.State.TZ, Edited: v.State.SkySet}, nil
 }

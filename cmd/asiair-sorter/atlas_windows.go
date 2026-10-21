@@ -6,7 +6,10 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/lxn/walk"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/atlas"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/planner"
@@ -139,4 +142,77 @@ func (p *plannerUI) atlasChanged() {
 		st.Colors = append(st.Colors, fmt.Sprintf("#%02x%02x%02x", c.R(), c.G(), c.B()))
 	}
 	p.atlas.Publish(st)
+}
+
+// receiverAddr: the receiver to ask: the input when it is one, else the
+// last receiver used.
+func (w *window) receiverAddr() string {
+	if in := strings.TrimSpace(w.inEdit.Text()); sorter.IsURL(in) {
+		return in
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, a := range w.saved.RecentIn {
+		if sorter.IsURL(a) {
+			return a
+		}
+	}
+	return ""
+}
+
+// skyFromReceiver takes the sky of the observatory (horizon, zones hidden
+// by wires, site, clock) from the planner of the receiver.
+func (p *plannerUI) skyFromReceiver() {
+	addr := p.w.receiverAddr()
+	if addr == "" {
+		p.w.warn("Адрес приёмника не известен: впишите его во входной каталог (например https://дом.example:8443) и нажмите «Просмотреть кадры» — тогда сортировщик войдёт в приёмник.")
+		return
+	}
+	if p.state.SkySet && walk.MsgBox(p.w.mw, "ASIAIR Sorter", "Заменить горизонт и зоны, поправленные здесь, небом с приёмника "+addr+"?",
+		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+		return
+	}
+	setLong(p.planInfo, "Спрашиваю небо обсерватории у приёмника "+addr+"…")
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Небо с приёмника: сбой: %v", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var sky *sorter.ReceiverSky
+		r, err := p.w.connect(ctx, addr, "", "")
+		if err == nil {
+			sky, err = r.PlannerSky(ctx)
+		}
+		p.w.mw.Synchronize(func() {
+			if err != nil {
+				setLong(p.planInfo, "Небо с приёмника не получено: "+err.Error())
+				return
+			}
+			p.state.Sky.Horizon = append(planner.Horizon(nil), sky.Sky.Horizon...)
+			p.state.Sky.Zones = append([]planner.Zone(nil), sky.Sky.Zones...)
+			if sky.Sky.MinAlt > 0 {
+				p.minAltEdit.SetValue(sky.Sky.MinAlt)
+				p.state.Sky.MinAlt = sky.Sky.MinAlt
+			}
+			p.state.SkySet = true // kept: the frames read here do not replace it
+			if sky.SiteSet {
+				p.latEdit.SetValue(sky.Lat)
+				p.lonEdit.SetValue(sky.Lon)
+				p.state.SiteSet = true
+			}
+			if sky.TZ != nil {
+				p.tzEdit.SetValue(*sky.TZ)
+			}
+			p.skyChanged()
+			p.paramsChanged()
+			what := "угадано по кадрам приёмника"
+			if sky.Edited {
+				what = "поправлено на странице приёмника"
+			}
+			setLong(p.planInfo, fmt.Sprintf("Небо обсерватории взято с приёмника (%s): точек горизонта %d, закрытых зон %d.", what, len(sky.Sky.Horizon), len(sky.Sky.Zones)))
+		})
+	}()
 }

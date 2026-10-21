@@ -303,6 +303,8 @@ func (p *plannerUI) page() TabPage {
 							PushButton{Text: "Горизонт по кадрам", OnClicked: p.skyFromFrames,
 								ToolTipText: "Угадать горизонт и закрытые зоны заново по кадрам последнего «Просмотреть кадры»;\nточки и зоны, поставленные или поправленные руками, остаются"},
 							PushButton{Text: "Сбросить", OnClicked: p.resetSky, ToolTipText: "Ровный горизонт на высоте «Не ниже», без зон"},
+							PushButton{Text: "Небо с приёмника", OnClicked: p.skyFromReceiver,
+								ToolTipText: "Взять горизонт, закрытые зоны и координаты обсерватории из планировщика приёмника\n(адрес — входной каталог или последний приёмник из прежних)"},
 						}},
 						CustomWidget{AssignTo: &p.wxView, PaintPixels: p.paintWeather, DoubleBuffering: true, InvalidatesOnResize: true, Visible: false,
 							MinSize: Size{Height: 40}, MaxSize: Size{Height: 40},
