@@ -81,3 +81,36 @@ func TestServer(t *testing.T) {
 		t.Fatal(c)
 	}
 }
+
+// The frame over the sky: its picture and the framing asked go to the page.
+func TestServerPhoto(t *testing.T) {
+	s := NewServer()
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+	q := "?t=" + s.token
+	r, _ := http.Get(ts.URL + "/photo.jpg" + q)
+	r.Body.Close()
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("a photo before any: %d", r.StatusCode)
+	}
+	s.SetPhoto([]byte("jpeg"))
+	s.Publish(State{Targets: []planner.Target{{Name: "M 31"}}, Photo: &Photo{V: 1, Name: "a.fit", WCS: map[string]any{"NAXIS": 2}, Width: 1.2, Height: 0.8},
+		FrameReq: 3, FrameI: 0})
+	r, _ = http.Get(ts.URL + "/photo.jpg" + q)
+	b, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	if string(b) != "jpeg" || r.Header.Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("%q %s", b, r.Header.Get("Content-Type"))
+	}
+	r, _ = http.Get(ts.URL + "/photo.jpg?t=wrong")
+	r.Body.Close()
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatal("the photo without the token")
+	}
+	r, _ = http.Get(ts.URL + "/state" + q + "&rev=0")
+	b, _ = io.ReadAll(r.Body)
+	r.Body.Close()
+	if !strings.Contains(string(b), `"frame_req":3`) || !strings.Contains(string(b), `"width":1.2`) || !s.Watched() {
+		t.Fatal(string(b))
+	}
+}

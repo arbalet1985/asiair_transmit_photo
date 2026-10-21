@@ -46,6 +46,7 @@ const api = (p, q) => p + "?t=" + encodeURIComponent(token) + (q || "");
 const post = (p, body) => fetch(api(p), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
   .then(r => { if (!r.ok) throw new Error(r.statusText); });
 let S = { rev: 0, targets: [], colors: [], sel: -1, optics: null, setups: [] };
+let photoV = 0, frameReq = 0;
 const note = document.getElementById("note");
 const atlas = Atlas.create(document.getElementById("atlas"), {
   onFrame: (i, ra, dec, angle) => post("frame", { i, ra, dec, angle }).catch(e => { note.textContent = "Не сохранено: " + e.message; }),
@@ -88,6 +89,12 @@ async function poll() {
       atlas.setOptics(S.optics, S.setups);
       atlas.setTargets(S.targets, S.colors, S.sel);
       if (selChanged && S.sel >= 0) atlas.goTo(S.sel);
+      // a frame of the sorter over the sky, and the framing of its target
+      if (S.photo && S.photo.v !== photoV) {
+        photoV = S.photo.v;
+        atlas.setPhoto({ url: api("photo.jpg", "&v=" + S.photo.v), wcs: S.photo.wcs, name: S.photo.name, width: S.photo.width, height: S.photo.height });
+      } else if (!S.photo && photoV) { photoV = 0; atlas.setPhoto(null); }
+      if (S.frame_req && S.frame_req !== frameReq) { frameReq = S.frame_req; atlas.frame(S.frame_i); }
     } catch (e) {
       note.textContent = "Сортировщик не отвечает — атлас обновится, когда он снова будет запущен.";
       await new Promise(f => setTimeout(f, 3000));

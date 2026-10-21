@@ -11,6 +11,8 @@ import (
 
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
+
+	"github.com/arbalet1985/asiair_transmit_photo/internal/sorter"
 )
 
 // The right button on a cell of a table: a menu to copy the cell, the whole
@@ -370,6 +372,10 @@ func (w *window) frameCopies(i int) []copyItem {
 	if opens := w.openItems(r); len(opens) > 0 {
 		items = append(items, copyItem{})
 		items = append(items, opens...)
+	}
+	if f.Kind == sorter.Light && w.pl != nil {
+		local := onDisk(w.localPaths(r), f.Size)
+		items = append(items, copyItem{}, copyItem{label: "В планировщик — снять так же (кадрирование по кадру)", run: func() { w.pl.fromFrame(f, local) }})
 	}
 	if sats := w.satInfoItems(i); len(sats) > 0 {
 		items = append(items, copyItem{})

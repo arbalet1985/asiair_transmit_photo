@@ -94,7 +94,8 @@
   function create(div, opts) {
     opts = opts || {};
     if (!document.getElementById("atlasCss")) document.head.append(el("style", { id: "atlasCss", textContent: CSS }));
-    const st = { targets: [], colors: [], sel: -1, optics: null, setups: [], preview: null, framing: null, survey: SURVEYS[0][0] };
+    const st = { targets: [], colors: [], sel: -1, optics: null, setups: [], preview: null, framing: null, survey: SURVEYS[0][0],
+      photo: null, photoOpacity: 0.75, pendingFrame: -1 };
     let al = null, A = null, overlay = null, dashed = null, labels = null, failed = false;
 
     const survey = el("select", { title: "Снимки неба" }, ...SURVEYS.map(([v, t]) => el("option", { value: v, textContent: t })));
@@ -116,11 +117,16 @@
     const btnApply = el("button", { type: "button", textContent: "Применить", className: "primary" });
     const btnCancel = el("button", { type: "button", textContent: "Отмена" });
     const frameRow = el("div", { className: "arow aframe", hidden: true }, el("span", {}, "угол"), btnL, angle, btnR, angleNum, "°", btnApply, btnCancel);
+    // a frame laid over the sky, to compare its framing with the atlas
+    const photoName = el("span", { className: "ainfo" });
+    const photoOp = el("input", { type: "range", min: "0", max: "1", step: "0.05", value: "0.75", title: "Прозрачность снимка поверх неба" });
+    const btnPhotoOff = el("button", { type: "button", textContent: "Убрать снимок" });
+    const photoRow = el("div", { className: "arow", hidden: true }, el("span", {}, "снимок"), photoOp, btnPhotoOff, photoName);
     const sky = el("div", { className: "asky" });
     const msg = el("div", { className: "amsg", textContent: "Загружаю атлас…" });
     sky.append(msg);
     const info = el("div", { className: "ainfo" });
-    const root = el("div", { className: "atlas" }, el("div", { className: "arow" }, survey, btnFrame), optRow, frameRow, sky, info);
+    const root = el("div", { className: "atlas" }, el("div", { className: "arow" }, survey, btnFrame), optRow, frameRow, photoRow, sky, info);
     div.replaceChildren(root);
 
     // the optics in effect: the ones chosen, else the last setup of the frames
@@ -226,6 +232,32 @@
     };
     survey.onchange = () => { st.survey = survey.value; if (al) al.setBaseImageLayer(st.survey); };
 
+    let photoLayer = null;
+    function showPhoto() {
+      photoRow.hidden = !st.photo;
+      if (!al || !A) return;
+      if (photoLayer) { try { al.removeImageLayer("снимок"); } catch (e) { /* gone already */ } photoLayer = null; }
+      if (!st.photo) return;
+      photoLayer = A.image(st.photo.url, { name: "снимок", imgFormat: "jpeg", wcs: st.photo.wcs, opacity: st.photoOpacity,
+        errorCallback: e => { info.textContent = "Снимок не наложен: " + (e && e.message || e); } });
+      al.setOverlayImageLayer(photoLayer, "снимок");
+    }
+    photoOp.oninput = () => { st.photoOpacity = +photoOp.value; if (photoLayer) photoLayer.setOpacity(st.photoOpacity); };
+    btnPhotoOff.onclick = () => { st.photo = null; showPhoto(); };
+    // start framing target i: its frame in the middle, the field a little wider
+    function frameTarget(i) {
+      const t = st.targets[i];
+      if (!t) return;
+      if (!al) { st.pendingFrame = i; return; }
+      st.sel = i;
+      al.gotoRaDec(t.ra, t.dec);
+      const [w, h] = fov(optics());
+      const ph = st.photo ? Math.max(st.photo.width || 0, st.photo.height || 0) : 0;
+      const span = Math.max(w, h, ph);
+      if (span > 0) al.setFoV(Math.min(Math.max(span * 1.6, 0.2), 60));
+      setFraming({ i, angle: t.angle || 0 });
+    }
+
     // Aladin is loaded once the atlas is shown
     (async () => {
       try {
@@ -256,6 +288,8 @@
           }
         });
         if (t) al.gotoRaDec(t.ra, t.dec);
+        showPhoto();
+        if (st.pendingFrame >= 0) { frameTarget(st.pendingFrame); st.pendingFrame = -1; }
         draw();
       } catch (e) {
         failed = true;
@@ -299,6 +333,15 @@
         }
         draw();
       },
+      // a frame over the sky: {url, wcs, name, width, height} (null: none)
+      setPhoto(p) {
+        st.photo = p || null;
+        const deg = v => v >= 1 ? `${ru(v, 2)}°` : `${ru(v * 60, 1)}′`;
+        photoName.textContent = !p ? "" : (p.name || "") + (p.width > 0 ? ` — поле снимка ${deg(p.width)} × ${deg(p.height)}` : "");
+        showPhoto();
+      },
+      // framing of target i at once, as «Кадрировать» does
+      frame(i) { frameTarget(i); },
       get failed() { return failed; },
       get aladin() { return al; },
     };

@@ -560,6 +560,8 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/retry", s.handleUIRetry)
 	mux.HandleFunc("/ui/file", s.handleUIFile)
 	mux.HandleFunc("/ui/thumb", s.handleUIThumb)
+	mux.HandleFunc("/ui/api/framing", s.handleUIFraming)
+	mux.HandleFunc("/ui/api/framejpg", s.handleUIFrameJPG)
 	mux.HandleFunc("/ui/api/connect", s.handleUIConnect)
 	mux.HandleFunc("/ui/api/tailscale", s.handleUITailscale)
 	mux.HandleFunc("/ui/api/network", s.handleUINetwork)
