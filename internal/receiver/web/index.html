@@ -214,6 +214,7 @@
   #rail button.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
   #rail #railAgent span { width: 12px; height: 12px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
   #rail #railAgent.on span { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+  #rail #railAgent.warn span { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
   #rail #railAgent.lost span { background: var(--muted); box-shadow: none; }
   #rail hr { width: 24px; margin: 3px auto; border: 0; border-top: 1px solid var(--border); }
   #rail svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -282,6 +283,15 @@
   .lg { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--accent); }
   .lg.bad { background: var(--warn); }
   .lg.gone { background: none; border: 1.5px solid var(--muted); }
+  #nightObjs .lg { border-radius: 3px; }
+  #nightDlg.multi .lgok { display: none; }
+  #nightDlg.multi .lg.bad { background: none; border: 2px solid var(--warn); }
+  #nightObjs span { color: var(--text); }
+  .nightall { padding: 0 6px; font-size: 12px; margin-left: 4px; }
+  table.sumtotals { margin-top: 6px; }
+  table.sumtotals tbody tr { cursor: default; }
+  .nchart .npt.multi.bad { stroke: var(--warn); stroke-width: 2.5; }
+  .nside .nobj { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
   .nclose { border: 0; background: transparent; font-size: 18px; padding: 2px 8px; }
   .nbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
   .nplot { position: relative; overflow-y: auto; padding: 8px 14px 14px; }
@@ -425,8 +435,27 @@
   /* the planner */
   #plSky { display: block; width: 100%; height: 320px; border-radius: 6px; background: #10141c; margin: 4px 0 6px; }
   #plSky.editing { touch-action: none; cursor: crosshair; }
-  input.pln { width: 4.5em; border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; }
-  #plNight, #plStart { border: 1px solid var(--border); background: var(--bg); padding: 4px 6px; border-radius: 6px; }
+  input.pln { width: 5em; }
+  /* the fields of the planner: a caption over each field, in columns */
+  .plgroup { margin: 0 0 10px; }
+  .plgtitle { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--text); }
+  details.plgroup > summary .plgtitle { display: inline; }
+  .plsub { font-size: 12px; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+  .plform { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 14px; align-items: end; margin-bottom: 8px; }
+  .plform .fld { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .plform .fld > span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .plform .fld.wide { grid-column: span 2; }
+  .plform .fin { display: flex; gap: 6px; align-items: center; min-width: 0; }
+  .plform .fin i { font-style: normal; color: var(--muted); font-size: 13px; }
+  .plform .fin > input:not([type=checkbox]), .plform .fin > select { flex: 1 1 auto; min-width: 0; }
+  .plform .fin > input.pln { flex: 0 0 6em; width: 6em; }
+  .plform .fld > input:not([type=checkbox]), .plform .fld > select { width: 100%; min-width: 0; box-sizing: border-box; }
+  .plform .fld.chk input { margin: 0; flex: none; }
+  .plform input:not([type=checkbox]), .plform select { border: 1px solid var(--border); background: var(--bg); padding: 5px 8px; border-radius: 6px; height: 32px; box-sizing: border-box; }
+  .plform .fld.chk { flex-direction: row; align-items: center; gap: 6px; min-height: 32px; font-size: 13px; }
+  .plform button { height: 32px; white-space: nowrap; }
+  .plform .fld.btns .fin { flex-wrap: nowrap; }
+  @media (max-width: 420px) { .plform .fld.wide { grid-column: 1 / -1; } }
   .plbar #plTime { flex: 1 1 200px; min-width: 120px; }
   details.plcost { margin: 0 0 8px; }
   details.plcost summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
@@ -597,9 +626,15 @@
         <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>HFR</th><th>Получено</th><th></th></tr></thead>
         <tbody id="summaryBody"></tbody>
       </table></div>
+      <details class="sumabout" id="summaryTotalsBox">
+        <summary>Итоги по объектам</summary>
+        <div class="tablewrap"><table class="summary sumtotals">
+          <thead><tr><th>Объект</th><th class="num">Light-кадров</th><th class="num">Суммарно</th><th class="num">Ночей</th><th>Последняя ночь</th></tr></thead>
+          <tbody id="summaryTotals"></tbody>
+        </table></div>
+      </details>
       <details class="sumabout">
-        <summary>Итоги по объектам и как считается сводка</summary>
-        <div class="line" id="summaryTotals"></div>
+        <summary>Как считается сводка</summary>
         <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
       </details>
     </div>
@@ -624,55 +659,65 @@
       <div class="line muted" id="plWxInfo"></div>
       <div class="line muted" id="plInfo"></div>
       <div class="hint" id="plEditHint" hidden>Горизонт — жёлтая линия: тащите точки, касание вне точки добавляет новую. Закрытые зоны (провода) — красная штриховка: тащите зону, её угол или вершину; «новая зона» (или Shift) — протянуть прямоугольник; «новый многоугольник» (или Ctrl) — касаниями поставить вершины, замкнуть касанием первой вершины, двойным щелчком или Enter (Esc — отменить); «удалить» (или правая кнопка) — точку, вершину многоугольника или зону; касание бледной «возможной» зоны принимает её.</div>
-      <div class="toolbar" style="margin-top:14px">
-        <label>ночь с <input type="date" id="plNight"></label>
-        <label title="Во сколько начать съёмку по часам обсерватории: пусто — с начала ночи. Пригодится, когда начали позже плана — например пережидали облака">начать в <input type="time" id="plStart"></label>
-        <button id="plStartNow" title="Поставить текущее время обсерватории и составить план с этого момента">сейчас</button>
-        <button id="plStartClear" title="Снова планировать с начала ночи">с начала ночи</button>
-        <label>сумерки <select id="plTwilight"><option value="-18">астрономические (−18°)</option><option value="-12">навигационные (−12°)</option><option value="-6">гражданские (−6°)</option></select></label>
-        <label title="Не снимать ниже этой высоты, где бы ни был горизонт">не ниже <input type="number" id="plMinAlt" min="0" max="80" step="1" class="pln">°</label>
-        <label title="Часовой пояс обсерватории: по нему показан план (угадывается по кадрам)">часы обсерватории UTC <input type="number" id="plTZ" min="-12" max="14" step="0.5" class="pln"></label>
+      <div class="plgroup" style="margin-top:14px">
+        <div class="plgtitle">Ночь</div>
+        <div class="plform">
+          <label class="fld"><span>Ночь с</span><input type="date" id="plNight"></label>
+          <div class="fld wide"><span title="Во сколько начать съёмку по часам обсерватории: пусто — с начала ночи. Пригодится, когда начали позже плана — например пережидали облака">Начать в</span>
+            <div class="fin"><input type="time" id="plStart" aria-label="Начать в" title="Пусто — с начала ночи">
+              <button id="plStartNow" title="Поставить текущее время обсерватории и составить план с этого момента">сейчас</button>
+              <button id="plStartClear" title="Снова планировать с начала ночи">с начала ночи</button></div></div>
+          <label class="fld wide"><span>Сумерки</span><select id="plTwilight"><option value="-18">астрономические (−18°)</option><option value="-12">навигационные (−12°)</option><option value="-6">гражданские (−6°)</option></select></label>
+          <label class="fld" title="Не снимать ниже этой высоты, где бы ни был горизонт"><span>Не ниже</span><div class="fin"><input type="number" id="plMinAlt" min="0" max="80" step="1" class="pln"><i>°</i></div></label>
+          <label class="fld" title="Часовой пояс обсерватории: по нему показан план (угадывается по кадрам)"><span>Часы обсерватории</span><div class="fin"><i>UTC</i><input type="number" id="plTZ" min="-12" max="14" step="0.5" class="pln"></div></label>
+        </div>
       </div>
-      <details class="plcost">
-        <summary>Издержки: переход, фокусировка, дизеринг, перекладка <span class="muted" id="plCostInfo"></span></summary>
-        <div class="toolbar">
-          <label title="Наведение, решение поля, запуск гида — на каждую смену объекта">переход на объект <input type="number" id="plSwitch" min="0" max="60" step="0.5" class="pln"> мин</label>
-          <label title="Сколько длится автофокус">фокусировка <input type="number" id="plFocus" min="0" max="30" step="0.5" class="pln"> мин</label>
-          <label title="0 — не перефокусироваться">каждые <input type="number" id="plFocusEvery" min="0" max="600" step="5" class="pln"> мин</label>
-          <label><input type="checkbox" id="plFocusSwitch"> и после перехода</label>
+      <details class="plcost plgroup">
+        <summary><span class="plgtitle">Издержки</span> <span class="muted" id="plCostInfo"></span></summary>
+        <div class="plsub">Переход и фокус</div>
+        <div class="plform">
+          <label class="fld" title="Наведение, решение поля, запуск гида — на каждую смену объекта"><span>Переход на объект</span><div class="fin"><input type="number" id="plSwitch" min="0" max="60" step="0.5" class="pln"><i>мин</i></div></label>
+          <label class="fld" title="Сколько длится автофокус"><span>Фокусировка</span><div class="fin"><input type="number" id="plFocus" min="0" max="30" step="0.5" class="pln"><i>мин</i></div></label>
+          <label class="fld" title="0 — не перефокусироваться"><span>Фокус каждые</span><div class="fin"><input type="number" id="plFocusEvery" min="0" max="600" step="5" class="pln"><i>мин</i></div></label>
+          <label class="fld chk"><input type="checkbox" id="plFocusSwitch"> фокус и после перехода</label>
         </div>
-        <div class="toolbar">
-          <label title="Сдвиг и успокоение гида">дизеринг <input type="number" id="plDither" min="0" max="600" step="1" class="pln"> с</label>
-          <label title="0 — без дизеринга">каждые <input type="number" id="plDitherEvery" min="0" max="100" step="1" class="pln"> кадр.</label>
-          <label title="Скачивание кадра с камеры">между кадрами <input type="number" id="plDownload" min="0" max="120" step="1" class="pln"> с</label>
+        <div class="plsub">Дизеринг и кадры</div>
+        <div class="plform">
+          <label class="fld" title="Сдвиг и успокоение гида"><span>Дизеринг</span><div class="fin"><input type="number" id="plDither" min="0" max="600" step="1" class="pln"><i>с</i></div></label>
+          <label class="fld" title="0 — без дизеринга"><span>Дизеринг каждые</span><div class="fin"><input type="number" id="plDitherEvery" min="0" max="100" step="1" class="pln"><i>кадр.</i></div></label>
+          <label class="fld" title="Скачивание кадра с камеры"><span>Между кадрами</span><div class="fin"><input type="number" id="plDownload" min="0" max="120" step="1" class="pln"><i>с</i></div></label>
         </div>
-        <div class="toolbar">
-          <label title="Экваториальная монтировка: после меридиана телескоп перекладывается"><input type="checkbox" id="plFlip"> перекладка через меридиан</label>
-          <label title="За сколько минут до меридиана прекратить съёмку: монтировка останавливается и ждёт перекладки (0 — снимать до самого меридиана)">стоп за <input type="number" id="plFlipBefore" min="0" max="120" step="1" class="pln"> мин до меридиана,</label>
-          <label title="Когда переложиться: столько минут после меридиана (как в настройках ASIAIR)">перекладка через <input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"> мин после меридиана,</label>
-          <label>занимает <input type="number" id="plFlipMin" min="0" max="60" step="0.5" class="pln"> мин</label>
+        <div class="plsub">Меридиан</div>
+        <div class="plform">
+          <label class="fld chk" title="Экваториальная монтировка: после меридиана телескоп перекладывается"><input type="checkbox" id="plFlip"> перекладка через меридиан</label>
+          <label class="fld" title="За сколько минут до меридиана прекратить съёмку: монтировка останавливается и ждёт перекладки (0 — снимать до самого меридиана)"><span>Стоп до меридиана</span><div class="fin"><input type="number" id="plFlipBefore" min="0" max="120" step="1" class="pln"><i>мин</i></div></label>
+          <label class="fld" title="Когда переложиться: столько минут после меридиана (как в настройках ASIAIR)"><span>Перекладка после меридиана</span><div class="fin"><input type="number" id="plFlipAfter" min="-60" max="120" step="1" class="pln"><i>мин</i></div></label>
+          <label class="fld"><span>Перекладка занимает</span><div class="fin"><input type="number" id="plFlipMin" min="0" max="60" step="0.5" class="pln"><i>мин</i></div></label>
         </div>
-        <div class="toolbar">
-          <label title="Объект, который будет виден меньше, не берётся: переход не окупится">не идти на объект меньше чем на <input type="number" id="plBlock" min="0" max="240" step="5" class="pln"> мин</label>
-          <label title="Каждый объект снимается один раз: план выбирает для него время, когда он виден дольше всего, и после перехода на другой объект назад не возвращается"><input type="checkbox" id="plOnce"> не повторять объект</label>
-          <label title="0 — Луна не мешает">до Луны не ближе <input type="number" id="plMoonSep" min="0" max="180" step="5" class="pln">°</label>
+        <div class="plsub">Выбор объектов</div>
+        <div class="plform">
+          <label class="fld" title="Объект, который будет виден меньше, не берётся: переход не окупится"><span>Не идти на объект меньше</span><div class="fin"><input type="number" id="plBlock" min="0" max="240" step="5" class="pln"><i>мин</i></div></label>
+          <label class="fld" title="0 — Луна не мешает"><span>До Луны не ближе</span><div class="fin"><input type="number" id="plMoonSep" min="0" max="180" step="5" class="pln"><i>°</i></div></label>
+          <label class="fld chk" title="Каждый объект снимается один раз: план выбирает для него время, когда он виден дольше всего, и после перехода на другой объект назад не возвращается"><input type="checkbox" id="plOnce"> не повторять объект</label>
         </div>
       </details>
       <h2 style="margin-top:14px">Объекты</h2>
-      <div class="toolbar">
-        <input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" style="width:12em">
-        <button id="plFind">Найти</button>
-        <select id="plFound" aria-label="Найденное" style="max-width:22em"></select>
-        <select id="plShot" aria-label="Снятые объекты" style="max-width:22em" title="Объекты, уже снятые (по полученным кадрам): координаты последнего наведения и выдержка — чтобы продолжить съёмку"></select>
-      </div>
-      <div class="toolbar">
-        <label title="Прямое восхождение J2000, часы: 07 29 03 или 7.484">RA <input type="text" id="plRA" style="width:7em"></label>
-        <label title="Склонение J2000, градусы: +13 14 49 или 13.25">Dec <input type="text" id="plDec" style="width:7em"></label>
-        <label>выдержка <input type="number" id="plExp" min="1" max="3600" step="1" value="300" class="pln"> с</label>
-        <label title="Сколько часов выдержки набрать (0 — сколько получится)">нужно <input type="number" id="plWant" min="0" max="24" step="0.5" value="0" class="pln"> ч</label>
-        <label>фильтр <input type="text" id="plFilter" style="width:4em"></label>
-        <button class="primary" id="plAdd">Добавить</button>
-        <button id="plUpdate" title="Записать поля в выбранную строку" disabled>Изменить</button>
+      <div class="plgroup">
+        <div class="plform plfind">
+          <div class="fld wide"><span>Найти в каталоге</span>
+            <div class="fin"><input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" aria-label="Найти в каталоге"><button id="plFind">Найти</button></div></div>
+          <label class="fld wide"><span>Найденное</span><select id="plFound"></select></label>
+          <label class="fld wide" title="Объекты, уже снятые (по полученным кадрам): координаты последнего наведения и выдержка — чтобы продолжить съёмку"><span>Уже снятые</span><select id="plShot"></select></label>
+        </div>
+        <div class="plform">
+          <label class="fld" title="Прямое восхождение J2000, часы: 07 29 03 или 7.484"><span>RA (J2000)</span><input type="text" id="plRA" placeholder="07 29 03"></label>
+          <label class="fld" title="Склонение J2000, градусы: +13 14 49 или 13.25"><span>Dec (J2000)</span><input type="text" id="plDec" placeholder="+13 14 49"></label>
+          <label class="fld"><span>Выдержка</span><div class="fin"><input type="number" id="plExp" min="1" max="3600" step="1" value="300" class="pln"><i>с</i></div></label>
+          <label class="fld" title="Сколько часов выдержки набрать (0 — сколько получится)"><span>Нужно</span><div class="fin"><input type="number" id="plWant" min="0" max="24" step="0.5" value="0" class="pln"><i>ч</i></div></label>
+          <label class="fld"><span>Фильтр</span><input type="text" id="plFilter" placeholder="L, Ha…"></label>
+          <div class="fld btns"><span>&nbsp;</span><div class="fin"><button class="primary" id="plAdd">Добавить</button>
+            <button id="plUpdate" title="Записать поля в выбранную строку" disabled>Изменить</button></div></div>
+        </div>
       </div>
       <div class="tablewrap"><table id="plTargetsTable">
         <thead><tr><th title="В плане">✓</th><th>№</th><th>Объект</th><th>RA</th><th>Dec</th><th>Выдержка</th><th>Нужно</th><th>Фильтр</th><th>Макс. высота</th><th>В плане</th><th></th></tr></thead>
@@ -1063,8 +1108,9 @@
 <dialog id="nightDlg" aria-labelledby="nightTitle">
   <div class="nhead">
     <div class="ntitles"><b id="nightTitle"></b><span class="muted" id="nightSub"></span></div>
+    <div class="nlegend" id="nightObjs" aria-label="Объекты" hidden></div>
     <div class="nlegend" aria-label="Обозначения">
-      <span><i class="lg ok"></i>кадр</span><span><i class="lg bad"></i>⚠ с замечанием</span><span><i class="lg gone"></i>удалён</span>
+      <span class="lgok"><i class="lg ok"></i>кадр</span><span><i class="lg bad"></i>⚠ с замечанием</span><span><i class="lg gone"></i>удалён</span>
     </div>
     <button id="nightZoomReset" hidden title="Показать всю ночь">Вся ночь</button>
     <button id="nightClose" class="nclose" title="Закрыть (Esc)" aria-label="Закрыть">✕</button>
@@ -1804,11 +1850,15 @@ function deviceHost(link) {
   let m = l.match(/^smb:\/\/(?:[^@\/]*@)?([^\/]+)/i) || l.match(/^(?:\\\\|\/\/)([^\\\/]+)/);
   return m ? m[1] : l;
 }
+// the agent reaches the receiver but not the ASIAIR (once it has tried)
+function asiairDown(a) {
+  return !!(a && a.asiair && !a.connected && (a.asiair_error || a.last_scan && !a.last_scan.startsWith("0001")));
+}
 function renderAsiair(a, stale) {
   const dd = $("aAsiair");
   dd.innerHTML = "";
   const online = state.agent_online;
-  $("hdrAsiair").hidden = !(online && a.asiair && !a.connected && (a.asiair_error || a.last_scan && !a.last_scan.startsWith("0001")));
+  $("hdrAsiair").hidden = !(online && asiairDown(a));
   if (!a.asiair) { dd.textContent = "—"; return; }
   const host = deviceHost(a.asiair);
   const what = /^usb:/i.test(a.asiair) ? "флешка в компьютере агента" : /^dir:/i.test(a.asiair) ? "папка на компьютере агента" : "";
@@ -1848,7 +1898,9 @@ function renderStatus() {
   const av = a && a.version ? (a.version === "dev" ? " (собран вручную)" : " v" + a.version) : "";
   $("agentBadge").textContent = state.agent_online ? "агент" + av + " на связи" : "агент не на связи";
   $("agentBadge").title = a && a.version ? "Версия агента: " + a.version : "";
-  railAgent(state.agent_online ? "on" : "", $("agentBadge").textContent);
+  if (!state.agent_online) railAgent("", $("agentBadge").textContent);
+  else if (asiairDown(a)) railAgent("warn", $("agentBadge").textContent + ", но ASIAIR недоступен");
+  else railAgent("on", $("agentBadge").textContent);
   $("destDir").textContent = "Папка: " + state.dest_dir;
   // offline: the rows below are what the agent reported last time
   const everSeen = state.last_seen && !state.last_seen.startsWith("0001");
@@ -3089,7 +3141,16 @@ function renderSummary() {
     if (!shown.includes(r.night.key)) continue;
     const tr = el("tr", { className: r.night.key !== prev ? "night" : "" });
     const td = (t, cls) => el("td", { textContent: t, className: cls || "" });
-    tr.append(td(r.night.key !== prev ? r.night.label : ""), td(r.object || "—"), td(kindLabel[r.kind] || r.kind),
+    const nd = td(r.night.key !== prev ? r.night.label : "");
+    if (r.night.key !== prev) {
+      const lights = rows.filter(x => x.night.key === r.night.key && x.kind === "light");
+      if (lights.length > 1 && lights.reduce((n, x) => n + (x.q ? x.q.length : 0) + (x.del || 0), 0) >= 2) {
+        const b = el("button", { className: "nightall", textContent: "📈 вся ночь", title: "Графики всей ночи: все объекты подряд, каждый своим цветом" });
+        b.onclick = e => { e.stopPropagation(); openNight({ night: r.night.key, all: true, label: r.night.label }); };
+        nd.append(" ", b);
+      }
+    }
+    tr.append(nd, td(r.object || "—"), td(kindLabel[r.kind] || r.kind),
       td(String(r.n) + (r.del ? ` (удалено ${r.del})` : ""), "num"), td([...r.exps].sort((a, b) => a - b).map(fmtExp).join(", ") || "—", "num"),
       td(r.total ? fmtExp(r.total) : "—", "num"), td(moonSummary(r.moon)), td(qualitySummary(r.q || []), "num"), td(!r.n ? "—" : r.here === r.n ? "все" : `${r.here} из ${r.n}`, "num"));
     const cb = el("td", { className: "chartbtn" });
@@ -3106,9 +3167,16 @@ function renderSummary() {
   }
   if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 10, className: "muted", textContent: "Кадров с типом в имени (Light, Dark, Flat, Bias) пока нет." })));
   $("summaryInfo").textContent = nights.length ? `ночей: ${nights.length}` + (shown.length < nights.length ? `, показаны последние ${shown.length}` : "") : "";
-  const tot = [...objects].sort((a, b) => b[1].total - a[1].total)
-    .map(([o, v]) => `${o || "без имени"}: ${v.n} Light, ${fmtExp(v.total)} за ${v.nights.size} ноч${v.nights.size === 1 ? "ь" : v.nights.size < 5 ? "и" : "ей"}`);
-  $("summaryTotals").textContent = tot.length ? "Всего по объектам — " + tot.join(" · ") : "";
+  const tb = $("summaryTotals");
+  tb.replaceChildren();
+  const lastNight = new Map();
+  for (const r of rows) if (r.kind === "light" && r.n && !lastNight.has(r.object)) lastNight.set(r.object, r.night.label); // rows go from the newest night
+  for (const [o, v] of [...objects].sort((a, b) => b[1].total - a[1].total)) {
+    tb.append(el("tr", {}, el("td", { textContent: o || "без имени" }), el("td", { className: "num", textContent: String(v.n) }),
+      el("td", { className: "num", textContent: fmtExp(v.total) }), el("td", { className: "num", textContent: String(v.nights.size) }),
+      el("td", { textContent: lastNight.get(o) || "" })));
+  }
+  $("summaryTotalsBox").hidden = !objects.size;
   drawNight();
 }
 
@@ -3165,8 +3233,8 @@ function nightFrames() {
   for (const f of state.files.concat(goneFiles)) {
     if (!f.q) continue;
     const i = infoOf(f);
-    if (i.kind !== "light" || i.night.key !== nightSel.night || i.object !== nightSel.object || !i.when) continue;
-    out.push({ f, t: i.when.getTime() });
+    if (i.kind !== "light" || i.night.key !== nightSel.night || !nightSel.all && i.object !== nightSel.object || !i.when) continue;
+    out.push({ f, t: i.when.getTime(), obj: i.object || "" });
   }
   return out.sort((a, b) => a.t - b.t);
 }
@@ -3176,6 +3244,20 @@ const nightStrips = [
   { name: "Фон", unit: "ADU", get: f => f.bg || null, fmt: v => String(Math.round(v)), better: "ниже — темнее небо" },
   { name: "Округлость", unit: "", get: f => f.round || null, fmt: v => v.toFixed(2), lo: 0.5, hi: 1, better: "ближе к 1 — круглее" },
 ];
+// the objects of the whole night, each with its own colour (the categorical
+// order checked for colour blindness; orange and yellow last, away from the
+// orange of the frames with a warning)
+const nightHues = { light: ["#2a78d6", "#1baf7a", "#e87ba4", "#008300", "#6250d6", "#e34948", "#eb6834", "#eda100"],
+  dark: ["#3987e5", "#199e70", "#d55181", "#008300", "#9085e9", "#e66767", "#d95926", "#c98500"] };
+function nightDark() {
+  const t = document.documentElement.dataset.theme;
+  return t === "dark" || t === "night" || (!t && matchMedia("(prefers-color-scheme: dark)").matches);
+}
+function nightColor(obj) {
+  if (!nightSel || !nightSel.all) return "var(--accent)";
+  const k = N.objs.indexOf(obj), hues = nightHues[nightDark() ? "dark" : "light"];
+  return hues[(k < 0 ? 0 : k) % hues.length];
+}
 const nightMedians = () => nightStrips.map(st => median(N.pts.map(p => st.get(p.f)).filter(v => v != null && isFinite(v))));
 
 function drawNight() {
@@ -3184,9 +3266,14 @@ function drawNight() {
   const pts = N.pts = nightFrames();
   if (pts.length < 1) { $("nightChart").replaceChildren(el("div", { className: "muted", textContent: "Кадров этой ночи с оценкой нет." })); $("nightSide").replaceChildren(); return; }
   if (N.sel >= pts.length) N.sel = pts.length - 1;
+  N.objs = [...new Set(pts.map(p => p.obj))];
+  const multi = !!nightSel.all;
+  $("nightObjs").hidden = !multi;
+  $("nightDlg").classList.toggle("multi", multi);
+  if (multi) $("nightObjs").replaceChildren(...N.objs.map(o => el("span", {}, el("i", { className: "lg", style: "background:" + nightColor(o) }), o || "без имени")));
   const del = pts.filter(p => p.f.gone).length, bad = pts.filter(p => !p.f.gone && (judge(p.f) || {}).bad).length;
   const first = pts[0].t, last = pts[pts.length - 1].t;
-  $("nightTitle").textContent = `${nightSel.object || "без имени"} — ночь ${nightSel.label}`;
+  $("nightTitle").textContent = multi ? `Вся ночь ${nightSel.label}` : `${nightSel.object || "без имени"} — ночь ${nightSel.label}`;
   $("nightSub").textContent = `${pts.length} кадр. · ${hm(new Date(first))}–${hm(new Date(last))}` +
     (bad ? ` · ⚠ ${bad}` : "") + (del ? ` · удалено ${del}` : "");
   $("nightZoomReset").hidden = !N.view;
@@ -3203,6 +3290,14 @@ function drawNight() {
   const defs = mk("defs", {});
   const grad = mk("linearGradient", { id: "nGrad", x1: 0, x2: 0, y1: 0, y2: 1 });
   grad.append(mk("stop", { offset: "0%", style: "stop-color: var(--accent); stop-opacity: .22" }), mk("stop", { offset: "100%", style: "stop-color: var(--accent); stop-opacity: 0" }));
+  // a gradient of its own colour for each object of the whole night
+  const gradOf = new Map([["", "url(#nGrad)"]]);
+  if (multi) N.objs.forEach((o, k) => {
+    const g = mk("linearGradient", { id: "nGrad" + k, x1: 0, x2: 0, y1: 0, y2: 1 });
+    g.append(mk("stop", { offset: "0%", style: `stop-color: ${nightColor(o)}; stop-opacity: .2` }), mk("stop", { offset: "100%", style: `stop-color: ${nightColor(o)}; stop-opacity: 0` }));
+    defs.append(g);
+    gradOf.set(o, `url(#nGrad${k})`);
+  });
   const clip = mk("clipPath", { id: "nClip" });
   clip.append(mk("rect", { x: L - 6, y: 0, width: pw + 12, height: H }));
   defs.append(grad, clip);
@@ -3234,28 +3329,38 @@ function drawNight() {
       marks.append(mk("line", { x1: L, x2: W - R, y1: y(meds[k]), y2: y(meds[k]), class: "nmedl" }));
       svg.append(mk("text", { x: W - R, y: top - 8, "text-anchor": "end", class: "nmed" }, `медиана ${st.fmt(meds[k])}` + (W >= 560 ? ` · ${st.better}` : "")));
     }
-    // the line and the area under it, broken at the pauses
-    let d = "", area = "", seg = [], prev = null;
+    // the line and the area under it, broken at the pauses and where the
+    // object changes; one path of each per object
+    const paths = new Map(); // obj → {d, area}
+    let seg = [], prev = null, prevObj = null;
+    const P = o => paths.get(o) || (paths.set(o, { d: "", area: "" }), paths.get(o));
     const flush = () => {
-      if (seg.length > 1) area += `M${seg[0][0]},${bottom}` + seg.map(p => `L${p[0]},${p[1]}`).join("") + `L${seg[seg.length - 1][0]},${bottom}Z`;
+      if (seg.length > 1) P(prevObj).area += `M${seg[0][0]},${bottom}` + seg.map(p => `L${p[0]},${p[1]}`).join("") + `L${seg[seg.length - 1][0]},${bottom}Z`;
       seg = [];
     };
     for (const p of pts) {
-      const v = st.get(p.f);
+      const v = st.get(p.f), o = multi ? p.obj : "";
       if (v == null) { prev = null; flush(); continue; }
       const px = x(p.t).toFixed(1), py = y(v).toFixed(1);
-      if (prev == null || p.t - prev > brk) { flush(); d += `M${px},${py}`; } else d += `L${px},${py}`;
+      if (prev == null || p.t - prev > brk || o !== prevObj) { flush(); prevObj = o; P(o).d += `M${px},${py}`; } else P(o).d += `L${px},${py}`;
       seg.push([px, py]);
       prev = p.t;
     }
     flush();
-    marks.append(mk("path", { d: area, class: "narea", fill: "url(#nGrad)" }), mk("path", { d, class: "nline" }));
+    for (const [o, pa] of paths) {
+      marks.append(mk("path", { d: pa.area, class: "narea", fill: gradOf.get(o) || "url(#nGrad)" }));
+      const line = mk("path", { d: pa.d, class: "nline" });
+      if (multi) line.style.stroke = nightColor(o);
+      marks.append(line);
+    }
     const r = pts.length > 300 ? 2.5 : pts.length > 120 ? 3.5 : 4.5;
     for (const p of pts) {
       const v = st.get(p.f);
       if (v == null || p.t < t0 || p.t > t1) continue;
       const j = p.f.gone ? null : judge(p.f);
-      marks.append(mk("circle", { cx: x(p.t), cy: y(v), r, class: "npt" + (p.f.gone ? " gone" : j && j.bad ? " bad" : "") }));
+      const c = mk("circle", { cx: x(p.t), cy: y(v), r, class: "npt" + (multi ? " multi" : "") + (p.f.gone ? " gone" : j && j.bad ? " bad" : "") });
+      if (multi && !p.f.gone) c.style.fill = nightColor(p.obj);
+      marks.append(c);
     }
   });
   // time: round observatory times under the last strip
@@ -3321,7 +3426,7 @@ function nightTip(e) {
   const p = N.pts[N.hover], j = p.f.gone ? null : judge(p.f);
   const dl = el("dl", {});
   for (const [k, v] of nightValues(p.f)) dl.append(el("dt", { textContent: k }), el("dd", { textContent: v }));
-  tip.replaceChildren(el("div", { className: "t", textContent: hm(new Date(p.t)) + (p.f.gone ? " · удалён" : "") }),
+  tip.replaceChildren(el("div", { className: "t", textContent: hm(new Date(p.t)) + (nightSel.all ? " · " + (p.obj || "без имени") : "") + (p.f.gone ? " · удалён" : "") }),
     el("div", { className: "n", textContent: p.f.name }), dl);
   if (j && j.bad) tip.append(el("div", { className: "w", textContent: "⚠ " + j.why }));
   tip.hidden = false;
@@ -3405,7 +3510,9 @@ function nightSide() {
   prev.onclick = () => nightSelect(N.sel - 1);
   next.onclick = () => nightSelect(N.sel + 1);
   open.onclick = nightOpenFrame;
-  side.replaceChildren(pic,
+  side.replaceChildren(pic);
+  if (nightSel.all) side.append(el("div", { className: "nobj" }, el("i", { className: "lg", style: "background:" + nightColor(p.obj) }), p.obj || "без имени"));
+  side.append(
     el("div", {}, el("b", { textContent: hm(new Date(p.t)) }), el("span", { className: "muted", textContent: `  · кадр ${N.sel + 1} из ${N.pts.length}` + (f.gone ? " · удалён" : "") })),
     el("div", { className: "nname mono", textContent: f.name }),
     dl);
