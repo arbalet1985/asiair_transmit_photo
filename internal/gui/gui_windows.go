@@ -132,6 +132,7 @@ type window struct {
 	form                                                                 settingsForm
 
 	preview trayPreview // the frame being sent, over the tray icon
+	eta     etaSpeed    // the speed for the remaining time
 
 	tsNotified     string // login link already announced in the tray
 	updateNotified string // new version already announced in the tray
@@ -643,12 +644,20 @@ func (w *window) update() {
 	for _, u := range st.Uploads {
 		done += u.Done
 	}
+	left := ""
 	if st.TotalBytes > 0 {
 		w.totalBar.SetValue(int(done * 1000 / st.TotalBytes))
 		text := fmt.Sprintf("%s из %s (%d%%), %d из %d файлов", config.FormatBytes(done), config.FormatBytes(st.TotalBytes),
 			done*100/st.TotalBytes, st.DoneFiles, st.TotalFiles)
-		if left := st.TotalBytes - done; left > 0 && st.Uploading != "" && st.Speed > 0 {
-			text += ", осталось " + formatETA(float64(left)/st.Speed)
+		if rest := st.TotalBytes - done; rest > 0 {
+			left = "осталось " + config.FormatBytes(rest)
+			if st.Uploading != "" && st.Speed > 0 {
+				sec := float64(rest) / w.eta.add(st.Speed, time.Now())
+				left += ", " + formatETA(sec) + finishAt(sec, time.Now())
+			} else {
+				w.eta.reset()
+			}
+			text += ", " + left
 		}
 		setShort(w.lblTotal, text, maxStatus)
 	} else {
@@ -666,11 +675,11 @@ func (w *window) update() {
 	}
 	setShort(w.lblErr, errText, maxStatus)
 
-	state, tip := trayState(st, syncErr)
+	state, tip := trayState(st, syncErr, left)
 	w.setTray(state, tip)
 }
 
-func trayState(st protocol.AgentStatus, syncErr string) (string, string) {
+func trayState(st protocol.AgentStatus, syncErr, left string) (string, string) {
 	switch {
 	case st.Paused:
 		return StatePaused, fmt.Sprintf("ASIAIR Agent — %s, в очереди %d", pauseLabel(st), st.QueueFiles)
@@ -683,8 +692,11 @@ func trayState(st protocol.AgentStatus, syncErr string) (string, string) {
 		if st.UploadSize > 0 {
 			pct = int(st.UploadDone * 100 / st.UploadSize)
 		}
-		return StateUploading, fmt.Sprintf("ASIAIR Agent — передаётся %s (%d%%), в очереди %d",
-			filepath.Base(st.Uploading), pct, st.QueueFiles)
+		tip := fmt.Sprintf("ASIAIR Agent — передаётся %d%%, в очереди %d", pct, st.QueueFiles)
+		if left != "" {
+			tip += "\n" + left
+		}
+		return StateUploading, tip + "\n" + filepath.Base(st.Uploading)
 	}
 	return StateIdle, fmt.Sprintf("ASIAIR Agent — на связи, отправлено %d", st.SentFiles)
 }
