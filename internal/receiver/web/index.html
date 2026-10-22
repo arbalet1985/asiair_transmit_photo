@@ -4077,7 +4077,7 @@ function plAtlasOpen() {
         if (!t) return;
         t.ra = ra; t.dec = dec; t.angle = angle;
         if (PL.sel === i) { $("plRA").value = plFmtRA(ra); $("plDec").value = plFmtDec(dec); }
-        toast(`${t.name}: рамка ${plFmtRA(ra)} ${plFmtDec(dec)}, угол ${angle}°`);
+        toast(`${t.name}: рамка ${plFmtRA(ra)} ${plFmtDec(dec)}, угол ${Atlas.asiairAngle(angle)}° (как в ASIAIR)`);
         plChanged();
       },
       onSelect: i => plSelect(i),
@@ -4737,7 +4737,7 @@ async function plFromFrame(p) {
     PL.atlas.frame(i);
   }
   $("plAtlasBox").scrollIntoView({ behavior: "smooth", block: "start" });
-  toast(`${d.name}: центр и угол взяты из кадра` + (d.approx ? " — по наведению (кадр не решён, центр может отличаться)" : " — по решению кадра"));
+  toast(`${d.name}: центр и угол ${window.Atlas ? Atlas.asiairAngle(angle) + "° (как в ASIAIR) " : ""}взяты из кадра` + (d.approx ? " — по наведению (кадр не решён, центр может отличаться)" : " — по решению кадра"));
 }
 
 // plShotList: the objects already shot, to plan them again; a pick fills

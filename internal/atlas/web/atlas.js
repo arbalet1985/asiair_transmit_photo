@@ -35,6 +35,13 @@
     return [Math.cos(d) * Math.sin(da) / c / rad, (Math.cos(d0) * Math.sin(d) - Math.sin(d0) * Math.cos(d) * Math.cos(da)) / c / rad];
   }
 
+  // The angle kept with a target turns the top of its frame from north
+  // through east; ASIAIR tells the angle of a solved frame the other way
+  // round (atan2 of CD2_1 and CD1_1): 66° there is a top at 114° here. The
+  // fields show and take ASIAIR's angle, so the number is the one ASIAIR
+  // writes. The same turn both ways.
+  function asiairAngle(a) { return Math.round((((180 - (a || 0)) % 360 + 360) % 360) * 10) / 10; }
+
   // the frame w×h degrees around the centre, its top turned from north
   // through east by angle: n points along each side
   function frame(ra, dec, w, h, angle, n) {
@@ -110,8 +117,8 @@
       el("label", {}, "оптика", setupSel),
       el("label", {}, "фокус", fFocal, "мм"), el("label", {}, "×", fRed),
       el("label", {}, "пиксель", fPix, "мкм"), el("label", {}, "кадр", fW, "×", fH));
-    const angle = el("input", { type: "range", min: "0", max: "360", step: "0.5", value: "0", title: "Угол рамки: от севера через восток" });
-    const angleNum = num("Угол рамки, °", "0.5", "0");
+    const angle = el("input", { type: "range", min: "0", max: "360", step: "0.5", value: "0", title: "Угол камеры, как его пишет ASIAIR по решению кадра" });
+    const angleNum = num("Угол камеры, °, как в ASIAIR", "0.5", "0");
     angleNum.max = "360";
     const btnL = el("button", { type: "button", textContent: "−1°" }), btnR = el("button", { type: "button", textContent: "+1°" });
     const btnApply = el("button", { type: "button", textContent: "Применить", className: "primary" });
@@ -194,21 +201,22 @@
       st.framing = f;
       frameRow.hidden = !f;
       btnFrame.classList.toggle("on", !!f);
-      if (f) { angle.value = String(f.angle); angleNum.value = String(f.angle); }
+      if (f) { angle.value = angleNum.value = String(asiairAngle(f.angle)); }
       draw();
     }
+    // v: ASIAIR's angle
     const turn = v => {
       if (!st.framing) return;
-      v = ((+v % 360) + 360) % 360;
-      st.framing.angle = Math.round(v * 10) / 10;
-      angle.value = String(st.framing.angle);
-      if (document.activeElement !== angleNum) angleNum.value = String(st.framing.angle);
+      v = Math.round((((+v % 360) + 360) % 360) * 10) / 10;
+      st.framing.angle = asiairAngle(v);
+      angle.value = String(v);
+      if (document.activeElement !== angleNum) angleNum.value = String(v);
       draw();
     };
     angle.oninput = () => turn(angle.value);
     angleNum.onchange = () => turn(angleNum.value);
-    btnL.onclick = () => turn(st.framing.angle - 1);
-    btnR.onclick = () => turn(st.framing.angle + 1);
+    btnL.onclick = () => turn(asiairAngle(st.framing.angle) - 1);
+    btnR.onclick = () => turn(asiairAngle(st.framing.angle) + 1);
     btnFrame.onclick = () => {
       if (st.framing) { setFraming(null); return; }
       const t = st.targets[st.sel];
@@ -347,5 +355,5 @@
     };
   }
 
-  window.Atlas = { create, fov, frame, inFrame, fromPlane, toPlane };
+  window.Atlas = { create, fov, frame, inFrame, fromPlane, toPlane, asiairAngle };
 })();
