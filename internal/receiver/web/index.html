@@ -212,6 +212,9 @@
   #rail button { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: grid; place-items: center; }
   #rail button:hover { color: var(--text); background: var(--row); }
   #rail button.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #rail #railAgent span { width: 12px; height: 12px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
+  #rail #railAgent.on span { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+  #rail #railAgent.lost span { background: var(--muted); box-shadow: none; }
   #rail hr { width: 24px; margin: 3px auto; border: 0; border-top: 1px solid var(--border); }
   #rail svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   main { padding-right: 64px; }
@@ -1000,6 +1003,8 @@
 
 </main>
 <nav id="rail" aria-label="Блоки страницы">
+  <button id="railAgent" title="Агент не на связи" aria-label="Агент не на связи"><span></span></button>
+  <hr>
   <button data-view="" title="Все блоки"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg></button>
   <hr>
   <button data-view="infoWrap" title="Общая информация"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.1"/></svg></button>
@@ -1761,6 +1766,7 @@ function renderStatus() {
   const av = a && a.version ? (a.version === "dev" ? " (собран вручную)" : " v" + a.version) : "";
   $("agentBadge").textContent = state.agent_online ? "агент" + av + " на связи" : "агент не на связи";
   $("agentBadge").title = a && a.version ? "Версия агента: " + a.version : "";
+  railAgent(state.agent_online ? "on" : "", $("agentBadge").textContent);
   $("destDir").textContent = "Папка: " + state.dest_dir;
   // offline: the rows below are what the agent reported last time
   const everSeen = state.last_seen && !state.last_seen.startsWith("0001");
@@ -1955,6 +1961,7 @@ async function refresh() {
   } catch (e) {
     $("agentBadge").className = "badge off";
     $("agentBadge").textContent = "нет связи с приёмником";
+    railAgent("lost", "нет связи с приёмником");
   }
 }
 
@@ -4560,7 +4567,7 @@ plMaybeLoad();
 // ---- the rail on the right: only the chosen block of the page (none — all)
 function showView(v, save = true) {
   if (v && !$(v)) v = "";
-  for (const b of document.querySelectorAll("#rail button")) b.classList.toggle("on", b.dataset.view === v);
+  for (const b of document.querySelectorAll("#rail button[data-view]")) b.classList.toggle("on", b.dataset.view === v);
   for (const b of document.querySelectorAll("#rail button[data-view]:not([data-view=''])")) $(b.dataset.view).classList.toggle("railhide", !!v && b.dataset.view !== v);
   if (save) store.set("view", v);
   if (!v) return;
@@ -4574,8 +4581,16 @@ function showView(v, save = true) {
   // the charts of a block that was hidden drawn again at its width
   window.dispatchEvent(new Event("resize"));
 }
-for (const b of document.querySelectorAll("#rail button")) b.onclick = () => showView(b.dataset.view);
+// the dot of the agent on the rail: always in sight, a click opens the general information
+function railAgent(cls, text) {
+  const b = $("railAgent");
+  b.className = cls;
+  b.title = text[0].toUpperCase() + text.slice(1) + " — открыть общую информацию";
+  b.setAttribute("aria-label", text);
+}
+for (const b of document.querySelectorAll("#rail button[data-view]")) b.onclick = () => showView(b.dataset.view);
 showView(store.get("view", "") || "", false);
+$("railAgent").onclick = () => store.get("view", "") ? showView("infoWrap") : window.scrollTo(0, 0);
 loadFilters();
 for (const c of store.get("collapsed", [])) collapsed.add(c);
 // ---- the theme of this device (applied in <head> before the page is drawn)
