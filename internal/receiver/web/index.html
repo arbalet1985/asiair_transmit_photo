@@ -205,7 +205,18 @@
   #toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: .92; }
   /* opened remotely (phone): the settings of the home computer stay there */
-  body.remote #setupWrap { display: none; }
+  body.remote #setupWrap, body.remote #rail [data-view="setupWrap"] { display: none; }
+  /* the rail on the right: one block of the page at a time */
+  #rail { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 40; display: flex; flex-direction: column; gap: 2px;
+    padding: 6px 4px; background: var(--panel); border: 1px solid var(--border); border-right: 0; border-radius: 10px 0 0 10px; box-shadow: 0 2px 10px rgb(0 0 0 / 12%); }
+  #rail button { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+  #rail button:hover { color: var(--text); background: var(--row); }
+  #rail button.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #rail hr { width: 24px; margin: 3px auto; border: 0; border-top: 1px solid var(--border); }
+  #rail svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  main { padding-right: 64px; }
+  @media (max-width: 700px) { #rail button { width: 32px; height: 32px; } }
+  main > .railhide { display: none !important; }
   #logoutBtn { margin-left: auto; }
   .urls a { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
 
@@ -320,7 +331,7 @@
     header { padding: 10px 12px; gap: 6px 8px; }
     header h1 { font-size: 15px; flex-basis: 100%; }
     #destDir, #hdrVersion { display: none; }
-    main { padding: 10px 8px 24px; gap: 10px; }
+    main { padding: 10px 48px 24px 8px; gap: 10px; }
     .col { gap: 10px; }
     .panel { padding: 12px; border-radius: 10px; }
     .grid { grid-template-columns: 1fr; gap: 10px; }
@@ -548,7 +559,23 @@
   <section class="panel" id="plannerPanel">
     <h2 class="fold" id="plannerHead">Планировщик ночи</h2>
     <div class="fbody">
-      <div class="toolbar">
+      <canvas id="plSky" aria-label="Небо обсерватории"></canvas>
+      <div class="toolbar plbar">
+        <button id="plPlay" title="Анимация ночи: как телескоп переходит между объектами и ведёт их">▶</button>
+        <input type="range" id="plTime" min="0" max="600" value="0" aria-label="Время ночи">
+        <span id="plTimeLabel" class="mono"></span>
+        <select id="plSpeed" aria-label="Скорость анимации"><option value="5">5 мин/с</option><option value="15">15 мин/с</option><option value="30" selected>30 мин/с</option><option value="60">1 ч/с</option></select>
+        <label title="Где снимались полученные кадры (цвет — объект)"><input type="checkbox" id="plPoints" checked> кадры</label>
+        <label title="Править горизонт и закрытые зоны на рисунке"><input type="checkbox" id="plEdit"> правка неба</label>
+        <select id="plMode" hidden aria-label="Что делает касание"><option value="h">точки горизонта</option><option value="z">новая зона</option><option value="p">новый многоугольник</option><option value="d">удалить</option></select>
+        <button id="plGuess" title="Угадать горизонт и зоны заново по полученным кадрам; точки и зоны, поставленные или поправленные руками, остаются">Горизонт по кадрам</button>
+        <button id="plReset" title="Ровный горизонт на высоте «не ниже», без зон">Сбросить</button>
+      </div>
+      <div class="chart wx" id="plWx" hidden></div>
+      <div class="line muted" id="plWxInfo"></div>
+      <div class="line muted" id="plInfo"></div>
+      <div class="hint" id="plEditHint" hidden>Горизонт — жёлтая линия: тащите точки, касание вне точки добавляет новую. Закрытые зоны (провода) — красная штриховка: тащите зону, её угол или вершину; «новая зона» (или Shift) — протянуть прямоугольник; «новый многоугольник» (или Ctrl) — касаниями поставить вершины, замкнуть касанием первой вершины, двойным щелчком или Enter (Esc — отменить); «удалить» (или правая кнопка) — точку, вершину многоугольника или зону; касание бледной «возможной» зоны принимает её.</div>
+      <div class="toolbar" style="margin-top:14px">
         <label>ночь с <input type="date" id="plNight"></label>
         <label title="Во сколько начать съёмку по часам обсерватории: пусто — с начала ночи. Пригодится, когда начали позже плана — например пережидали облака">начать в <input type="time" id="plStart"></label>
         <button id="plStartNow" title="Поставить текущее время обсерватории и составить план с этого момента">сейчас</button>
@@ -582,22 +609,6 @@
           <label title="0 — Луна не мешает">до Луны не ближе <input type="number" id="plMoonSep" min="0" max="180" step="5" class="pln">°</label>
         </div>
       </details>
-      <canvas id="plSky" aria-label="Небо обсерватории"></canvas>
-      <div class="toolbar plbar">
-        <button id="plPlay" title="Анимация ночи: как телескоп переходит между объектами и ведёт их">▶</button>
-        <input type="range" id="plTime" min="0" max="600" value="0" aria-label="Время ночи">
-        <span id="plTimeLabel" class="mono"></span>
-        <select id="plSpeed" aria-label="Скорость анимации"><option value="5">5 мин/с</option><option value="15">15 мин/с</option><option value="30" selected>30 мин/с</option><option value="60">1 ч/с</option></select>
-        <label title="Где снимались полученные кадры (цвет — объект)"><input type="checkbox" id="plPoints" checked> кадры</label>
-        <label title="Править горизонт и закрытые зоны на рисунке"><input type="checkbox" id="plEdit"> правка неба</label>
-        <select id="plMode" hidden aria-label="Что делает касание"><option value="h">точки горизонта</option><option value="z">новая зона</option><option value="p">новый многоугольник</option><option value="d">удалить</option></select>
-        <button id="plGuess" title="Угадать горизонт и зоны заново по полученным кадрам; точки и зоны, поставленные или поправленные руками, остаются">Горизонт по кадрам</button>
-        <button id="plReset" title="Ровный горизонт на высоте «не ниже», без зон">Сбросить</button>
-      </div>
-      <div class="chart wx" id="plWx" hidden></div>
-      <div class="line muted" id="plWxInfo"></div>
-      <div class="line muted" id="plInfo"></div>
-      <div class="hint" id="plEditHint" hidden>Горизонт — жёлтая линия: тащите точки, касание вне точки добавляет новую. Закрытые зоны (провода) — красная штриховка: тащите зону, её угол или вершину; «новая зона» (или Shift) — протянуть прямоугольник; «новый многоугольник» (или Ctrl) — касаниями поставить вершины, замкнуть касанием первой вершины, двойным щелчком или Enter (Esc — отменить); «удалить» (или правая кнопка) — точку, вершину многоугольника или зону; касание бледной «возможной» зоны принимает её.</div>
       <h2 style="margin-top:14px">Объекты</h2>
       <div class="toolbar">
         <input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" style="width:12em">
@@ -988,6 +999,16 @@
   </section>
 
 </main>
+<nav id="rail" aria-label="Блоки страницы">
+  <button data-view="" title="Все блоки"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg></button>
+  <hr>
+  <button data-view="infoWrap" title="Общая информация"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.1"/></svg></button>
+  <button data-view="summaryPanel" title="Сводка по ночам"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 16.5v-5M12 16.5V6M17 16.5v-8"/></svg></button>
+  <button data-view="plannerPanel" title="Планировщик ночи"><svg viewBox="0 0 24 24"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5z"/><path d="M17 4v3M15.5 5.5h3"/></svg></button>
+  <button data-view="filesPanel" title="Файлы"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 16l-5-5-8.5 8"/></svg></button>
+  <button data-view="cmdPanel" title="Команды удаления"><svg viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10.5 11v5.5M13.5 11v5.5"/></svg></button>
+  <button data-view="setupWrap" title="Настройки"><svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg></button>
+</nav>
 <dialog id="viewer">
   <div class="vbar">
     <span class="title" id="vTitle"></span>
@@ -2529,6 +2550,7 @@ function showGroup(r) {
   $("fObject").value = r.object || "";
   $("fKind").value = r.kind;
   filtersChanged();
+  if (store.get("view", "")) showView("filesPanel");
   $("filesBar").scrollIntoView({ behavior: "smooth" });
 }
 async function openFolder(path) {
@@ -3608,13 +3630,20 @@ function plChanged() {
 async function plMakePlan() {
   if (!PL.st) return;
   plRead();
+  clearTimeout(PL.planH);
+  // only the answer to the newest request is shown: typing the start time
+  // asks again at each hour and minute, and an older answer coming last left
+  // the table on the old start
+  const seq = PL.planSeq = (PL.planSeq || 0) + 1;
+  let plan = null, err = "";
   try {
-    PL.plan = await post("/ui/api/plan", { night: $("plNight").value, start: $("plStart").value, state: PL.st });
-    PL.err = "";
+    plan = await post("/ui/api/plan", { night: $("plNight").value, start: $("plStart").value, state: PL.st });
   } catch (e) {
-    PL.plan = null;
-    PL.err = e.message;
+    err = e.message;
   }
+  if (seq !== PL.planSeq) return;
+  PL.plan = plan;
+  PL.err = err;
   const pl = PL.plan;
   if (pl) {
     if (!(PL.t >= pl.dusk && PL.t <= pl.dawn)) PL.t = pl.start || pl.dusk;
@@ -4396,6 +4425,7 @@ async function plFromFrame(p) {
     if (!r.ok) throw new Error((await r.text()).trim());
     d = await r.json();
   } catch (e) { toast("Кадр не перенесён в планировщик: " + e.message); return; }
+  if (store.get("view", "")) showView("plannerPanel");
   if ($("plannerPanel").classList.contains("folded")) $("plannerHead").click();
   if (!PL.loaded) await plLoad();
   if (!PL.st) { toast("Планировщик не загрузился"); return; }
@@ -4474,7 +4504,7 @@ $("plUpdate").onclick = () => {
 };
 
 // ---- the plan
-$("plMake").onclick = plMakePlan;
+$("plMake").onclick = () => plMakePlan();
 $("plCopy").onclick = async () => {
   const text = PL.plan && PL.plan.text;
   if (!text) return;
@@ -4527,6 +4557,25 @@ function plMaybeLoad() { if (!PL.loaded && !$("plannerPanel").classList.contains
 // the planner loads when its panel is open
 $("plannerHead").addEventListener("click", plMaybeLoad);
 plMaybeLoad();
+// ---- the rail on the right: only the chosen block of the page (none — all)
+function showView(v, save = true) {
+  if (v && !$(v)) v = "";
+  for (const b of document.querySelectorAll("#rail button")) b.classList.toggle("on", b.dataset.view === v);
+  for (const b of document.querySelectorAll("#rail button[data-view]:not([data-view=''])")) $(b.dataset.view).classList.toggle("railhide", !!v && b.dataset.view !== v);
+  if (save) store.set("view", v);
+  if (!v) return;
+  // the chosen block opened if it was folded
+  if (v === "infoWrap" && $("infoWrap").classList.contains("folded")) $("infoToggle").click();
+  else if (v === "setupWrap" && $("setupWrap").classList.contains("folded")) $("setupToggle").click();
+  else if (v === "cmdPanel" && !cmdF.open) $("cmdHead").click();
+  else { const h = $(v).querySelector(":scope > h2.fold"); if (h && $(v).classList.contains("folded")) h.click(); }
+  if (v === "summaryPanel" && state) renderSummary();
+  window.scrollTo(0, 0);
+  // the charts of a block that was hidden drawn again at its width
+  window.dispatchEvent(new Event("resize"));
+}
+for (const b of document.querySelectorAll("#rail button")) b.onclick = () => showView(b.dataset.view);
+showView(store.get("view", "") || "", false);
 loadFilters();
 for (const c of store.get("collapsed", [])) collapsed.add(c);
 // ---- the theme of this device (applied in <head> before the page is drawn)
