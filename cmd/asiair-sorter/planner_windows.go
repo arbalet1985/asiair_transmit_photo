@@ -63,6 +63,7 @@ type plannerUI struct {
 	flipBeforeEdit                              *walk.NumberEdit
 	blockEdit, moonSepEdit                      *walk.NumberEdit
 	focusSwitchBox, flipBox, pointsBox          *walk.CheckBox
+	focusFilterBox                              *walk.CheckBox
 	onceBox, onlyShootBox                       *walk.CheckBox
 
 	startEdit                             *walk.LineEdit
@@ -208,6 +209,8 @@ func (p *plannerUI) page() TabPage {
 				Label{Text: "каждые"},
 				num(&p.focusEveryEdit, prm.RefocusEveryMin, 0, 0, 600, " мин", "Как часто перефокусироваться (0 — не перефокусироваться)"),
 				CheckBox{AssignTo: &p.focusSwitchBox, Text: "и после перехода", Checked: prm.RefocusAfterSwitch, OnCheckedChanged: changed},
+				CheckBox{AssignTo: &p.focusFilterBox, Text: "и после смены фильтра", Checked: prm.RefocusAfterFilter, OnCheckedChanged: changed,
+					ToolTipText: "Автофокус, когда следующий объект снимается с другим фильтром. Объект без фильтра смены не вызывает"},
 				HSpacer{},
 			}},
 			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
@@ -372,6 +375,7 @@ func (p *plannerUI) params() planner.Params {
 		RefocusEveryMin:    p.focusEveryEdit.Value(),
 		RefocusMin:         p.focusEdit.Value(),
 		RefocusAfterSwitch: p.focusSwitchBox.Checked(),
+		RefocusAfterFilter: p.focusFilterBox.Checked(),
 		DitherEvery:        int(p.ditherEveryEdit.Value()),
 		DitherSec:          p.ditherEdit.Value(),
 		DownloadSec:        p.downloadEdit.Value(),

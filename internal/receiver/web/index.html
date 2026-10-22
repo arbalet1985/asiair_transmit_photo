@@ -680,6 +680,7 @@
           <label class="fld" title="Сколько длится автофокус"><span>Фокусировка</span><div class="fin"><input type="number" id="plFocus" min="0" max="30" step="0.5" class="pln"><i>мин</i></div></label>
           <label class="fld" title="0 — не перефокусироваться"><span>Фокус каждые</span><div class="fin"><input type="number" id="plFocusEvery" min="0" max="600" step="5" class="pln"><i>мин</i></div></label>
           <label class="fld chk"><input type="checkbox" id="plFocusSwitch"> фокус и после перехода</label>
+          <label class="fld chk" title="Автофокус, когда следующий объект снимается с другим фильтром (поле «Фильтр» у объектов). Объект без фильтра смены не вызывает"><input type="checkbox" id="plFocusFilter"> фокус после смены фильтра</label>
         </div>
         <div class="plsub">Дизеринг и кадры</div>
         <div class="plform">
@@ -3924,7 +3925,7 @@ $("infoToggle").onclick = () => {
 const PL = { st: null, guess: null, objects: [], tzGuess: 0, plan: null, t: 0, playing: false, found: [], sel: -1,
   drag: null, saveH: 0, planH: 0, loaded: false, loading: false, err: "" };
 const plParams = [ // field, key of the parameters, kind
-  ["plSwitch", "switch_min"], ["plFocus", "refocus_min"], ["plFocusEvery", "refocus_every"], ["plFocusSwitch", "refocus_switch", "bool"],
+  ["plSwitch", "switch_min"], ["plFocus", "refocus_min"], ["plFocusEvery", "refocus_every"], ["plFocusSwitch", "refocus_switch", "bool"], ["plFocusFilter", "refocus_filter", "bool"],
   ["plDither", "dither_sec"], ["plDitherEvery", "dither_every", "int"], ["plDownload", "download_sec"], ["plFlip", "flip", "bool"],
   ["plFlipBefore", "flip_before"], ["plFlipAfter", "flip_after"], ["plFlipMin", "flip_min"], ["plBlock", "min_block"], ["plMoonSep", "moon_sep"],
   ["plOnce", "repeat", "notbool"], // checked = do not come back to a target
