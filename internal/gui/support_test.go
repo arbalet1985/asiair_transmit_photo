@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
@@ -70,10 +71,26 @@ func TestShorten(t *testing.T) {
 }
 
 func TestFormatETA(t *testing.T) {
-	for sec, want := range map[float64]string{0: "", 41: "~41 с", 720: "~12 мин", 5520: "~1 ч 32 мин"} {
+	for sec, want := range map[float64]string{0: "", 41: "меньше минуты", 720: "~12 мин", 5520: "~1 ч 32 мин",
+		14 * 3600: "~14 ч", 3 * 86400: "~3 дн.", 2e7: "больше недели"} {
 		if got := formatETA(sec); got != want {
 			t.Errorf("formatETA(%v) = %q, want %q", sec, got, want)
 		}
+	}
+}
+
+func TestETASpeed(t *testing.T) {
+	var e etaSpeed
+	t0 := time.Now()
+	if got := e.add(1000, t0); got != 1000 {
+		t.Fatalf("first = %v", got)
+	}
+	// a drop for a second barely moves it
+	if got := e.add(1, t0.Add(time.Second)); got < 950 {
+		t.Fatalf("after a drop = %v", got)
+	}
+	if finishAt(30, t0) != "" || finishAt(30*3600, t0) != "" || finishAt(3600, t0) == "" {
+		t.Fatal("finishAt")
 	}
 }
 

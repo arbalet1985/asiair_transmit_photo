@@ -1406,14 +1406,28 @@ function statusBadge(f) {
   return badge("gray", f.status || "—");
 }
 const fmtClock = t => (!t || t.startsWith("0001")) ? "—" : new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// a remaining time; at a very low speed "больше недели" rather than
+// thousands of hours (as the agent writes it)
 function fmtDur(sec) {
-  if (!sec || !isFinite(sec)) return "";
-  sec = Math.round(sec);
-  if (sec < 60) return `~${sec} с`;
+  if (!(sec > 0)) return "";
+  if (!isFinite(sec)) return "больше недели";
+  if (sec < 60) return "меньше минуты";
   const m = Math.round(sec / 60);
   if (m < 60) return `~${m} мин`;
-  const h = Math.floor(m / 60);
-  return `~${h} ч ${m % 60} мин`;
+  if (m < 600) return `~${Math.floor(m / 60)} ч ${m % 60} мин`;
+  if (m < 48 * 60) return `~${Math.round(m / 60)} ч`;
+  if (m <= 7 * 24 * 60) return `~${Math.round(m / (24 * 60))} дн.`;
+  return "больше недели";
+}
+// the remaining time of all the files at the speed smoothed over about a
+// minute, so that a short drop of the speed does not turn it into days
+let etaSpeed = 0, etaAt = 0;
+function smoothEta(t) {
+  if (!(t.eta_seconds > 0) || !(t.remaining_bytes > 0)) { etaSpeed = 0; return 0; }
+  const sp = t.remaining_bytes / t.eta_seconds, now = Date.now(), dt = (now - etaAt) / 1e3;
+  etaSpeed = !etaSpeed || dt > 120 || dt < 0 ? sp : etaSpeed + (sp - etaSpeed) * Math.min(1, dt / 60);
+  etaAt = now;
+  return t.remaining_bytes / etaSpeed;
 }
 
 // Sorting of the file list: by a column within every folder; the folders
@@ -1801,16 +1815,17 @@ function renderStatus() {
   $("pauseNow").textContent = pn;
   const t = state.totals || {};
   const pct = t.bytes ? 100 * t.done_bytes / t.bytes : 0;
+  const eta = smoothEta(t);
   $("tBar").style.width = pct.toFixed(1) + "%";
   if (t.files) {
     $("tLine").textContent = `Получено ${fmtBytes(t.done_bytes)} из ${fmtBytes(t.bytes)} (${Math.floor(pct)}%) · ${t.done_files} из ${t.files} файлов` +
-      (t.remaining_bytes > 0 ? ` · осталось ${fmtBytes(t.remaining_bytes)}` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "") : " · всё получено");
+      (t.remaining_bytes > 0 ? ` · осталось ${fmtBytes(t.remaining_bytes)}` + (eta ? `, ${fmtDur(eta)}` : "") : " · всё получено");
   } else {
     $("tLine").textContent = state.inventory_time && !state.inventory_time.startsWith("0001") ? "на ASIAIR нет файлов для передачи" : "список файлов ASIAIR ещё не получен от агента";
   }
   $("tErr").textContent = t.failed ? `ждут повтора после ошибки: ${t.failed} (агент повторит сам; фильтр «С ошибками» покажет какие)` : "";
   $("hdrProgress").hidden = !t.files || t.remaining_bytes <= 0;
-  $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (t.eta_seconds ? `, ${fmtDur(t.eta_seconds)}` : "");
+  $("hdrProgress").textContent = `передано ${Math.floor(pct)}%` + (eta ? `, ${fmtDur(eta)}` : "");
   renderRate();
   renderBlock();
   renderSpeedTest();

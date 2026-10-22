@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 )
@@ -226,21 +227,58 @@ func ShortenTail(s string, n int) string {
 	return "…" + string(r[len(r)-n+1:])
 }
 
-// formatETA renders a remaining time like "~41 с", "~12 мин", "~1 ч 32 мин".
+// formatETA renders a remaining time like "~12 мин", "~1 ч 32 мин", "~14 ч",
+// "~3 дн."; at a very low speed "больше недели" rather than thousands of
+// hours.
 func formatETA(sec float64) string {
-	if sec <= 0 || sec != sec {
+	if sec <= 0 || math.IsNaN(sec) {
 		return ""
 	}
-	s := int(sec + 0.5)
-	if s < 60 {
-		return fmt.Sprintf("~%d с", s)
+	if sec < 60 {
+		return "меньше минуты"
 	}
-	m := (s + 30) / 60
-	if m < 60 {
+	m := int(sec/60 + 0.5)
+	switch {
+	case m < 60:
 		return fmt.Sprintf("~%d мин", m)
+	case m < 10*60:
+		return fmt.Sprintf("~%d ч %d мин", m/60, m%60)
+	case m < 48*60:
+		return fmt.Sprintf("~%d ч", (m+30)/60)
+	case m <= 7*24*60:
+		return fmt.Sprintf("~%d дн.", (m+12*60)/(24*60))
 	}
-	return fmt.Sprintf("~%d ч %d мин", m/60, m%60)
+	return "больше недели"
 }
+
+// finishAt: when the transfer ends on this computer's clock, " (до 03:40)",
+// or "" when it is too far to be worth a time.
+func finishAt(sec float64, now time.Time) string {
+	if sec < 60 || sec > 20*3600 || math.IsNaN(sec) {
+		return ""
+	}
+	return " (до " + now.Add(time.Duration(sec*float64(time.Second))).Format("15:04") + ")"
+}
+
+// etaSpeed: the speed smoothed over about a minute for the remaining time,
+// so that a short drop of the speed does not turn it into days.
+type etaSpeed struct {
+	speed float64
+	at    time.Time
+}
+
+func (e *etaSpeed) add(speed float64, now time.Time) float64 {
+	dt := now.Sub(e.at).Seconds()
+	if e.speed <= 0 || dt > 120 || dt < 0 {
+		e.speed = speed
+	} else {
+		e.speed += (speed - e.speed) * math.Min(1, dt/60)
+	}
+	e.at = now
+	return e.speed
+}
+
+func (e *etaSpeed) reset() { e.speed = 0 }
 
 // TwoLines splits a long fingerprint "AB:CD:…" in the middle so that a
 // message box does not cut it.
