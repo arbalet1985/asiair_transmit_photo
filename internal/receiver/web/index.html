@@ -268,7 +268,61 @@
   .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
   .chart .empty { fill: var(--muted); font-size: 13px; }
   .chart svg { touch-action: pan-y; cursor: crosshair; user-select: none; -webkit-user-select: none; }
-  .chart.night { height: auto; }
+  details.sumabout { margin-top: 8px; }
+  details.sumabout > summary, details.nabout > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  /* the night of an object: a dialog with the charts and the frame */
+  #nightDlg { width: min(1320px, calc(100vw - 32px)); max-width: none; height: min(900px, calc(100vh - 32px)); max-height: none; padding: 0; overflow: hidden; }
+  #nightDlg[open] { display: flex; flex-direction: column; }
+  .nhead { display: flex; gap: 10px 16px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .ntitles { display: flex; flex-direction: column; flex: 1 1 260px; min-width: 0; }
+  .ntitles b { font-size: 15px; }
+  .ntitles span { font-size: 12px; }
+  .nlegend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .nlegend span { display: inline-flex; align-items: center; gap: 5px; }
+  .lg { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--accent); }
+  .lg.bad { background: var(--warn); }
+  .lg.gone { background: none; border: 1.5px solid var(--muted); }
+  .nclose { border: 0; background: transparent; font-size: 18px; padding: 2px 8px; }
+  .nbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
+  .nplot { position: relative; overflow-y: auto; padding: 8px 14px 14px; }
+  .nside { border-left: 1px solid var(--border); padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; background: color-mix(in srgb, var(--bg) 50%, var(--panel)); }
+  .nchart svg { display: block; width: 100%; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: crosshair; }
+  .nchart .grid line { stroke: var(--border); stroke-width: 1; }
+  .nchart .axis text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .nchart .ntitle { fill: var(--text); font-size: 12px; font-weight: 600; }
+  .nchart .nmed { fill: var(--muted); font-size: 11px; }
+  .nchart .nmedl { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 4; opacity: .8; }
+  .nchart .nline { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .nchart .narea { stroke: none; }
+  .nchart .npt { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+  .nchart .npt.bad { fill: var(--warn); }
+  .nchart .npt.gone { fill: var(--panel); stroke: var(--muted); stroke-width: 1.5; }
+  .nchart .nhov { fill: none; stroke: var(--text); stroke-width: 2; pointer-events: none; }
+  .nchart .ncross { stroke: var(--muted); stroke-width: 1; pointer-events: none; }
+  .nchart .nsel { stroke: var(--accent); stroke-width: 2; pointer-events: none; }
+  .nchart .nselpt { fill: none; stroke: var(--accent); stroke-width: 2.5; pointer-events: none; }
+  .nchart .nbrush { fill: color-mix(in srgb, var(--accent) 16%, transparent); stroke: var(--accent); stroke-dasharray: 3 3; }
+  .ntip { position: absolute; z-index: 2; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 18%); min-width: 170px; max-width: 260px; }
+  .ntip .t { font-weight: 600; margin-bottom: 4px; }
+  .ntip .n { color: var(--muted); overflow-wrap: anywhere; margin-bottom: 4px; }
+  .ntip dl, .nside dl { display: grid; grid-template-columns: auto auto; gap: 2px 12px; margin: 0; }
+  .ntip dt, .nside dt { color: var(--muted); }
+  .ntip dd, .nside dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .ntip .w, .nside .w { color: var(--warn); margin-top: 4px; }
+  .nimg { position: relative; aspect-ratio: 3 / 2; border-radius: 8px; overflow: hidden; background: #0b0d12; display: grid; place-items: center; color: #8a93a3; font-size: 12px; text-align: center; }
+  .nimg img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+  .nimg span { position: absolute; padding: 0 12px; }
+  .nside .nname { font-size: 12px; color: var(--muted); }
+  .nside .nnav { display: flex; gap: 6px; }
+  .nside .nnav button:last-child { flex: 1; }
+  .nside dd small { color: var(--muted); margin-left: 6px; }
+  @media (max-width: 900px) {
+    #nightDlg { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: 0; }
+    .nbody { grid-template-columns: 1fr; overflow-y: auto; }
+    .nplot { overflow: visible; }
+    .nside { border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
+  }
   .chart.wx { height: 46px; margin-top: 2px; }
   .chart.wx svg { cursor: default; }
   .chart .wxbar { fill: var(--muted); }
@@ -276,12 +330,6 @@
   .chart .wxnow { stroke: var(--text); stroke-width: 2; }
   .chart .wxlight { fill: var(--text); font-size: 11px; }
   .chart .wxdark { fill: var(--panel); font-size: 11px; }
-  .chart .nline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; opacity: .7; }
-  .chart .npt { fill: var(--accent); cursor: pointer; }
-  .chart .npt.bad { fill: var(--warn); }
-  .chart .npt.gone { fill: none; stroke: var(--muted); stroke-width: 1.2; cursor: default; }
-  .chart .ntitle { fill: var(--text); font-size: 12px; font-weight: 600; }
-  .chart .nband { fill: color-mix(in srgb, var(--warn) 12%, transparent); }
   td.chartbtn button { padding: 0 6px; }
   .chart .sel { fill: color-mix(in srgb, var(--accent) 18%, transparent); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; }
   .chart .limitnote { fill: var(--muted); font-size: 11px; }
@@ -549,13 +597,11 @@
         <thead><tr><th>Ночь</th><th>Объект</th><th>Тип</th><th>Кадров</th><th>Выдержка</th><th>Суммарно</th><th>Луна</th><th>HFR</th><th>Получено</th><th></th></tr></thead>
         <tbody id="summaryBody"></tbody>
       </table></div>
-      <div id="nightBox" hidden>
-        <div class="toolbar"><b id="nightTitle"></b><span class="spacer"></span><button id="nightClose" title="Закрыть графики">✕</button></div>
-        <div class="chart night" id="nightChart"></div>
-        <div class="hint">Каждая точка — кадр, по времени съёмки (часы обсерватории); щелчок открывает кадр. Оранжевые — кадры с ⚠, серые кружки — уже удалённые кадры (их оценка сохраняется, чтобы было видно, как прошла ночь). <b>Облака и дымка</b>: число звёзд проваливается, фон часто растёт. <b>Роса</b>: HFR медленно растёт, звёзд всё меньше. <b>Фокус уплыл</b> (остыл телескоп): HFR растёт ступенькой или плавно, после автофокуса падает. <b>Ветер и гидирование</b>: округлость падает на отдельных кадрах. <b>Луна, рассвет, засветка</b>: фон растёт, звёзд меньше. Округлость — короткая ось звезды к длинной, как в Siril: 1 — круглые, ниже 0,8 — заметно вытянуты.</div>
-      </div>
-      <div class="line" id="summaryTotals"></div>
-      <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
+      <details class="sumabout">
+        <summary>Итоги по объектам и как считается сводка</summary>
+        <div class="line" id="summaryTotals"></div>
+        <div class="hint">Считается по именам файлов ASIAIR (<b>Light_M31_300.0s_…_20260926-221000_….fit</b>): тип кадра, объект, выдержка, время съёмки. Ночь — с полудня до полудня по времени обсерватории. Луна — освещённость и наибольшая высота над горизонтом за время съёмки Light-кадров; считается по точному времени файла, так что часовые пояса не влияют. Непередаваемые файлы (миниатюры и т. п.) не учитываются.</div>
+      </details>
     </div>
   </section>
 
@@ -1014,6 +1060,28 @@
   <button data-view="cmdPanel" title="Команды удаления"><svg viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10.5 11v5.5M13.5 11v5.5"/></svg></button>
   <button data-view="setupWrap" title="Настройки"><svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg></button>
 </nav>
+<dialog id="nightDlg" aria-labelledby="nightTitle">
+  <div class="nhead">
+    <div class="ntitles"><b id="nightTitle"></b><span class="muted" id="nightSub"></span></div>
+    <div class="nlegend" aria-label="Обозначения">
+      <span><i class="lg ok"></i>кадр</span><span><i class="lg bad"></i>⚠ с замечанием</span><span><i class="lg gone"></i>удалён</span>
+    </div>
+    <button id="nightZoomReset" hidden title="Показать всю ночь">Вся ночь</button>
+    <button id="nightClose" class="nclose" title="Закрыть (Esc)" aria-label="Закрыть">✕</button>
+  </div>
+  <div class="nbody">
+    <div class="nplot">
+      <div class="nchart" id="nightChart"></div>
+      <div class="ntip" id="nightTip" hidden></div>
+      <div class="hint">Наведите на график — значения кадра; щелчок — кадр справа; ← → — соседние кадры, Enter — открыть; протяните по графику — увеличить участок, двойной щелчок — вся ночь.</div>
+      <details class="nabout">
+        <summary>Как читать графики</summary>
+        <div class="hint">Каждая точка — кадр, по времени съёмки (часы обсерватории); щелчок показывает кадр. Оранжевые — кадры с ⚠, серые кружки — уже удалённые кадры (их оценка сохраняется, чтобы было видно, как прошла ночь). <b>Облака и дымка</b>: число звёзд проваливается, фон часто растёт. <b>Роса</b>: HFR медленно растёт, звёзд всё меньше. <b>Фокус уплыл</b> (остыл телескоп): HFR растёт ступенькой или плавно, после автофокуса падает. <b>Ветер и гидирование</b>: округлость падает на отдельных кадрах. <b>Луна, рассвет, засветка</b>: фон растёт, звёзд меньше. Округлость — короткая ось звезды к длинной, как в Siril: 1 — круглые, ниже 0,8 — заметно вытянуты.</div>
+      </details>
+    </div>
+    <aside class="nside" id="nightSide"></aside>
+  </div>
+</dialog>
 <dialog id="viewer">
   <div class="vbar">
     <span class="title" id="vTitle"></span>
@@ -3027,7 +3095,7 @@ function renderSummary() {
     const cb = el("td", { className: "chartbtn" });
     if (r.kind === "light" && (r.q ? r.q.length : 0) + (r.del || 0) >= 2) {
       const b = el("button", { textContent: "📈", title: "Графики ночи: HFR, звёзды, фон, округлость звёзд по времени" + (r.del ? "; удалённые кадры — серыми кружками" : "") });
-      b.onclick = e => { e.stopPropagation(); nightSel = { night: r.night.key, object: r.object, label: r.night.label }; drawNight(); };
+      b.onclick = e => { e.stopPropagation(); openNight({ night: r.night.key, object: r.object, label: r.night.label }); };
       cb.append(b);
     }
     tr.append(cb);
@@ -3059,9 +3127,37 @@ async function loadGone() {
   } catch (e) { /* tried again with the next state */ } finally { goneLoading = false; }
 }
 
-// ---------- the night of an object, frame by frame ----------
+// ---------- the night of an object, frame by frame: a dialog with the
+// charts of the frames on the left and the frame chosen on the right ----------
 let nightSel = null; // {night, object, label}
-$("nightClose").onclick = () => { nightSel = null; drawNight(); };
+// N: what the dialog shows — the frames, the part of the night zoomed in,
+// the frame under the pointer and the frame chosen
+const N = { pts: [], view: null, hover: -1, sel: -1, geo: null, brush: null };
+function openNight(sel) {
+  nightSel = sel;
+  N.view = null; N.hover = -1; N.sel = -1;
+  $("nightDlg").showModal();
+  drawNight();
+  const pts = N.pts;
+  // the last frame still here chosen at once: the picture is there to see
+  for (let k = pts.length - 1; k >= 0; k--) if (!pts[k].f.gone) { nightSelect(k); break; }
+  if (N.sel < 0 && pts.length) nightSelect(pts.length - 1);
+}
+$("nightClose").onclick = () => $("nightDlg").close();
+$("nightDlg").addEventListener("close", () => { nightSel = null; $("nightTip").hidden = true; });
+$("nightZoomReset").onclick = () => { N.view = null; drawNight(); };
+$("nightDlg").addEventListener("keydown", e => {
+  if (e.target.closest("input, select, textarea")) return;
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    nightSelect(Math.min(Math.max((N.sel < 0 ? 0 : N.sel) + (e.key === "ArrowLeft" ? -1 : 1), 0), N.pts.length - 1), true);
+  } else if (e.key === "Enter" && N.sel >= 0 && !e.target.closest("button")) {
+    e.preventDefault();
+    nightOpenFrame();
+  }
+});
+window.addEventListener("resize", () => { if ($("nightDlg").open) drawNight(); });
+
 // the measured light frames of the night and object chosen, by time
 function nightFrames() {
   if (!nightSel) return [];
@@ -3074,74 +3170,247 @@ function nightFrames() {
   }
   return out.sort((a, b) => a.t - b.t);
 }
+const nightStrips = [
+  { name: "HFR", unit: "px", get: f => f.stars > 0 ? f.hfr : null, fmt: v => v.toFixed(2), better: "ниже — резче" },
+  { name: "Звёзд", unit: "", get: f => f.stars, fmt: v => String(Math.round(v)), better: "больше — прозрачнее" },
+  { name: "Фон", unit: "ADU", get: f => f.bg || null, fmt: v => String(Math.round(v)), better: "ниже — темнее небо" },
+  { name: "Округлость", unit: "", get: f => f.round || null, fmt: v => v.toFixed(2), lo: 0.5, hi: 1, better: "ближе к 1 — круглее" },
+];
+const nightMedians = () => nightStrips.map(st => median(N.pts.map(p => st.get(p.f)).filter(v => v != null && isFinite(v))));
+
 function drawNight() {
-  const pts = nightFrames(), box = $("nightBox");
-  box.hidden = !nightSel || pts.length < 2;
-  if (box.hidden) return;
-  const del = pts.filter(p => p.f.gone).length;
-  $("nightTitle").textContent = `${nightSel.object || "без имени"} — ночь ${nightSel.label}: ${pts.length} кадр.` + (del ? `, из них удалено ${del}` : "");
-  const chart = $("nightChart"), W = chart.clientWidth || 600;
-  const strips = [
-    { name: "HFR, px", get: f => f.stars > 0 ? f.hfr : null, fmt: v => v.toFixed(2) },
-    { name: "Звёзд", get: f => f.stars, fmt: v => String(Math.round(v)) },
-    { name: "Фон, ADU", get: f => f.bg || null, fmt: v => String(Math.round(v)) },
-    { name: "Округлость", get: f => f.round || null, fmt: v => v.toFixed(2), lo: 0.5, hi: 1 },
-  ];
-  const L = 56, R = 10, SH = 86, GAP = 22, T = 16, B = 22;
-  const H = T + strips.length * (SH + GAP) - GAP + B, pw = W - L - R;
-  const t0 = pts[0].t, t1 = pts[pts.length - 1].t, span = Math.max(t1 - t0, 60e3);
+  const dlg = $("nightDlg");
+  if (!dlg.open) return;
+  const pts = N.pts = nightFrames();
+  if (pts.length < 1) { $("nightChart").replaceChildren(el("div", { className: "muted", textContent: "Кадров этой ночи с оценкой нет." })); $("nightSide").replaceChildren(); return; }
+  if (N.sel >= pts.length) N.sel = pts.length - 1;
+  const del = pts.filter(p => p.f.gone).length, bad = pts.filter(p => !p.f.gone && (judge(p.f) || {}).bad).length;
+  const first = pts[0].t, last = pts[pts.length - 1].t;
+  $("nightTitle").textContent = `${nightSel.object || "без имени"} — ночь ${nightSel.label}`;
+  $("nightSub").textContent = `${pts.length} кадр. · ${hm(new Date(first))}–${hm(new Date(last))}` +
+    (bad ? ` · ⚠ ${bad}` : "") + (del ? ` · удалено ${del}` : "");
+  $("nightZoomReset").hidden = !N.view;
+
+  const chart = $("nightChart"), W = Math.max(chart.clientWidth || 600, 280);
+  const L = 52, R = 12, SH = W < 500 ? 92 : 118, GAP = 34, T = 22, B = 24;
+  const H = T + nightStrips.length * (SH + GAP) - GAP + B, pw = W - L - R;
+  const full = Math.max(last - first, 60e3), pad0 = full * 0.015;
+  const t0 = N.view ? N.view[0] : first - pad0, t1 = N.view ? N.view[1] : last + pad0, span = t1 - t0;
   const x = t => L + (t - t0) / span * pw;
   const ns = "http://www.w3.org/2000/svg";
   const mk = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
-  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Графики ночи по кадрам" });
-  svg.style.height = H + "px";
-  chart.style.height = H + "px";
-  const grid = mk("g", { class: "grid" }), axis = mk("g", { class: "axis" });
-  svg.append(grid, axis);
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": "Графики ночи по кадрам: HFR, звёзды, фон, округлость" });
+  const defs = mk("defs", {});
+  const grad = mk("linearGradient", { id: "nGrad", x1: 0, x2: 0, y1: 0, y2: 1 });
+  grad.append(mk("stop", { offset: "0%", style: "stop-color: var(--accent); stop-opacity: .22" }), mk("stop", { offset: "100%", style: "stop-color: var(--accent); stop-opacity: 0" }));
+  const clip = mk("clipPath", { id: "nClip" });
+  clip.append(mk("rect", { x: L - 6, y: 0, width: pw + 12, height: H }));
+  defs.append(grad, clip);
+  const grid = mk("g", { class: "grid" }), axis = mk("g", { class: "axis" }), marks = mk("g", { "clip-path": "url(#nClip)" });
+  svg.append(defs, grid, axis, marks);
   // a break in the line where frames pause (a meridian flip, clouds)
   const gaps = pts.slice(1).map((p, i) => p.t - pts[i].t).sort((a, b) => a - b);
   const brk = 3 * (gaps[gaps.length >> 1] || 60e3);
-  const files = pts.map(p => p.f).filter(f => !f.gone); // the viewer goes through the frames still here
-  strips.forEach((st, k) => {
-    const top = T + k * (SH + GAP), vals = pts.map(p => st.get(p.f)).filter(v => v != null && isFinite(v));
-    if (!vals.length) return;
-    let lo = st.lo != null ? Math.min(st.lo, ...vals) : Math.min(...vals), hi = st.hi != null ? st.hi : Math.max(...vals);
+  const meds = nightMedians(), ys = [];
+  nightStrips.forEach((st, k) => {
+    const top = T + k * (SH + GAP), bottom = top + SH;
+    const vals = pts.filter(p => p.t >= t0 && p.t <= t1).map(p => st.get(p.f)).filter(v => v != null && isFinite(v));
+    svg.append(mk("text", { x: L, y: top - 8, class: "ntitle" }, st.name + (st.unit ? `, ${st.unit}` : "")));
+    if (!vals.length) { ys.push(null); return; }
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (st.lo != null) lo = Math.min(st.lo, lo);
+    if (st.hi != null) hi = Math.max(st.hi, hi);
     if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
-    const pad = (hi - lo) * 0.08; lo -= st.lo != null ? 0 : pad; hi += st.hi != null ? 0 : pad;
-    const y = v => top + SH - (v - lo) / (hi - lo) * SH;
-    svg.append(mk("text", { x: L, y: top - 4, class: "ntitle" }, st.name));
-    for (const v of [lo + (hi - lo) * 0.1, (lo + hi) / 2, hi - (hi - lo) * 0.1]) {
+    const step = niceStep(hi - lo, 3);
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    if (st.lo != null) lo = Math.max(lo, 0); if (st.hi != null) hi = Math.min(Math.max(hi, st.hi), 1);
+    const y = v => bottom - (v - lo) / (hi - lo) * SH;
+    ys.push(y);
+    for (let v = lo; v <= hi + step * 1e-6; v += step) {
       grid.append(mk("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }));
-      axis.append(mk("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, st.fmt(v)));
+      axis.append(mk("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, st.fmt(v)));
     }
-    let d = "", prev = null;
+    if (meds[k]) {
+      marks.append(mk("line", { x1: L, x2: W - R, y1: y(meds[k]), y2: y(meds[k]), class: "nmedl" }));
+      svg.append(mk("text", { x: W - R, y: top - 8, "text-anchor": "end", class: "nmed" }, `медиана ${st.fmt(meds[k])}` + (W >= 560 ? ` · ${st.better}` : "")));
+    }
+    // the line and the area under it, broken at the pauses
+    let d = "", area = "", seg = [], prev = null;
+    const flush = () => {
+      if (seg.length > 1) area += `M${seg[0][0]},${bottom}` + seg.map(p => `L${p[0]},${p[1]}`).join("") + `L${seg[seg.length - 1][0]},${bottom}Z`;
+      seg = [];
+    };
     for (const p of pts) {
       const v = st.get(p.f);
-      if (v == null) { prev = null; continue; }
-      d += `${prev == null || p.t - prev > brk ? "M" : "L"}${x(p.t).toFixed(1)},${y(v).toFixed(1)}`;
+      if (v == null) { prev = null; flush(); continue; }
+      const px = x(p.t).toFixed(1), py = y(v).toFixed(1);
+      if (prev == null || p.t - prev > brk) { flush(); d += `M${px},${py}`; } else d += `L${px},${py}`;
+      seg.push([px, py]);
       prev = p.t;
     }
-    svg.append(mk("path", { d, class: "nline" }));
+    flush();
+    marks.append(mk("path", { d: area, class: "narea", fill: "url(#nGrad)" }), mk("path", { d, class: "nline" }));
+    const r = pts.length > 300 ? 2.5 : pts.length > 120 ? 3.5 : 4.5;
     for (const p of pts) {
       const v = st.get(p.f);
-      if (v == null) continue;
-      const j = p.f.gone ? null : judge(p.f), when = new Date(p.t);
-      const c = mk("circle", { cx: x(p.t), cy: y(v), r: 3, class: "npt" + (p.f.gone ? " gone" : j && j.bad ? " bad" : "") });
-      c.append(mk("title", {}, (p.f.gone ? "удалён · " : "") + `${hm(when)} · ${p.f.name}\nHFR ${p.f.hfr ? p.f.hfr.toFixed(2) : "—"} · звёзд ${p.f.stars}` +
-        (p.f.bg ? ` · фон ${Math.round(p.f.bg)}` : "") + (p.f.round ? ` · округлость ${p.f.round.toFixed(2)}` : "") + (j && j.bad ? "\n⚠ " + j.why : "")));
-      if (!p.f.gone) c.onclick = () => openViewer(p.f.path, files);
-      svg.append(c);
+      if (v == null || p.t < t0 || p.t > t1) continue;
+      const j = p.f.gone ? null : judge(p.f);
+      marks.append(mk("circle", { cx: x(p.t), cy: y(v), r, class: "npt" + (p.f.gone ? " gone" : j && j.bad ? " bad" : "") }));
     }
   });
   // time: round observatory times under the last strip
-  const steps = [5, 10, 15, 30, 60, 120, 180].map(m => m * 60e3);
-  const tick = steps.find(v => span / v <= Math.max(3, Math.floor(pw / 70))) || 360 * 60e3;
-  const yb = T + strips.length * (SH + GAP) - GAP;
+  const yb = T + nightStrips.length * (SH + GAP) - GAP;
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 180].map(m => m * 60e3);
+  const tick = steps.find(v => span / v <= Math.max(3, Math.floor(pw / 80))) || 360 * 60e3;
   for (let t = Math.ceil(t0 / tick) * tick; t <= t1; t += tick) {
     grid.append(mk("line", { x1: x(t), x2: x(t), y1: T, y2: yb }));
-    axis.append(mk("text", { x: x(t), y: yb + 16, "text-anchor": "middle" }, hm(new Date(t))));
+    axis.append(mk("text", { x: x(t), y: yb + 17, "text-anchor": "middle" }, hm(new Date(t))));
   }
+  // what follows the pointer and the frame chosen
+  const over = mk("g", {});
+  svg.append(over);
+  N.geo = { svg, over, mk, x, ys, T, yb, L, R, W, t0, t1, pw };
+  // pointer: hover, click, drag to zoom
+  svg.onpointermove = e => nightPointer(e);
+  svg.onpointerleave = () => { if (!N.brush) { N.hover = -1; nightOver(); } };
+  svg.onpointerdown = e => {
+    if (e.button !== 0) return;
+    N.brush = { x0: nightSvgX(e), x1: nightSvgX(e), id: e.pointerId };
+    svg.setPointerCapture(e.pointerId);
+  };
+  svg.onpointerup = e => {
+    const b = N.brush; N.brush = null;
+    if (!b) return;
+    if (Math.abs(b.x1 - b.x0) > 8) {
+      const g = N.geo, ta = g.t0 + (Math.min(b.x0, b.x1) - g.L) / g.pw * (g.t1 - g.t0), tb = g.t0 + (Math.max(b.x0, b.x1) - g.L) / g.pw * (g.t1 - g.t0);
+      N.view = [Math.max(ta, first - pad0), Math.min(Math.max(tb, ta + 60e3), last + pad0)];
+      drawNight();
+      return;
+    }
+    if (N.hover >= 0) nightSelect(N.hover);
+  };
+  svg.ondblclick = () => { if (N.view) { N.view = null; drawNight(); } };
   chart.replaceChildren(svg);
+  nightOver();
+  if (N.sel >= 0) nightSide();
+}
+function nightSvgX(e) {
+  const g = N.geo, r = g.svg.getBoundingClientRect();
+  return (e.clientX - r.left) / r.width * g.W;
+}
+// the frame nearest to the pointer by time (the whole height is the target)
+function nightPointer(e) {
+  const g = N.geo, px = nightSvgX(e);
+  if (N.brush) { N.brush.x1 = Math.min(Math.max(px, g.L), g.W - g.R); nightOver(); return; }
+  let best = -1, bd = Infinity;
+  N.pts.forEach((p, k) => {
+    if (p.t < g.t0 || p.t > g.t1) return;
+    const d = Math.abs(g.x(p.t) - px);
+    if (d < bd) { bd = d; best = k; }
+  });
+  if (bd > 40) best = -1;
+  if (best !== N.hover) { N.hover = best; nightOver(); }
+  nightTip(e);
+}
+function nightValues(f) {
+  return nightStrips.map(st => { const v = st.get(f); return [st.name, v == null || !isFinite(v) ? "—" : st.fmt(v) + (st.unit ? " " + st.unit : "")]; });
+}
+function nightTip(e) {
+  const tip = $("nightTip");
+  if (N.hover < 0 || N.brush) { tip.hidden = true; return; }
+  const p = N.pts[N.hover], j = p.f.gone ? null : judge(p.f);
+  const dl = el("dl", {});
+  for (const [k, v] of nightValues(p.f)) dl.append(el("dt", { textContent: k }), el("dd", { textContent: v }));
+  tip.replaceChildren(el("div", { className: "t", textContent: hm(new Date(p.t)) + (p.f.gone ? " · удалён" : "") }),
+    el("div", { className: "n", textContent: p.f.name }), dl);
+  if (j && j.bad) tip.append(el("div", { className: "w", textContent: "⚠ " + j.why }));
+  tip.hidden = false;
+  const box = $("nightChart").parentElement.getBoundingClientRect();
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let left = e.clientX - box.left + 16, top = e.clientY - box.top + $("nightChart").parentElement.scrollTop + 12;
+  if (left + w > box.width - 6) left = e.clientX - box.left - w - 16;
+  tip.style.left = Math.max(4, left) + "px";
+  tip.style.top = Math.max(4, Math.min(top, $("nightChart").parentElement.scrollHeight - h - 4)) + "px";
+}
+// the crosshair, the rings on the frame under the pointer, the line of the
+// frame chosen and the zoom being drawn
+function nightOver() {
+  const g = N.geo;
+  if (!g) return;
+  const { over, mk, x, ys, T, yb } = g;
+  over.replaceChildren();
+  const ring = (k, cls, r) => {
+    const p = N.pts[k];
+    nightStrips.forEach((st, i) => {
+      const v = st.get(p.f);
+      if (v == null || !ys[i]) return;
+      over.append(mk("circle", { cx: x(p.t), cy: ys[i](v), r, class: cls }));
+    });
+  };
+  if (N.sel >= 0 && N.pts[N.sel] && N.pts[N.sel].t >= g.t0 && N.pts[N.sel].t <= g.t1) {
+    const xs = x(N.pts[N.sel].t);
+    over.append(mk("line", { x1: xs, x2: xs, y1: T - 4, y2: yb, class: "nsel" }));
+    ring(N.sel, "nselpt", 7);
+  }
+  if (N.hover >= 0 && N.hover !== N.sel) {
+    const xh = x(N.pts[N.hover].t);
+    over.append(mk("line", { x1: xh, x2: xh, y1: T - 4, y2: yb, class: "ncross" }));
+    ring(N.hover, "nhov", 6);
+  }
+  if (N.brush) {
+    const a = Math.min(N.brush.x0, N.brush.x1), b = Math.max(N.brush.x0, N.brush.x1);
+    over.append(mk("rect", { x: a, y: T - 4, width: b - a, height: yb - T + 4, class: "nbrush" }));
+  }
+  if (N.hover < 0) $("nightTip").hidden = true;
+}
+function nightSelect(k, scroll) {
+  if (k < 0 || k >= N.pts.length) return;
+  N.sel = k;
+  // a frame out of the zoomed part brings the part to it
+  const t = N.pts[k].t;
+  if (N.view && (t < N.view[0] || t > N.view[1])) { const w = N.view[1] - N.view[0]; N.view = [t - w / 2, t + w / 2]; drawNight(); }
+  else nightOver();
+  nightSide();
+}
+function nightOpenFrame() {
+  const p = N.pts[N.sel];
+  if (!p || p.f.gone) return;
+  openViewer(p.f.path, N.pts.map(q => q.f).filter(f => !f.gone));
+}
+// the frame chosen: its picture, its values against the night, why it is ⚠
+function nightSide() {
+  const side = $("nightSide"), p = N.pts[N.sel];
+  if (!p) { side.replaceChildren(); return; }
+  const f = p.f, j = f.gone ? null : judge(f), meds = nightMedians();
+  const pic = el("div", { className: "nimg" });
+  if (f.gone) pic.append(el("span", { textContent: "Кадр удалён — изображения нет, оценка сохранена" }));
+  else if (!f.local) pic.append(el("span", { textContent: "Кадр ещё на ASIAIR — изображение появится, когда он будет получен" }));
+  else {
+    const msg = el("span", { textContent: "Загрузка…" });
+    const img = el("img", { alt: f.name, decoding: "async", title: "Открыть кадр целиком", src: "/ui/thumb?w=640&path=" + encodeURIComponent(f.path) });
+    img.onload = () => msg.remove();
+    img.onerror = () => { msg.textContent = "Изображение не получено"; img.remove(); };
+    img.onclick = nightOpenFrame;
+    pic.append(msg, img);
+  }
+  const dl = el("dl", {});
+  nightValues(f).forEach(([k, v], i) => {
+    const dd = el("dd", { textContent: v });
+    if (meds[i] && v !== "—") dd.append(el("small", { textContent: "медиана " + nightStrips[i].fmt(meds[i]) }));
+    dl.append(el("dt", { textContent: k }), dd);
+  });
+  const prev = el("button", { textContent: "←", title: "Предыдущий кадр (←)", disabled: N.sel <= 0 });
+  const next = el("button", { textContent: "→", title: "Следующий кадр (→)", disabled: N.sel >= N.pts.length - 1 });
+  const open = el("button", { className: "primary", textContent: "Открыть кадр", title: "В просмотрщике: растяжка, увеличение, удаление (Enter)", disabled: f.gone || !f.local });
+  prev.onclick = () => nightSelect(N.sel - 1);
+  next.onclick = () => nightSelect(N.sel + 1);
+  open.onclick = nightOpenFrame;
+  side.replaceChildren(pic,
+    el("div", {}, el("b", { textContent: hm(new Date(p.t)) }), el("span", { className: "muted", textContent: `  · кадр ${N.sel + 1} из ${N.pts.length}` + (f.gone ? " · удалён" : "") })),
+    el("div", { className: "nname mono", textContent: f.name }),
+    dl);
+  if (j && j.bad) side.append(el("div", { className: "w", textContent: "⚠ " + j.why }));
+  side.append(el("div", { className: "nnav" }, prev, next, open));
 }
 // hours and minutes of a time held in the UTC fields (observatory clock)
 function hm(d) { return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0"); }
@@ -3808,7 +4077,7 @@ function plAtlasOpen() {
         if (!t) return;
         t.ra = ra; t.dec = dec; t.angle = angle;
         if (PL.sel === i) { $("plRA").value = plFmtRA(ra); $("plDec").value = plFmtDec(dec); }
-        toast(`${t.name}: рамка ${plFmtRA(ra)} ${plFmtDec(dec)}, угол ${angle}°`);
+        toast(`${t.name}: рамка ${plFmtRA(ra)} ${plFmtDec(dec)}, угол ${Atlas.asiairAngle(angle)}° (как в ASIAIR)`);
         plChanged();
       },
       onSelect: i => plSelect(i),
@@ -4468,7 +4737,7 @@ async function plFromFrame(p) {
     PL.atlas.frame(i);
   }
   $("plAtlasBox").scrollIntoView({ behavior: "smooth", block: "start" });
-  toast(`${d.name}: центр и угол взяты из кадра` + (d.approx ? " — по наведению (кадр не решён, центр может отличаться)" : " — по решению кадра"));
+  toast(`${d.name}: центр и угол ${window.Atlas ? Atlas.asiairAngle(angle) + "° (как в ASIAIR) " : ""}взяты из кадра` + (d.approx ? " — по наведению (кадр не решён, центр может отличаться)" : " — по решению кадра"));
 }
 
 // plShotList: the objects already shot, to plan them again; a pick fills
