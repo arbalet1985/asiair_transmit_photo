@@ -135,7 +135,7 @@ type window struct {
 	eta     etaSpeed    // the speed for the remaining time
 
 	tsNotified     string // login link already announced in the tray
-	updateNotified string // new version already announced in the tray
+	updateNotified string // the build (or version) of the update already announced in the tray
 
 	ready    bool // set after the window is built; checkbox handlers ignore the initial state
 	quitting bool
@@ -750,8 +750,14 @@ func (w *window) updateOffer(a *agent.Agent) {
 	}
 	w.btnUpdate.SetText("Обновить до " + v)
 	w.actUpdate.SetText("Обновить до " + v + "…")
-	if v != w.updateNotified {
-		w.updateNotified = v
+	// announced once per build: a release that only renumbers the same
+	// agent (the receiver changed) is not announced again
+	key := v
+	if b := a.UpdateBuild(); b != "" {
+		key = b
+	}
+	if key != w.updateNotified {
+		w.updateNotified = key
 		w.ni.ShowInfo("ASIAIR Agent", "Вышла новая версия "+v+". Откройте окно агента и нажмите «Обновить до "+v+"».")
 	}
 }

@@ -1,4 +1,10 @@
-package fits
+// Package fitsprev is the picture of a FITS frame built while the frame is
+// sent, for the tray of the agent. It is apart from package fits on
+// purpose: the agent must not be rebuilt (and offered as a new version)
+// whenever the receiver or the sorter learn something new about frames.
+// Its reading of the image is the one of fits.Preview (a test holds them
+// together).
+package fitsprev
 
 import (
 	"bytes"
@@ -193,8 +199,8 @@ func (s *Stream) Snapshot() (img *Image, full int, fromBottom bool) {
 			d[i] = s.sum[i] / s.cnt[i]
 		}
 	}
-	normalize(d, s.bitpix, s.bscale, s.bzero, s.h)
-	img = &Image{Width: s.ow, Height: rows, Channels: s.ch, Data: d, Header: s.h, Binning: s.step}
+	normalize(d, s.bitpix, s.bscale, s.bzero)
+	img = &Image{Width: s.ow, Height: rows, Channels: s.ch, Data: d, Binning: s.step}
 	if s.bayer {
 		img.Bayer = strings.ToUpper(s.h.Get("BAYERPAT"))
 	}

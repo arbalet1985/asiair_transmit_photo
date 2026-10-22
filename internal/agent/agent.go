@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
-	"github.com/arbalet1985/asiair_transmit_photo/internal/fits"
+	"github.com/arbalet1985/asiair_transmit_photo/internal/fitsprev"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/ratelimit"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/source"
@@ -505,11 +505,11 @@ func (a *Agent) transferLoop(ctx context.Context) {
 type upload struct {
 	f       source.File
 	ctx     context.Context
-	cancel  context.CancelFunc          // the pause interrupts the upload
-	done    atomic.Int64                // bytes the receiver has, with this upload
-	started atomic.Bool                 // the data is being sent (done is meaningful)
-	seq     uint64                      // start order
-	preview atomic.Pointer[fits.Stream] // the picture as it is sent (FITS only)
+	cancel  context.CancelFunc              // the pause interrupts the upload
+	done    atomic.Int64                    // bytes the receiver has, with this upload
+	started atomic.Bool                     // the data is being sent (done is meaningful)
+	seq     uint64                          // start order
+	preview atomic.Pointer[fitsprev.Stream] // the picture as it is sent (FITS only)
 }
 
 func (a *Agent) activeCount() int {
@@ -948,7 +948,7 @@ func (a *Agent) uploadOnce(u *upload) error {
 	var hw io.Writer = h
 	if isFITS(f.Path) {
 		// the tray shows the frame as it goes, built from the bytes sent
-		st := fits.NewStream(previewWidth)
+		st := fitsprev.NewStream(previewWidth)
 		u.preview.Store(st)
 		hw = io.MultiWriter(h, st)
 	}
@@ -1063,10 +1063,10 @@ func isFITS(p string) bool {
 type UploadPreview struct {
 	Path       string
 	Done, Size int64
-	Image      *fits.Image // the rows sent so far; nil when none yet or not FITS
-	Full       int         // the height of the whole picture
-	FromBottom bool        // Image is the bottom part of the picture
-	Others     int         // other files being sent at the same time
+	Image      *fitsprev.Image // the rows sent so far; nil when none yet or not FITS
+	Full       int             // the height of the whole picture
+	FromBottom bool            // Image is the bottom part of the picture
+	Others     int             // other files being sent at the same time
 }
 
 // Preview returns the first file being sent (nil when none).

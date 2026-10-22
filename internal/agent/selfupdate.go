@@ -73,6 +73,17 @@ func (a *Agent) UpdateAvailable() string {
 	return a.offer.Version
 }
 
+// UpdateBuild is the build of the version offered ("" when unknown): a new
+// number over the same build is not news.
+func (a *Agent) UpdateBuild() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.offer == nil {
+		return ""
+	}
+	return a.offer.Build
+}
+
 // InstallUpdate installs the offered new version and restarts the agent;
 // the user asked for it (the "Обновить" button).
 func (a *Agent) InstallUpdate(ctx context.Context) error {
