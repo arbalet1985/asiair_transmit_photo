@@ -705,3 +705,41 @@ func TestPolygonZone(t *testing.T) {
 		t.Fatalf("%+v", old)
 	}
 }
+
+func TestRefocusAfterFilter(t *testing.T) {
+	tg := []Target{
+		{Name: "M 31", RA: 10.68, Dec: 41.27, Exposure: 120, Priority: 1, WantSec: 3600, Filter: "L"},
+		{Name: "NGC 7000", RA: 314.82, Dec: 44.53, Exposure: 300, Priority: 2, Filter: "Ha"},
+	}
+	prm := DefaultParams()
+	prm.Night, prm.Lat, prm.Lon = "2026-10-15", lat, lon
+	prm.RefocusEveryMin, prm.RefocusAfterSwitch, prm.Flip = 0, false, false
+	count := func(p *Plan) (n int) {
+		for _, s := range p.Steps {
+			if s.Kind == Refocus {
+				n++
+				if s.Note != "смена фильтра" || s.Target != 1 {
+					t.Errorf("refocus %+v", s)
+				}
+			}
+		}
+		return n
+	}
+	a, _ := Schedule(tg, Sky{}, prm)
+	if n := count(a); n != 0 {
+		t.Errorf("without the option: %d refocus\n%s", n, a.Text())
+	}
+	prm.RefocusAfterFilter = true
+	b, _ := Schedule(tg, Sky{}, prm)
+	if n := count(b); n != 1 {
+		t.Errorf("with the option: %d refocus\n%s", n, b.Text())
+	}
+	// the same filter, or one not given, is no change
+	tg[1].Filter = "l"
+	if c, _ := Schedule(tg, Sky{}, prm); count(c) != 0 {
+		t.Errorf("same filter refocused\n%s", c.Text())
+	}
+	if FilterChanged("", "Ha") || FilterChanged("Ha", " ") || !FilterChanged("L", "Ha") {
+		t.Error("FilterChanged")
+	}
+}

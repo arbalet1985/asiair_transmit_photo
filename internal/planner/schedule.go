@@ -43,6 +43,7 @@ type Params struct {
 	RefocusEveryMin    float64 `json:"refocus_every"`  // autofocus about this often (0 = never)
 	RefocusMin         float64 `json:"refocus_min"`    // how long the autofocus takes
 	RefocusAfterSwitch bool    `json:"refocus_switch"` // autofocus after every new target
+	RefocusAfterFilter bool    `json:"refocus_filter"` // autofocus when the next target has another filter
 	DitherEvery        int     `json:"dither_every"`   // dither every N frames (0 = never)
 	DitherSec          float64 `json:"dither_sec"`     // settling after a dither, seconds
 	DownloadSec        float64 `json:"download_sec"`   // between frames, seconds
@@ -379,7 +380,8 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 	}
 
 	cur, sinceFocus, inBatch := -1, time.Duration(0), 0
-	west := false // after the flip
+	lastFilter := "" // the filter of the frames shot last
+	west := false    // after the flip
 	t := p.Start
 	add := func(s Step) {
 		if n := len(p.Steps); n > 0 {
@@ -418,8 +420,13 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 			add(Step{Kind: Slew, Start: t, End: t.Add(switchDur), Target: next})
 			t, cur, inBatch = t.Add(switchDur), next, 0
 			west = prm.Flip && moon.HourAngle(t, prm.Lon, targets[cur].RA) >= prm.FlipAfterMin/60
-			if prm.RefocusAfterSwitch || sinceFocus == 0 && prm.RefocusEveryMin > 0 {
-				add(Step{Kind: Refocus, Start: t, End: t.Add(minutes(prm.RefocusMin)), Target: cur})
+			newFilter := prm.RefocusAfterFilter && FilterChanged(lastFilter, targets[cur].Filter)
+			if prm.RefocusAfterSwitch || newFilter || sinceFocus == 0 && prm.RefocusEveryMin > 0 {
+				s := Step{Kind: Refocus, Start: t, End: t.Add(minutes(prm.RefocusMin)), Target: cur}
+				if newFilter && !prm.RefocusAfterSwitch {
+					s.Note = "смена фильтра"
+				}
+				add(s)
 				t, sinceFocus = t.Add(minutes(prm.RefocusMin)), time.Nanosecond
 			}
 			continue
@@ -455,6 +462,7 @@ func Schedule(targets []Target, sky Sky, prm Params) (*Plan, error) {
 			d += seconds(prm.DitherSec)
 		}
 		add(Step{Kind: Shoot, Start: t, End: t.Add(d), Target: cur, Frames: 1})
+		lastFilter = targets[cur].Filter
 		p.Frames[cur]++
 		p.Seconds[cur] += targets[cur].Exposure
 		t = t.Add(d)
@@ -643,4 +651,11 @@ func Hours(sec float64) string {
 		return fmt.Sprintf("%d мин", m)
 	}
 	return fmt.Sprintf("%d ч %02d мин", m/60, m%60)
+}
+
+// FilterChanged: the next frames are taken through another filter than the
+// last ones. A filter not given (empty) is no change: it is not known.
+func FilterChanged(last, next string) bool {
+	last, next = strings.TrimSpace(last), strings.TrimSpace(next)
+	return last != "" && next != "" && !strings.EqualFold(last, next)
 }
