@@ -10,6 +10,8 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +77,13 @@ type Config struct {
 	AuthKey    string // optional: joins without the interactive login
 	ControlURL string // optional: Headscale or a test server; empty = Tailscale
 	Logf       func(format string, args ...any)
+}
+
+// HasLogin reports whether the state directory keeps a login (tsnet's
+// tailscaled.state): a node started there joins without asking again.
+func HasLogin(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, "tailscaled.state"))
+	return err == nil && fi.Size() > 0
 }
 
 // Node is a running Tailscale node.

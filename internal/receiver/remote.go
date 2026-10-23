@@ -283,7 +283,7 @@ func (s *Server) remoteTOTP() string {
 // agentPortHandler serves the agent API and, when remote access through
 // the channel is on, the page.
 func (s *Server) agentPortHandler(channel string) http.Handler {
-	api := s.apiHandler()
+	api := withChannel(channel, s.apiHandler())
 	page := s.remoteHandler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {

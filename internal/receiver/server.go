@@ -417,6 +417,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.noteAgentURL(r, req)
 	resp := s.state.Sync(req)
 	s.speed.add(req.Status, time.Now())
 	resp.DiskFull = s.disk().Full
@@ -519,6 +520,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
 	mux.HandleFunc("/ui/api/gone", gzipped(s.handleUIGone))
 	mux.HandleFunc("/ui/api/rediscover", s.handleUIRediscover)
+	mux.HandleFunc("/ui/api/agentctl", s.handleUIAgentCtl)
 	mux.HandleFunc("/ui/api/delete", s.handleUIDelete)
 	mux.HandleFunc("/ui/api/delete_local", s.handleUIDeleteLocal)
 	mux.HandleFunc("/ui/api/cameratilt", s.handleUICameraTilt)
@@ -654,6 +656,8 @@ type uiState struct {
 	GoneN   int   `json:"gone_n"`
 	// RediscoverAt: the search for the ASIAIR asked on the page (zero: none)
 	RediscoverAt time.Time `json:"rediscover_at,omitempty"`
+	// AgentCtl: restarting the agent and switching its connection
+	AgentCtl agentCtl `json:"agent_ctl"`
 }
 
 func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
@@ -719,6 +723,7 @@ func (s *Server) handleUIState(w http.ResponseWriter, r *http.Request) {
 	}
 	out.GoneRev, out.GoneN = s.quality.deletedRev()
 	out.RediscoverAt = s.state.RediscoverAsked()
+	out.AgentCtl = s.agentCtl(snap.Status, online)
 	writeJSON(w, out)
 }
 
