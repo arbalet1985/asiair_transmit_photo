@@ -54,13 +54,23 @@ func newClient(base, token, fingerprint string, dial DialFunc) (*client, error) 
 		TLSHandshakeTimeout:   20 * time.Second,
 		ResponseHeaderTimeout: 2 * time.Minute,
 		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConnsPerHost:   4,
+		// every file goes on a connection of its own, besides the sync and the
+		// results: a connection kept for the next file saves the handshake
+		// and the slow start of a new one
+		MaxIdleConnsPerHost: protocol.MaxStreams + 8,
 	}
 	if dial != nil {
 		tr.Proxy, tr.DialContext = nil, dial
 	}
 	c.http = &http.Client{Transport: tr}
 	return c, nil
+}
+
+// closeBody reads what is left of an answer and closes it: only an answer
+// read to the end leaves its connection for the next request.
+func closeBody(resp *http.Response) {
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
 }
 
 // closeIdle drops the kept connections (after a network change).
@@ -141,7 +151,7 @@ func (c *client) postJSON(ctx context.Context, path string, v, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 	if err := httpErr(resp); err != nil {
 		return err
 	}

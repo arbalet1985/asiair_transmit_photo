@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"log"
@@ -137,6 +138,8 @@ type Agent struct {
 	switchSeen   int64       // the last connection switch asked by the receiver (poll loop only)
 	switching    atomic.Bool // a connection switch is being tried
 	switchBackTo string      // guarded by mu; the connection to go back to until the switch is confirmed
+
+	marks map[string]*hashMarks // guarded by mu; checksum states of interrupted uploads
 }
 
 func New(cfg *config.Agent) (*Agent, error) {
@@ -176,6 +179,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		wake:        make(chan struct{}, 1),
 		syncSession: newSession(),
 		cmds:        newCmdRunner(),
+		marks:       map[string]*hashMarks{},
 	}
 	a.status.Version = protocol.Version
 	a.status.CanLogs = true
@@ -874,6 +878,7 @@ func (a *Agent) markSent(f source.File) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sent[f.Path] = sentInfo{Size: f.Size, MTime: f.ModTime.UnixNano(), At: time.Now()}
+	a.forgetMarksLocked(f.Path)
 	delete(a.retryAt, f.Path)
 	delete(a.failures, f.Path)
 	delete(a.failErr, f.Path)
@@ -896,7 +901,16 @@ var errRestart = errors.New("restart")
 func (a *Agent) upload(u *upload) error {
 	f := u.f
 	err := a.uploadOnce(u)
-	if errors.Is(err, errRestart) {
+	for restarts, stalls := 0, 0; ; {
+		if errors.Is(err, errRestart) && restarts < 1 {
+			restarts++
+		} else if errors.Is(err, errStalled) && stalls < stallRetry && u.ctx.Err() == nil {
+			// a new connection usually goes at once: resume now, not after the pause for failures
+			stalls++
+			log.Printf("Агент: %s: %v", f.Path, err)
+		} else {
+			break
+		}
 		err = a.uploadOnce(u)
 	}
 	if errors.Is(err, errRestart) {
@@ -942,6 +956,7 @@ func (a *Agent) uploadOnce(u *upload) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			a.mu.Lock()
 			a.dequeue(f.Path)
+			a.forgetMarksLocked(f.Path)
 			a.mu.Unlock()
 			return nil
 		}
@@ -949,21 +964,44 @@ func (a *Agent) uploadOnce(u *upload) error {
 	}
 	defer src.Close()
 
-	// The checksum covers the whole file, so hash the part the receiver
-	// already has (read over the local network, not rate limited).
+	// The checksum covers the whole file: it goes on from the state kept
+	// during the previous try (see resume.go), or the part the receiver
+	// already has is read again from the ASIAIR (local network, not rate
+	// limited).
 	h := sha256.New()
-	var hw io.Writer = h
-	if isFITS(f.Path) {
+	from := a.resumeHash(f, offset, h)
+	if from > 0 {
+		if _, err := src.Seek(from, io.SeekStart); err != nil {
+			h.Reset()
+			from = 0
+		}
+	}
+	var prev io.Writer
+	u.preview.Store(nil)
+	if isFITS(f.Path) && from == 0 {
 		// the tray shows the frame as it goes, built from the bytes sent
 		st := fitsprev.NewStream(previewWidth)
 		u.preview.Store(st)
-		hw = io.MultiWriter(h, st)
+		prev = st
 	}
-	if offset > 0 {
-		if _, err := io.CopyN(hw, src, offset); err != nil {
+	tee := func(w io.Writer) io.Writer {
+		if prev != nil {
+			return io.MultiWriter(w, prev)
+		}
+		return w
+	}
+	if offset > from {
+		if _, err := io.CopyN(tee(h), src, offset-from); err != nil {
 			return fmt.Errorf("чтение с ASIAIR: %w", err)
 		}
-		log.Printf("Агент: %s: продолжение с %s из %s", f.Path, config.FormatBytes(offset), config.FormatBytes(f.Size))
+	}
+	hw := tee(newMarkHash(h, offset, func(pos int64, h hash.Hash) { a.saveMark(f, pos, h) }))
+	if offset > 0 {
+		reread := "без перечитывания начала"
+		if offset > from {
+			reread = "перечитано с ASIAIR " + config.FormatBytes(offset-from)
+		}
+		log.Printf("Агент: %s: продолжение с %s из %s (%s)", f.Path, config.FormatBytes(offset), config.FormatBytes(f.Size), reread)
 	} else {
 		log.Printf("Агент: отправка %s (%s)", f.Path, config.FormatBytes(f.Size))
 	}
@@ -972,7 +1010,7 @@ func (a *Agent) uploadOnce(u *upload) error {
 	u.started.Store(true)
 
 	share, _, _ := strings.Cut(f.Path, "/")
-	read := &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, share: share}
+	read := &counter{r: &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, share: share}}
 	var data io.Reader = &progressReader{r: io.TeeReader(read, hw), n: &u.done}
 	size, encoding := f.Size-offset, ""
 	var enc *wire.Encoder
@@ -985,24 +1023,33 @@ func (a *Agent) uploadOnce(u *upload) error {
 		enc.Done = func(raw int64) { u.done.Store(offset + raw) }
 		data, size, encoding = enc, -1, wire.Encoding
 	}
-	body := &timedBody{d: &a.diag, r: a.lim.Reader(ctx, data)}
+	// the watchdog ends the upload when the network hardly takes anything
+	pctx, pcancel := context.WithCancelCause(ctx)
+	defer pcancel(nil)
+	body := &counter{r: &ctxReader{ctx: pctx, r: &timedBody{d: &a.diag, r: a.lim.Reader(pctx, data)}}}
+	stop := make(chan struct{})
+	go a.watchStall(pcancel, body, read, stop)
 	q.Set("offset", strconv.FormatInt(offset, 10))
 	start := time.Now()
-	resp, err = a.cl.doEncoded(ctx, http.MethodPut, "/api/upload", q, io.NopCloser(body), size, encoding)
+	resp, err = a.cl.doEncoded(pctx, http.MethodPut, "/api/upload", q, io.NopCloser(body), size, encoding)
+	close(stop)
 	if err != nil {
+		if cause := context.Cause(pctx); errors.Is(cause, errStalled) {
+			return cause
+		}
 		return err
 	}
 	var res protocol.UploadResult
 	if resp.StatusCode == http.StatusConflict {
-		resp.Body.Close()
+		closeBody(resp)
 		return errRestart
 	}
 	if err := httpErr(resp); err != nil {
-		resp.Body.Close()
+		closeBody(resp)
 		return err
 	}
 	err = json.NewDecoder(resp.Body).Decode(&res)
-	resp.Body.Close()
+	closeBody(resp)
 	if err != nil {
 		return fmt.Errorf("неверный ответ приёмника: %w", err)
 	}
@@ -1019,7 +1066,7 @@ func (a *Agent) uploadOnce(u *upload) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp)
 	if err := httpErr(resp); err != nil {
 		var he *HTTPError
 		if errors.As(err, &he) && he.Code == http.StatusConflict {
