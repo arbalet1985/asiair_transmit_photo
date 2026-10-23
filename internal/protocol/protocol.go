@@ -354,6 +354,38 @@ type LogsResult struct {
 	Files   int       `json:"files,omitempty"`
 }
 
+// PerfLogName is the perf log of the agent, sent with its logs. Its lines
+// are PerfRecords in JSON (lines starting with # are comments); the
+// receiver page draws it. Rotated by day like the other logs.
+const PerfLogName = "asiair-agent-perf.log"
+
+// PerfRecord is one try of sending a file (Kind "file") or the summary of a
+// minute (Kind "minute"). Acts are keyed: check, open, reread, read, hash,
+// preview, zstd, limit, net, commit, scan, delete. The times of a minute
+// are summed over the streams.
+type PerfRecord struct {
+	Time    time.Time          `json:"t"`
+	Kind    string             `json:"k"`
+	Path    string             `json:"path,omitempty"`
+	Bytes   int64              `json:"bytes,omitempty"` // file: of it sent; minute: over the network
+	MS      float64            `json:"ms,omitempty"`    // file: the time of the try
+	Streams int                `json:"streams,omitempty"`
+	Files   int64              `json:"files,omitempty"` // minute: files sent
+	CPU     float64            `json:"cpu,omitempty"`   // minute: % of one core
+	Cores   int                `json:"cores,omitempty"`
+	Error   string             `json:"err,omitempty"`
+	Acts    map[string]PerfAct `json:"acts,omitempty"`
+}
+
+// PerfAct is the time of one action, its bytes (items for scan and delete)
+// and, for the steps done once per file, how many and the longest.
+type PerfAct struct {
+	MS    float64 `json:"ms"`
+	Bytes int64   `json:"b,omitempty"`
+	N     int64   `json:"n,omitempty"`
+	MaxMS float64 `json:"max,omitempty"`
+}
+
 // SpeedTest asks the agent for a measurement; ID is new for every request.
 type SpeedTest struct {
 	ID   int64  `json:"id"`

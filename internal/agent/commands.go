@@ -155,6 +155,7 @@ func (a *Agent) commandLoop(ctx context.Context) {
 // records the results.
 func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 	r := a.cmds
+	began := time.Now()
 	files, dirs := 0, 0
 	for _, c := range batch {
 		if c.Type == protocol.CmdDeleteDir {
@@ -320,6 +321,7 @@ func (a *Agent) runBatch(ctx context.Context, batch []protocol.Command) {
 		}
 	}
 	a.forgetDeleted(gone, failed, marked)
+	a.perf.add(actDelete, int64(len(gone)), time.Since(began))
 	if len(gone) > 0 {
 		log.Printf("Агент: удалено на ASIAIR: %d из %d", len(gone), len(batch))
 	}

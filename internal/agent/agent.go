@@ -89,6 +89,7 @@ type Agent struct {
 	active  map[string]*upload // files being sent now; guarded by mu
 	streams atomic.Int32       // files sent at once, set on the receiver
 	diag    diag
+	perf    perf
 
 	// pause: no uploads while set; scanning and commands from the receiver go on.
 	// It is set from the agent window (local) or from the receiver page (remote).
@@ -181,6 +182,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 		cmds:        newCmdRunner(),
 		marks:       map[string]*hashMarks{},
 	}
+	a.perf.lines = make(chan string, 256)
 	a.status.Version = protocol.Version
 	a.status.CanLogs = true
 	a.status.OS = runtime.GOOS + "/" + runtime.GOARCH
@@ -293,6 +295,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		{"команды удаления", a.commandLoop},
 		{"сведения о сети", a.netInfoLoop},
 		{"способ связи", a.connLoop},
+		{"журнал скорости", a.perfLoop},
 	}
 	for _, l := range loops {
 		wg.Add(1)
@@ -636,6 +639,7 @@ func (a *Agent) scan(ctx context.Context) error {
 	var files, filtered []source.File
 	// the whole tree is listed so the receiver can show it; filtered files
 	// are reported but never transferred
+	walked := time.Now()
 	err := a.source().Walk(ctx, nil, func(f source.File) error {
 		if a.wanted(f.Path) && !a.excluded(f.Path) {
 			files = append(files, f)
@@ -644,6 +648,7 @@ func (a *Agent) scan(ctx context.Context) error {
 		}
 		return nil
 	})
+	a.perf.add(actScan, int64(len(files)+len(filtered)), time.Since(walked))
 	a.mu.Lock()
 	was, ever := a.status.Connected, a.everScanned
 	a.status.Connected = err == nil
@@ -927,12 +932,14 @@ func (a *Agent) upload(u *upload) error {
 	return err
 }
 
-func (a *Agent) uploadOnce(u *upload) error {
+func (a *Agent) uploadOnce(u *upload) (err error) {
 	ctx, f := u.ctx, u.f
+	fp, began := a.perf.file(), time.Now()
 	q := fileQuery(f)
 	hctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	resp, err := a.cl.do(hctx, http.MethodHead, "/api/upload", q, nil, -1)
 	cancel()
+	fp.add(actCheck, 0, time.Since(began))
 	if err != nil {
 		return err
 	}
@@ -951,7 +958,9 @@ func (a *Agent) uploadOnce(u *upload) error {
 	}
 	compress := wire.Compressible(f.Path) && wire.Accepts(resp.Header.Get(protocol.HeaderEncodings))
 
+	opened := time.Now()
 	src, err := a.source().Open(f.Path)
+	fp.add(actOpen, 0, time.Since(opened))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			a.mu.Lock()
@@ -991,11 +1000,16 @@ func (a *Agent) uploadOnce(u *upload) error {
 		return w
 	}
 	if offset > from {
+		start := time.Now()
 		if _, err := io.CopyN(tee(h), src, offset-from); err != nil {
 			return fmt.Errorf("чтение с ASIAIR: %w", err)
 		}
+		fp.add(actReread, offset-from, time.Since(start))
 	}
-	hw := tee(newMarkHash(h, offset, func(pos int64, h hash.Hash) { a.saveMark(f, pos, h) }))
+	var hw io.Writer = &timedWriter{w: newMarkHash(h, offset, func(pos int64, h hash.Hash) { a.saveMark(f, pos, h) }), fp: fp, d: &a.diag, act: actHash}
+	if prev != nil {
+		hw = io.MultiWriter(hw, &timedWriter{w: prev, fp: fp, d: &a.diag, act: actPreview})
+	}
 	if offset > 0 {
 		reread := "без перечитывания начала"
 		if offset > from {
@@ -1010,7 +1024,7 @@ func (a *Agent) uploadOnce(u *upload) error {
 	u.started.Store(true)
 
 	share, _, _ := strings.Cut(f.Path, "/")
-	read := &counter{r: &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, share: share}}
+	read := &counter{r: &timedSource{r: io.LimitReader(src, f.Size-offset), d: &a.diag, fp: fp, share: share}}
 	var data io.Reader = &progressReader{r: io.TeeReader(read, hw), n: &u.done}
 	size, encoding := f.Size-offset, ""
 	var enc *wire.Encoder
@@ -1019,20 +1033,33 @@ func (a *Agent) uploadOnce(u *upload) error {
 		// progress counts a block once it has gone out
 		enc = wire.NewEncoder(io.TeeReader(read, hw))
 		defer enc.Close()
-		enc.Busy = a.diag.busy
+		enc.Busy = func(t time.Duration) { a.diag.busy(t); fp.add(actZstd, 0, t) }
 		enc.Done = func(raw int64) { u.done.Store(offset + raw) }
 		data, size, encoding = enc, -1, wire.Encoding
 	}
+	defer func() {
+		if enc != nil {
+			raw, _ := enc.Sent()
+			fp.add(actZstd, raw, 0)
+		}
+		why := err
+		if errors.Is(err, errRestart) {
+			why = errors.New("приёмник сообщил другое смещение")
+		}
+		fp.done(f.Path, u.done.Load()-offset, time.Since(began), a.activeCount(), why)
+	}()
 	// the watchdog ends the upload when the network hardly takes anything
 	pctx, pcancel := context.WithCancelCause(ctx)
 	defer pcancel(nil)
-	body := &counter{r: &ctxReader{ctx: pctx, r: &timedBody{d: &a.diag, r: a.lim.Reader(pctx, data)}}}
+	body := &counter{r: &ctxReader{ctx: pctx, r: &timedBody{d: &a.diag, fp: fp, r: a.lim.Reader(pctx, data)}}}
 	stop := make(chan struct{})
 	go a.watchStall(pcancel, body, read, stop)
 	q.Set("offset", strconv.FormatInt(offset, 10))
 	start := time.Now()
+	fp.last.Store(start.UnixNano())
 	resp, err = a.cl.doEncoded(pctx, http.MethodPut, "/api/upload", q, io.NopCloser(body), size, encoding)
 	close(stop)
+	fp.add(actNet, 0, time.Since(time.Unix(0, fp.last.Load()))) // the answer of the receiver
 	if err != nil {
 		if cause := context.Cause(pctx); errors.Is(cause, errStalled) {
 			return cause
@@ -1062,7 +1089,9 @@ func (a *Agent) uploadOnce(u *upload) error {
 	q.Set("sha256", sum)
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	committed := time.Now()
 	resp, err = a.cl.do(cctx, http.MethodPost, "/api/commit", q, nil, 0)
+	fp.add(actCommit, 0, time.Since(committed))
 	if err != nil {
 		return err
 	}

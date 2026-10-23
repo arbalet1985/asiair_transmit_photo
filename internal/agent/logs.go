@@ -22,8 +22,8 @@ import (
 )
 
 // The logs sent to the receiver when its page asks: the agent log of the
-// last days (today's and the rotated ones, also .gz) and the log of the
-// update watchdog. The settings file is not sent: it holds the token.
+// last days (today's and the rotated ones, also .gz), the perf log
+// (perf.go) and the log of the update watchdog. The settings file is not sent: it holds the token.
 const (
 	logsMaxDays  = 14
 	logsMaxBytes = 64 << 20 // of the archive
@@ -68,6 +68,7 @@ func (a *Agent) logFiles(days int) []string {
 		main = svc.DefaultLogFile("asiair-agent")
 	}
 	files := svc.LogFiles(main, svc.LogsSince(days))
+	files = append(files, svc.LogFiles(a.perfFile(), svc.LogsSince(days))...)
 	if exe, err := a.exe(); err == nil {
 		if _, err := os.Stat(update.WatchLog(exe)); err == nil {
 			files = append(files, update.WatchLog(exe))
