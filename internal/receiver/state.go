@@ -85,6 +85,9 @@ type persisted struct {
 	// EventSession, EventSeq: the agent run and its last event stored.
 	EventSession string `json:"agent_event_session,omitempty"`
 	EventSeq     uint64 `json:"agent_event_seq,omitempty"`
+	// AgentURLs: the receiver address the agent used, per channel
+	// (protocol.ConnInternet, ConnTailscale), for switching it over.
+	AgentURLs map[string]string `json:"agent_urls,omitempty"`
 }
 
 // AgentEvent is an event of the agent as kept here.
@@ -120,6 +123,16 @@ type State struct {
 	// a few minutes (the agent does it once per value)
 	rediscover   int64
 	rediscoverAt time.Time
+	// the restart of the agent asked on the page, until the agent comes
+	// back with another run (restartSession is the run asked to restart)
+	restart        int64
+	restartAt      time.Time
+	restartSession string
+	// the connection switch asked on the page, until the agent connects
+	// that way or gives up (AgentStatus.SwitchDone)
+	connSwitch *protocol.ConnSwitch
+	switchAt   time.Time
+	lastCtlID  int64
 }
 
 // bump marks a change for the agent. Caller holds s.mu.
@@ -242,6 +255,7 @@ func (s *State) Sync(req protocol.SyncRequest) protocol.SyncResponse {
 	if s.rediscover != 0 && time.Since(s.rediscoverAt) < rediscoverKeep {
 		resp.Rediscover = s.rediscover
 	}
+	s.agentCtlLocked(req, &resp)
 	// while the agent does not reach the ASIAIR the deletes wait here: they
 	// would only fail
 	for _, c := range s.p.Commands {
@@ -664,4 +678,91 @@ func (s *State) RediscoverAsked() time.Time {
 		return time.Time{}
 	}
 	return s.rediscoverAt
+}
+
+// agentCtlKeep: how long a restart or a switch asked on the page is
+// offered to the agent.
+const agentCtlKeep = 5 * time.Minute
+
+// agentCtlLocked adds the restart and the switch asked on the page to the
+// answer, or drops them once done. Caller holds s.mu.
+func (s *State) agentCtlLocked(req protocol.SyncRequest, resp *protocol.SyncResponse) {
+	if s.restart != 0 {
+		switch {
+		case req.Session != "" && req.Session != s.restartSession, time.Since(s.restartAt) >= agentCtlKeep:
+			s.restart = 0 // restarted (another run), or never came back
+		default:
+			resp.Restart = s.restart
+		}
+	}
+	if sw := s.connSwitch; sw != nil {
+		st := req.Status
+		switch {
+		case st.Connection == sw.Connection, st.SwitchDone == sw.ID, time.Since(s.switchAt) >= agentCtlKeep:
+			s.connSwitch = nil
+		default:
+			resp.Switch = sw
+		}
+	}
+}
+
+// ctlID is a new ID of a restart or a switch, larger than any before
+// (the clock may give the same value twice). Caller holds s.mu.
+func (s *State) ctlID() int64 {
+	s.lastCtlID = max(time.Now().UnixNano(), s.lastCtlID+1)
+	return s.lastCtlID
+}
+
+// AskRestart asks the agent to restart its program.
+func (s *State) AskRestart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restart, s.restartAt, s.restartSession = s.ctlID(), time.Now(), s.session
+	s.bump()
+}
+
+// AskSwitch asks the agent to connect another way; urls are the receiver
+// addresses known for that way.
+func (s *State) AskSwitch(conn string, urls []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connSwitch = &protocol.ConnSwitch{ID: s.ctlID(), Connection: conn, URLs: urls}
+	s.switchAt = time.Now()
+	s.bump()
+}
+
+// AgentCtlPending: when the restart was asked (zero: none pending) and the
+// connection being switched to ("" none).
+func (s *State) AgentCtlPending() (restartAt time.Time, switchTo string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restart != 0 && time.Since(s.restartAt) < agentCtlKeep {
+		restartAt = s.restartAt
+	}
+	if s.connSwitch != nil && time.Since(s.switchAt) < agentCtlKeep {
+		switchTo = s.connSwitch.Connection
+	}
+	return
+}
+
+// NoteAgentURL remembers the address the agent reached the receiver at
+// through a channel.
+func (s *State) NoteAgentURL(channel, url string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.p.AgentURLs[channel] == url {
+		return
+	}
+	if s.p.AgentURLs == nil {
+		s.p.AgentURLs = map[string]string{}
+	}
+	s.p.AgentURLs[channel] = url
+	s.save()
+}
+
+// AgentURL is the address the agent last used through the channel ("" none).
+func (s *State) AgentURL(channel string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.p.AgentURLs[channel]
 }

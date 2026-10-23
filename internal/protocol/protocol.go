@@ -144,6 +144,36 @@ type AgentStatus struct {
 	WiFi *WiFiInfo `json:"wifi,omitempty"`
 	// Build identifies the agent's code (see Build); "" in old agents.
 	Build string `json:"build,omitempty"`
+	// CanRestart: the agent restarts itself when SyncResponse.Restart asks.
+	CanRestart bool `json:"can_restart,omitempty"`
+	// Modes: the connections the agent is set up for and can switch to on
+	// SyncResponse.Switch (ConnInternet: it knows the internet address;
+	// ConnTailscale: it has a Tailscale login). Nil in old agents.
+	Modes []string `json:"modes,omitempty"`
+	// SwitchBack: the agent switched its connection on the receiver's
+	// request and goes back to this one unless it reaches the receiver soon.
+	SwitchBack string `json:"switch_back,omitempty"`
+	// SwitchDone: the last ConnSwitch ID the agent gave up (it failed or
+	// was refused; the events tell why). A switch made restarts the agent
+	// with the new Connection instead.
+	SwitchDone int64 `json:"switch_done,omitempty"`
+}
+
+// Connections of the agent to the receiver (AgentStatus.Connection).
+const (
+	ConnInternet  = "internet"
+	ConnTailscale = "tailscale"
+)
+
+// ConnSwitch asks the agent to connect another way.
+type ConnSwitch struct {
+	ID int64 `json:"id"` // once per ID
+	// Connection: ConnInternet or ConnTailscale.
+	Connection string `json:"connection"`
+	// URLs: receiver addresses for that connection the receiver knows
+	// (seen in the agent's requests, or its Tailscale name), tried after
+	// the one the agent remembers.
+	URLs []string `json:"urls,omitempty"`
 }
 
 // DeleteProgress is how far the agent is with the delete commands.
@@ -249,6 +279,11 @@ type SyncResponse struct {
 	BatchResults bool `json:"batch_results,omitempty"`
 	// EventsAck: the highest SyncRequest.Events Seq of this session stored.
 	EventsAck uint64 `json:"events_ack,omitempty"`
+	// Restart: restart the agent program, asked on the receiver page (once
+	// per value; sent until the agent comes back with a new Session).
+	Restart int64 `json:"restart,omitempty"`
+	// Switch: connect another way, asked on the receiver page.
+	Switch *ConnSwitch `json:"switch,omitempty"`
 }
 
 // StorageSpace is the free space of one ASIAIR share.

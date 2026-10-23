@@ -165,7 +165,7 @@ func (w *window) settingsPage(minimized bool) []Widget {
 			},
 		},
 		GroupBox{
-			Title:  "Запуск",
+			Title:  "Запуск и обновления",
 			Layout: VBox{Alignment: AlignHNearVCenter},
 			Children: []Widget{
 				CheckBox{
@@ -179,6 +179,13 @@ func (w *window) settingsPage(minimized bool) []Widget {
 					Text:                "Запускать свёрнутым в трей",
 					Checked:             minimized,
 					OnCheckStateChanged: w.onMinimized,
+				},
+				CheckBox{
+					AssignTo:            &w.cbAutoUpdate,
+					Text:                "Устанавливать новые версии автоматически, без кнопки «Обновить»",
+					ToolTipText:         "Новая версия ставится сразу, как приёмник её передаст; если она не заработает, через несколько минут вернётся прежняя",
+					Checked:             w.settings.AutoUpdate,
+					OnCheckStateChanged: w.onAutoUpdate,
 				},
 				HSpacer{},
 			},
@@ -557,14 +564,16 @@ func (w *window) saveSettings() {
 		return
 	}
 	err = config.UpdateAgentFile(w.cfgPath, map[string]string{
-		"asiair":               strings.TrimSpace(f.asiair.Text()),
-		"username":             strings.TrimSpace(f.user.Text()),
-		"password":             f.pass.Text(),
-		"receiver_url":         u,
-		"token":                strings.TrimSpace(f.token.Text()),
-		"receiver_fingerprint": strings.TrimSpace(f.fingerprint.Text()),
-		"connection":           f.connection(),
-		"tailscale_authkey":    strings.TrimSpace(f.tsKey.Text()),
+		"asiair":                      strings.TrimSpace(f.asiair.Text()),
+		"username":                    strings.TrimSpace(f.user.Text()),
+		"password":                    f.pass.Text(),
+		"receiver_url":                u,
+		"token":                       strings.TrimSpace(f.token.Text()),
+		"receiver_fingerprint":        strings.TrimSpace(f.fingerprint.Text()),
+		"connection":                  f.connection(),
+		config.URLKey(f.connection()): u,
+		"connection_fallback":         "",
+		"tailscale_authkey":           strings.TrimSpace(f.tsKey.Text()),
 	})
 	if err != nil {
 		walk.MsgBox(w.mw, "ASIAIR Agent", "Настройки не сохранены: "+err.Error(), walk.MsgBoxIconError)

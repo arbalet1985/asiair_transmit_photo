@@ -57,6 +57,19 @@ func (a *Agent) maybeUpdate(ctx context.Context, offer *protocol.UpdateOffer) {
 	go a.selfUpdate(ctx, offer)
 }
 
+// SetAutoUpdate switches between installing new versions at once (on) and
+// waiting for InstallUpdate (off), while the agent runs: the agent window's
+// «Устанавливать обновления автоматически».
+func (a *Agent) SetAutoUpdate(on bool) {
+	a.mu.Lock()
+	a.ConfirmUpdate = !on
+	if on {
+		a.cfg.AutoUpdate = true
+	}
+	a.mu.Unlock()
+	a.kickSync() // the offer is looked at again with the next answer
+}
+
 func availableText(version string) string {
 	return fmt.Sprintf("доступна версия %s — нажмите «Обновить» в окне агента", version)
 }

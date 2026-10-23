@@ -22,6 +22,8 @@ import (
 type Settings struct {
 	StartMinimized bool `json:"start_minimized"`
 	Paused         bool `json:"paused"` // transfer paused with the "Пауза" button
+	// AutoUpdate: new versions are installed without pressing "Обновить".
+	AutoUpdate bool `json:"auto_update,omitempty"`
 }
 
 // SettingsPath returns the settings file for a given agent config file.

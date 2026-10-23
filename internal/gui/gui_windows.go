@@ -45,6 +45,8 @@ type runner struct {
 	err    error // configuration error when the agent could not start
 	// onConfig is told what the agent wrote to agent.yaml by itself
 	onConfig func(values map[string]string)
+	// autoUpdate: install new versions without "Обновить"
+	autoUpdate bool
 }
 
 func (r *runner) start(cfgPath string, paused bool) {
@@ -60,7 +62,12 @@ func (r *runner) start(cfgPath string, paused bool) {
 	}
 	if err == nil {
 		r.agent.Restart = svc.Restart
-		r.agent.ConfirmUpdate = true // the user installs new versions with "Обновить"
+		// the user installs new versions with "Обновить", unless the window
+		// says to install them at once
+		r.agent.ConfirmUpdate = true
+		if r.autoUpdate {
+			r.agent.SetAutoUpdate(true)
+		}
 		r.agent.OnConfigChanged = r.onConfig
 		r.agent.App = appName
 	}
@@ -125,7 +132,7 @@ type window struct {
 	btnPause, btnUpdate                                                  *walk.PushButton
 	actPause, actUpdate                                                  *walk.Action
 	progress, totalBar                                                   *walk.ProgressBar
-	cbAutostart, cbMinimized                                             *walk.CheckBox
+	cbAutostart, cbMinimized, cbAutoUpdate                               *walk.CheckBox
 	logView                                                              *walk.ListBox
 	logModel                                                             *logModel
 	tabs                                                                 *walk.TabWidget
@@ -174,6 +181,7 @@ func Run(cfgPath string) error {
 		logModel:     &logModel{},
 	}
 	w.settings = LoadSettings(w.settingsPath)
+	w.run.autoUpdate = w.settings.AutoUpdate
 	w.run.onConfig = func(values map[string]string) {
 		if w.mw != nil {
 			w.mw.Synchronize(func() { w.applyAgentConfig(values) })
@@ -541,6 +549,29 @@ func (w *window) onMinimized() {
 	}
 }
 
+func (w *window) onAutoUpdate() {
+	if !w.ready {
+		return
+	}
+	on := w.cbAutoUpdate.Checked()
+	w.settings.AutoUpdate = on
+	if err := SaveSettings(w.settingsPath, w.settings); err != nil {
+		walk.MsgBox(w.mw, "ASIAIR Agent", "Не удалось сохранить настройку: "+err.Error(), walk.MsgBoxIconError)
+	}
+	w.run.mu.Lock()
+	w.run.autoUpdate = on
+	a := w.run.agent
+	w.run.mu.Unlock()
+	if a != nil {
+		a.SetAutoUpdate(on)
+	}
+	if on {
+		log.Printf("Новые версии агента устанавливаются автоматически")
+	} else {
+		log.Printf("Новые версии агента устанавливаются кнопкой «Обновить»")
+	}
+}
+
 func (w *window) setTray(state, tip string) {
 	if state != w.iconState {
 		if ic := w.icons[state]; ic != nil {
@@ -756,7 +787,7 @@ func (w *window) updateOffer(a *agent.Agent) {
 	if b := a.UpdateBuild(); b != "" {
 		key = b
 	}
-	if key != w.updateNotified {
+	if key != w.updateNotified && !w.settings.AutoUpdate {
 		w.updateNotified = key
 		w.ni.ShowInfo("ASIAIR Agent", "Вышла новая версия "+v+". Откройте окно агента и нажмите «Обновить до "+v+"».")
 	}

@@ -46,6 +46,14 @@ type Agent struct {
 	// user's Tailscale network; no open port needed).
 	Connection string `yaml:"connection"`
 	Tailscale  `yaml:",inline"`
+	// The receiver address remembered for each connection, so the receiver
+	// page can switch the agent between them (optional).
+	ReceiverURLInternet  string `yaml:"receiver_url_internet"`
+	ReceiverURLTailscale string `yaml:"receiver_url_tailscale"`
+	// ConnectionFallback: the connection switched from on the receiver's
+	// request; the agent goes back to it unless the new one reaches the
+	// receiver. Empty once the switch is confirmed.
+	ConnectionFallback string `yaml:"connection_fallback"`
 	// SHA-256 fingerprint of the receiver's self-signed certificate.
 	ReceiverFingerprint string `yaml:"receiver_fingerprint"`
 
@@ -186,6 +194,20 @@ func (c *Receiver) InternetOn() bool { return c.Internet == nil || bool(*c.Inter
 // UseTailscale reports whether the agent connects through Tailscale.
 func (c *Agent) UseTailscale() bool { return c.Connection == ConnTailscale }
 
+// URLFor is the receiver address remembered for a connection ("" = none).
+func (c *Agent) URLFor(conn string) string {
+	if conn == c.Connection {
+		return c.ReceiverURL
+	}
+	if conn == ConnTailscale {
+		return c.ReceiverURLTailscale
+	}
+	return c.ReceiverURLInternet
+}
+
+// URLKey is the agent.yaml key remembering the address of a connection.
+func URLKey(conn string) string { return "receiver_url_" + conn }
+
 // Bool is a yes/no setting; it also accepts quoted values ("true", 'false'),
 // as written by the settings forms.
 type Bool bool
@@ -310,6 +332,14 @@ func LoadAgent(path string) (*Agent, error) {
 	default:
 		return nil, fmt.Errorf("connection: %q — ожидается internet или tailscale", c.Connection)
 	}
+	switch c.ConnectionFallback = strings.ToLower(strings.TrimSpace(c.ConnectionFallback)); c.ConnectionFallback {
+	case "", ConnInternet, ConnTailscale:
+	default:
+		c.ConnectionFallback = ""
+	}
+	if c.ConnectionFallback == c.Connection {
+		c.ConnectionFallback = ""
+	}
 	if c.TailscaleHostname == "" {
 		c.TailscaleHostname = "asiair-agent"
 	}
@@ -317,6 +347,8 @@ func LoadAgent(path string) (*Agent, error) {
 	c.ExcludeExtensions = normExts(c.ExcludeExtensions)
 	c.Path = path
 	c.ReceiverURL = NormalizeReceiverURL(c.ReceiverURL)
+	c.ReceiverURLInternet = NormalizeReceiverURL(c.ReceiverURLInternet)
+	c.ReceiverURLTailscale = NormalizeReceiverURL(c.ReceiverURLTailscale)
 	c.StateFile = resolve(path, c.StateFile)
 	c.LogFile = resolve(path, c.LogFile)
 	c.TailscaleDir = resolve(path, "tailscale")

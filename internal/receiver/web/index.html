@@ -503,6 +503,7 @@
         <dt>Версия агента</dt><dd id="aVersion">—</dd>
         <dt>ASIAIR</dt><dd id="aAsiair">—</dd>
         <dt>Связь</dt><dd id="aSeen">—</dd>
+        <dt>Управление</dt><dd id="aCtl">—</dd>
         <dt>Wi-Fi</dt><dd id="aWifi">—</dd>
         <dt>Последний обход</dt><dd id="aScan">—</dd>
         <dt>Очередь</dt><dd id="aQueue">—</dd>
@@ -1893,6 +1894,47 @@ function renderAsiair(a, stale) {
   if (!a.connected && scanned) dd.append(el("div", { className: "muted", textContent: "последний удачный обход: " + fmtTime(a.last_scan) }));
 }
 
+// restarting the agent and switching its connection (agents since 1.65 that
+// report can_restart)
+const connName = c => c === "tailscale" ? "Tailscale" : "интернет";
+function renderAgentCtl(a) {
+  const dd = $("aCtl"), c = state.agent_ctl || {};
+  dd.replaceChildren();
+  const asked = t => t && !t.startsWith("0001") && Date.now() - new Date(t).getTime() < 300e3;
+  if (!a || !a.can_restart) {
+    dd.append(el("span", { className: "muted", textContent: state.agent_online ? "этот агент не принимает команды перезапуска — обновите его" : "—" }));
+    return;
+  }
+  const restarting = asked(c.restart_at);
+  const rb = el("button", { textContent: restarting ? "перезапуск…" : "⟳ Перезапустить агент", disabled: !c.can_restart || restarting,
+    title: "Агент закроется и запустится снова (служба — через 30 с); передача продолжится с того же места" });
+  rb.onclick = async () => {
+    if (!confirm("Перезапустить агент в обсерватории?\n\nСвязь пропадёт на полминуты–минуту, передача потом продолжится с того же места.")) return;
+    rb.disabled = true;
+    try { await post("/ui/api/agentctl", { action: "restart" }); toast("Агент перезапускается — итог появится в событиях агента"); refresh(); }
+    catch (e) { rb.disabled = false; toast("Не удалось: " + e.message); }
+  };
+  dd.append(rb);
+  if (c.switch_to) {
+    dd.append(" ", el("button", { textContent: `переключение на ${connName(c.switch_to)}…`, disabled: true }));
+  } else if (c.switch) {
+    const sb = el("button", { textContent: `⇄ Связь через ${connName(c.switch)}`, disabled: !state.agent_online,
+      title: `Агент проверит, что приёмник отвечает через ${connName(c.switch)}, сохранит это и перезапустится. ` +
+        "Если по-новому связи не будет 10 минут, агент сам вернётся к прежнему способу." });
+    sb.onclick = async () => {
+      if (!confirm(`Переключить связь агента на ${connName(c.switch)}?\n\nАгент сначала проверит новый путь; если он не работает, ничего не изменится. ` +
+        "После переключения агент перезапустится, а если через 10 минут не выйдет на связь по-новому — вернётся к прежнему способу.")) return;
+      sb.disabled = true;
+      try { await post("/ui/api/agentctl", { action: "switch", connection: c.switch }); toast("Агент проверяет новый путь — итог появится в событиях агента"); refresh(); }
+      catch (e) { sb.disabled = false; toast("Не удалось: " + e.message); }
+    };
+    dd.append(" ", sb);
+  } else if (c.switch_why) {
+    dd.append(el("div", { className: "muted", textContent: "переключить связь нельзя: " + c.switch_why }));
+  }
+  if (c.switch_back) dd.append(el("div", { style: "color:var(--warn)", textContent: `связь только что переключена; если она не заработает, агент вернётся на ${connName(c.switch_back)}` }));
+}
+
 function renderStatus() {
   const a = state.agent;
   $("agentBadge").className = "badge " + (state.agent_online ? "on" : "off");
@@ -1912,6 +1954,7 @@ function renderStatus() {
     ? "Агент ещё ни разу не выходил на связь с этим приёмником. Проверьте в окне агента поле «Ошибка» и журнал."
     : `Агент не на связи с ${fmtTime(state.last_seen)}. Ниже — то, что он сообщил в последний раз, сейчас это может быть не так. Причину покажет окно агента: поле «Ошибка» и журнал.`;
   renderAsiair(a, stale);
+  renderAgentCtl(a);
   $("aSeen").textContent = (stale ? "нет связи с " + fmtTime(state.last_seen) : ago(state.last_seen)) +
     (a && a.connection === "tailscale" ? " · через Tailscale" : a && a.connection === "internet" ? " · через интернет" : "");
   $("aScan").textContent = ago(a.last_scan);
