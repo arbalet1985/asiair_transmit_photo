@@ -540,6 +540,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/speedtest", s.handleUISpeedTest)
 	mux.HandleFunc("/ui/api/agentlogs", s.handleUIAgentLogs)
 	mux.HandleFunc("/ui/logs.zip", s.handleUILogsZip)
+	mux.HandleFunc("/ui/api/agentperf", gzipped(s.handleUIAgentPerf))
 	mux.HandleFunc("/ui/api/speed", s.handleUISpeed)
 	mux.HandleFunc("/ui/api/cleanup", s.handleUICleanup)
 	mux.HandleFunc("/ui/api/schedule", s.handleUISchedule)

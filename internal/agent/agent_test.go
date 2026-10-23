@@ -118,6 +118,7 @@ func TestEndToEnd(t *testing.T) {
 		StateFile:           filepath.Join(tmp, "agent-state.json"),
 		Extensions:          []string{".fit", ".jpg"},
 		Exclude:             []string{"Thumbnail"},
+		LogFile:             filepath.Join(tmp, "asiair-agent.log"),
 	}
 	a, err := New(acfg)
 	if err != nil {
@@ -135,6 +136,18 @@ func TestEndToEnd(t *testing.T) {
 	if !bytes.Equal(got, light) {
 		t.Fatal("received file differs")
 	}
+	// the perf log tells the steps of each file
+	waitFor(t, "perf log", 5*time.Second, func() bool {
+		b, _ := os.ReadFile(filepath.Join(tmp, protocol.PerfLogName))
+		for _, l := range strings.Split(string(b), "\n") {
+			var r protocol.PerfRecord
+			if json.Unmarshal([]byte(l), &r) == nil && r.Path == "EMMC Images/Autorun/Light/M31/Light_M31_0001.fit" {
+				return r.Bytes == 300_000 && r.Acts["read"].Bytes == 300_000 && r.Acts["hash"].Bytes == 300_000 &&
+					r.Acts["net"].MS > 0 && r.Acts["commit"].N == 1
+			}
+		}
+		return false
+	})
 	if _, err := os.Stat(filepath.Join(rcfg.DestDir, "EMMC Images", "Thumbnail")); err == nil {
 		t.Fatal("excluded folder was transferred")
 	}

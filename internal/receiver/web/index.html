@@ -268,6 +268,20 @@
   .chart .cross { stroke: var(--muted); stroke-width: 1; }
   .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
   .chart .empty { fill: var(--muted); font-size: 13px; }
+  /* the perf log of the agent */
+  #perfDlg { width: min(1000px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); overflow: auto; }
+  #perfDlg .chart { height: 200px; cursor: default; }
+  #perfDlg h3 { font-size: 13px; margin: 14px 0 2px; }
+  .perfsum { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: var(--row); }
+  .perfsum p { margin: 2px 0; }
+  .perflegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-top: 4px; }
+  .perflegend i, .perftab i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .perftab { width: 100%; font-size: 12px; }
+  .perftab td, .perftab th { padding: 3px 6px; text-align: right; white-space: nowrap; }
+  .perftab td:first-child, .perftab th:first-child { text-align: left; }
+  .perftab td.name { text-align: left; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .perfbar { display: inline-block; height: 8px; background: var(--accent); border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .perfwrap { overflow-x: auto; }
   .chart svg { touch-action: pan-y; cursor: crosshair; user-select: none; -webkit-user-select: none; }
   details.sumabout { margin-top: 8px; }
   details.sumabout > summary, details.nabout > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
@@ -1229,6 +1243,21 @@
     <button id="sdCancel">Отмена</button>
     <button class="primary" id="sdOk">Синхронизировать</button>
   </div>
+</dialog>
+<dialog id="perfDlg" aria-labelledby="perfTitle">
+  <div class="toolbar" style="margin-top:0">
+    <h2 id="perfTitle" style="margin:0">Скорость по шагам</h2>
+    <span class="spacer"></span>
+    <select id="perfRange" aria-label="За какое время">
+      <option value="1">последний час</option>
+      <option value="6">последние 6 ч</option>
+      <option value="24">последние 24 ч</option>
+      <option value="0" selected>весь журнал</option>
+    </select>
+    <button id="perfClose">Закрыть</button>
+  </div>
+  <div class="muted" id="perfFrom"></div>
+  <div id="perfBody"></div>
 </dialog>
 <dialog id="delDirDlg">
   <h2>Удалить папку на ASIAIR целиком</h2>
@@ -2519,12 +2548,267 @@ function renderLogs() {
   const list = state.agent_logs || [];
   $("logsList").replaceChildren(...list.slice(0, 3).map((f, i) => el("div", {},
     el("a", { href: "/ui/logs.zip?name=" + encodeURIComponent(f.name), textContent: (i ? "" : "⤓ ") + "журналы от " + fmtTime(f.time), title: "Журналы агента и приёмника одним архивом" }),
-    el("span", { className: "muted", textContent: " · " + fmtBytes(f.size) }))));
+    el("span", { className: "muted", textContent: " · " + fmtBytes(f.size) + " " }),
+    el("button", { className: "satmore", textContent: "📈 скорость по шагам", title: "Журнал скорости агента из этого архива: куда уходит время при передаче, графиками", onclick: () => openPerf(f.name) }))));
 }
 $("logsBtn").onclick = async () => {
   try { await post("/ui/api/agentlogs", { days: 3 }); refresh(); }
   catch (e) { alert("Ошибка: " + e.message); }
 };
+
+// ---------- the perf log of the agent ----------
+// [key, name, colour, what it is]; upload steps first, then the other work
+const PERF_ACTS = [
+  ["net", "сеть до приёмника", "#3b82f6", "данные уходят по сети (вместе с шифрованием TLS) и ждётся ответ приёмника; при нём — скорость одного потока"],
+  ["read", "чтение с ASIAIR", "#e0a030", "ожидание данных с ASIAIR по Wi-Fi (SMB): сеть до ASIAIR, SD-карта или память"],
+  ["reread", "перечитывание начала", "#b8732a", "после обрыва — чтение с ASIAIR той части файла, что приёмник уже получил"],
+  ["limit", "ожидание лимита", "#9aa3b2", "ограничение скорости бегунком или расписанием"],
+  ["hash", "SHA-256", "#8e6bd6", "контрольная сумма файла (процессор агента)"],
+  ["zstd", "сжатие", "#d660a8", "сжатие FITS, TIFF, XISF на лету (процессор агента)"],
+  ["preview", "превью", "#c49be8", "картинка кадра в окне агента (процессор агента)"],
+  ["check", "проверка на приёмнике", "#2bb3a3", "запрос перед файлом: что приёмник уже получил"],
+  ["open", "открытие на ASIAIR", "#7fb24a", "открытие файла по SMB"],
+  ["commit", "подтверждение", "#1f8a4c", "приёмник сверяет контрольную сумму и сохраняет файл"],
+  ["scan", "обход ASIAIR", "#6a7384", "чтение списка файлов на ASIAIR"],
+  ["delete", "удаление на ASIAIR", "#c83737", "удаление файлов по командам со страницы"],
+];
+const PERF_STEP = new Set(["check", "open", "commit"]), PERF_ITEMS = new Set(["scan", "delete"]);
+const PERF_UPLOAD = PERF_ACTS.filter(a => !PERF_ITEMS.has(a[0]));
+let perfData = null, perfName = "";
+const fmtSec = ms => ms >= 10e3 ? Math.round(ms / 1000) + " с" : ms >= 1000 ? (ms / 1000).toFixed(1) + " с" : (ms / 1000).toFixed(2) + " с";
+function fmtLong(ms) {
+  const s = ms / 1000;
+  if (s < 120) return fmtSec(ms);
+  if (s < 7200) return Math.round(s / 60) + " мин";
+  return (s / 3600).toFixed(1) + " ч";
+}
+const perfSpeed = (b, ms) => ms > 0 && b > 0 ? fmtBytes(b / (ms / 1000)) + "/s" : "—";
+
+async function openPerf(name) {
+  perfName = name; perfData = null;
+  $("perfFrom").textContent = "журнал скорости из архива " + name + " — загрузка…";
+  $("perfBody").replaceChildren();
+  $("perfDlg").showModal();
+  try {
+    const r = await fetch("/ui/api/agentperf?name=" + encodeURIComponent(name));
+    if (!r.ok) throw new Error(await r.text());
+    perfData = await r.json();
+  } catch (e) {
+    $("perfFrom").textContent = "не удалось прочитать журнал: " + e.message;
+    return;
+  }
+  drawPerf();
+}
+$("perfClose").onclick = () => $("perfDlg").close();
+$("perfRange").onchange = () => drawPerf();
+
+// a chart over time: bars (stacked, one per bucket) or lines
+function perfChart(title, t0, t1, opt) {
+  const box = el("div", { className: "chart" });
+  const W = Math.max(320, Math.min(960, $("perfDlg").clientWidth - 40)), H = 200;
+  const L = 64, R = 8, T = 10, B = 22, pw = W - L - R, ph = H - T - B;
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": title });
+  const span = Math.max(t1 - t0, 60e3), x = ts => L + (ts - t0) / span * pw;
+  const hi = opt.max > 0 ? opt.max : 1;
+  const yt = opt.ticks(hi), top = Math.max(hi, yt.ticks[yt.ticks.length - 1] || hi);
+  const y = v => T + ph - v / top * ph;
+  const grid = mk("g", { class: "grid" }), axis = mk("g", { class: "axis" });
+  for (const v of yt.ticks) {
+    grid.append(mk("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+    axis.append(mk("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, yt.label(v)));
+  }
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440].map(m => m * 60e3);
+  const tick = steps.find(v => span / v <= Math.max(3, Math.floor(pw / 90))) || 1440 * 60e3;
+  const off = new Date(t0).getTimezoneOffset() * 60e3;
+  for (let ts = Math.ceil((t0 - off) / tick) * tick + off; ts <= t1; ts += tick) {
+    const d = new Date(ts);
+    const text = tick >= 1440 * 60e3 || (d.getHours() === 0 && d.getMinutes() === 0 && span > 3600e3)
+      ? d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    axis.append(mk("text", { x: x(ts), y: H - 6, "text-anchor": "middle" }, text));
+  }
+  svg.append(grid, axis);
+  if (opt.bars) {
+    const bw = Math.max(1, opt.bucket / span * pw - (opt.bucket / span * pw > 4 ? 1 : 0));
+    for (const b of opt.bars) {
+      let acc = 0;
+      const g = mk("g", {});
+      for (const [v, colour] of b.parts) {
+        if (!(v > 0)) continue;
+        g.append(mk("rect", { x: x(b.ts).toFixed(1), y: y(acc + v).toFixed(1), width: bw.toFixed(1), height: Math.max(0.5, y(acc) - y(acc + v)).toFixed(1), fill: colour }));
+        acc += v;
+      }
+      g.append(mk("title", {}, b.tip));
+      svg.append(g);
+    }
+  }
+  for (const line of opt.lines || []) {
+    let d = "", prev = null;
+    for (const p of line.pts) {
+      if (p.v == null) { prev = null; continue; }
+      d += `${prev === null || p.ts - prev > opt.gap ? "M" : "L"}${x(p.ts).toFixed(1)},${y(p.v).toFixed(1)}`;
+      prev = p.ts;
+      const dot = mk("circle", { cx: x(p.ts).toFixed(1), cy: y(p.v).toFixed(1), r: 2.2, fill: line.colour });
+      dot.append(mk("title", {}, p.tip));
+      svg.append(dot);
+    }
+    svg.append(mk("path", { d, fill: "none", stroke: line.colour, "stroke-width": 1.8, "stroke-linejoin": "round" }));
+  }
+  if (opt.empty) svg.append(mk("text", { class: "empty", x: L + pw / 2, y: T + ph / 2, "text-anchor": "middle" }, opt.empty));
+  box.append(svg);
+  return [el("h3", { textContent: title }), box];
+}
+function numTicks(unit) {
+  return hi => {
+    const step = niceStep(hi, 4), ticks = [];
+    for (let v = 0; v <= hi + step * 0.999; v += step) ticks.push(v);
+    return { ticks, step, label: v => +v.toFixed(2) + unit };
+  };
+}
+const legend = acts => el("div", { className: "perflegend" }, ...acts.map(a => el("span", { title: a[3] }, el("i", { style: "background:" + a[2] }), a[1])));
+
+function drawPerf() {
+  const d = perfData;
+  if (!d) return;
+  const all = [...d.minutes, ...d.files].map(r => +new Date(r.t));
+  if (!all.length) {
+    $("perfFrom").textContent = "в архиве " + perfName + " нет журнала скорости — его пишет агент версии с этим журналом; запросите журналы с агента ещё раз через несколько минут передачи";
+    $("perfBody").replaceChildren();
+    return;
+  }
+  const last = Math.max(...all), hours = +$("perfRange").value;
+  const t0 = hours ? last - hours * 3600e3 : Math.min(...all) - 60e3, t1 = last;
+  const minutes = d.minutes.map(r => ({ ...r, ts: +new Date(r.t) })).filter(r => r.ts > t0);
+  const files = d.files.map(r => ({ ...r, ts: +new Date(r.t) })).filter(r => r.ts > t0);
+  $("perfFrom").textContent = `архив ${perfName}: ${new Date(t0 + (hours ? 0 : 60e3)).toLocaleString()} — ${new Date(t1).toLocaleString()}` +
+    (d.more_files ? ` · старые попытки файлов (${d.more_files}) не показаны` : "");
+
+  // totals of the period
+  const tot = {};
+  for (const a of PERF_ACTS) tot[a[0]] = { ms: 0, b: 0, n: 0, max: 0 };
+  for (const m of minutes) for (const k in m.acts || {}) {
+    const t = tot[k], v = m.acts[k];
+    if (!t) continue;
+    t.ms += v.ms || 0; t.b += v.b || 0; t.n += v.n || 0; t.max = Math.max(t.max, v.max || 0);
+  }
+  const upMs = PERF_UPLOAD.reduce((s, a) => s + tot[a[0]].ms, 0);
+  const sent = files.filter(f => !f.err), failed = files.length - sent.length;
+  const sentBytes = sent.reduce((s, f) => s + (f.bytes || 0), 0);
+  const netBytes = minutes.reduce((s, m) => s + (m.bytes || 0), 0);
+  const actMin = minutes.filter(m => m.bytes > 0);
+  const cpus = minutes.filter(m => m.cpu != null && m.acts && m.acts.net).map(m => m.cpu || 0);
+  const cores = (minutes.find(m => m.cores) || {}).cores;
+
+  const sum = el("div", { className: "perfsum" });
+  sum.append(el("p", { textContent: `Отправлено файлов: ${sent.length}` + (failed ? `, прерванных попыток: ${failed}` : "") +
+    ` · ${fmtBytes(sentBytes)} файлов, по сети ${fmtBytes(netBytes)}` +
+    (actMin.length ? ` · средняя скорость в минуты передачи ${fmtBytes(netBytes / actMin.length / 60)}/s` : "") }));
+  const top = PERF_UPLOAD.map(a => [a, tot[a[0]].ms]).sort((p, q) => q[1] - p[1])[0];
+  if (top && upMs > 0) {
+    const [a, ms] = top, share = Math.round(ms / upMs * 100);
+    const why = {
+      net: "передача упирается в сеть от обсерватории до приёмника (отдача интернета обсерватории, Tailscale через ретранслятор). Попробуйте больше «Одновременно файлов» и «Проверку скорости: агент → приёмник»",
+      read: "передача упирается в чтение с ASIAIR: Wi-Fi до ASIAIR, SD-карта или ASIAIR занят съёмкой. Попробуйте «Проверку скорости: ASIAIR → агент», больше запросов на файл или кабель/5 ГГц",
+      reread: "после обрывов много перечитывается с ASIAIR — значит, часто рвётся связь",
+      limit: "передачу держит ограничение скорости — бегунок или расписание",
+      hash: "много времени уходит на контрольную сумму — слабый процессор агента",
+      zstd: "много времени уходит на сжатие — слабый процессор агента",
+      preview: "много времени уходит на превью в окне агента — слабый процессор агента",
+      check: "много времени уходит на запросы к приёмнику перед файлами — большая задержка сети",
+      open: "долго открываются файлы на ASIAIR",
+      commit: "долго подтверждаются файлы — приёмник медленно сохраняет их на диск",
+    }[a[0]];
+    sum.append(el("p", {}, el("b", { textContent: `Больше всего времени — «${a[1]}» (${share}%): ` }), why || ""));
+  }
+  if (cpus.length) {
+    const avg = cpus.reduce((s, v) => s + v, 0) / cpus.length, mx = Math.max(...cpus);
+    const crypto = tot.hash.ms + tot.zstd.ms + tot.preview.ms;
+    sum.append(el("p", { textContent: `Процессор агента во время передачи: в среднем ${Math.round(avg)}%, до ${Math.round(mx)}% (100% — одно ядро${cores ? ", ядер " + cores : ""}). ` +
+      (mx < 50 ? "Шифрование, сжатие и проверки процессор не загружают — тормозят не они." : mx >= 85 ? "Процессор загружен почти на ядро — обработка на ПК агента может сдерживать передачу." : "") +
+      (upMs > 0 ? ` SHA-256, сжатие и превью — ${Math.round(crypto / upMs * 100)}% времени передачи.` : "") }));
+  }
+
+  // where the time goes: a table of the actions
+  const rows = PERF_ACTS.filter(a => tot[a[0]].ms > 0 || tot[a[0]].n > 0).map(a => {
+    const t = tot[a[0]], k = a[0];
+    const share = !PERF_ITEMS.has(k) && upMs > 0 ? t.ms / upMs : null;
+    let data = "", speedText = "";
+    if (PERF_ITEMS.has(k)) { data = `${t.n} раз, ${t.b} шт.`; speedText = t.n ? "в среднем " + fmtSec(t.ms / t.n) : ""; }
+    else if (PERF_STEP.has(k)) { data = `${t.n} раз`; speedText = t.n ? `в среднем ${fmtSec(t.ms / t.n)}, дольше всего ${fmtSec(t.max)}` : ""; }
+    else { data = t.b ? fmtBytes(t.b) : ""; speedText = t.b ? perfSpeed(t.b, t.ms) : ""; }
+    return el("tr", { title: a[3] },
+      el("td", {}, el("i", { style: "background:" + a[2] }), a[1]),
+      el("td", { textContent: fmtLong(t.ms) }),
+      el("td", {}, share == null ? "" : el("span", { className: "perfbar", style: `width:${Math.max(1, share * 120)}px;background:${a[2]}` }), share == null ? "" : Math.round(share * 100) + "%"),
+      el("td", { textContent: data }),
+      el("td", { textContent: speedText }));
+  });
+  const table = el("div", { className: "perfwrap" }, el("table", { className: "perftab" },
+    el("thead", {}, el("tr", {}, ...["Шаг", "Время", "Доля передачи", "Данные", "Скорость"].map(h => el("th", { textContent: h })))),
+    el("tbody", {}, ...rows)));
+
+  // the charts by time buckets: no more than ~240 bars
+  const span = t1 - t0, bucket = Math.max(60e3, Math.ceil(span / 240 / 60e3) * 60e3);
+  const buckets = new Map();
+  for (const m of minutes) {
+    const k = Math.floor(m.ts / bucket) * bucket;
+    if (!buckets.has(k)) buckets.set(k, { ts: k, n: 0, acts: {}, bytes: 0, cpu: [], files: 0 });
+    const b = buckets.get(k);
+    b.n++; b.bytes += m.bytes || 0; b.files += m.files || 0;
+    if (m.cpu != null) b.cpu.push(m.cpu);
+    for (const key in m.acts || {}) {
+      const v = m.acts[key], t = b.acts[key] || (b.acts[key] = { ms: 0, b: 0 });
+      t.ms += v.ms || 0; t.b += v.b || 0;
+    }
+  }
+  const bs = [...buckets.values()].sort((p, q) => p.ts - q.ts), per = bucket / 60e3;
+  const when = ts => new Date(ts).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const bars = bs.map(b => ({
+    ts: b.ts,
+    parts: PERF_ACTS.map(a => [(b.acts[a[0]] ? b.acts[a[0]].ms : 0) / 1000 / per, a[2]]),
+    tip: when(b.ts) + (per > 1 ? ` (по ${per} мин)` : "") + "\n" + PERF_ACTS.filter(a => b.acts[a[0]] && b.acts[a[0]].ms > 0)
+      .map(a => `${a[1]}: ${fmtSec(b.acts[a[0]].ms / per)} в минуту`).join("\n"),
+  }));
+  const barMax = Math.max(0, ...bars.map(b => b.parts.reduce((s, p) => s + p[0], 0)));
+  const netPts = bs.map(b => ({ ts: b.ts + bucket / 2, v: b.bytes / (b.n * 60), tip: `${when(b.ts)}: по сети ${fmtBytes(b.bytes / (b.n * 60))}/s, файлов ${b.files}` }));
+  const readPts = bs.map(b => {
+    const r = b.acts.read;
+    return { ts: b.ts + bucket / 2, v: r && r.ms > 200 ? r.b / (r.ms / 1000) : null, tip: r ? `${when(b.ts)}: чтение с ASIAIR ${perfSpeed(r.b, r.ms)} на поток` : "" };
+  });
+  const cpuPts = bs.map(b => ({ ts: b.ts + bucket / 2, v: b.cpu.length ? b.cpu.reduce((s, v) => s + v, 0) / b.cpu.length : null, tip: `${when(b.ts)}: процессор ${b.cpu.length ? Math.round(b.cpu.reduce((s, v) => s + v, 0) / b.cpu.length) : 0}%` }));
+  const spMax = Math.max(0, ...netPts.map(p => p.v || 0), ...readPts.map(p => p.v || 0));
+  const gap = bucket * 1.5;
+  const empty = bs.length ? "" : "за это время агент ничего не делал";
+
+  // the last files: where each one spent its time
+  const shown = files.slice(-100).reverse();
+  const fcols = ["net", "read", "limit", "hash", "zstd", "commit"];
+  const ftable = el("div", { className: "perfwrap" }, el("table", { className: "perftab" },
+    el("thead", {}, el("tr", {}, ...["Когда", "Файл", "Размер", "Время", "Скорость", ...fcols.map(k => PERF_ACTS.find(a => a[0] === k)[1]), ""].map(h => el("th", { textContent: h })))),
+    el("tbody", {}, ...shown.map(f => el("tr", {},
+      el("td", { textContent: new Date(f.ts).toLocaleTimeString("ru-RU") }),
+      el("td", { className: "name", textContent: f.path.split("/").pop(), title: f.path }),
+      el("td", { textContent: fmtBytes(f.bytes || 0) }),
+      el("td", { textContent: fmtSec(f.ms || 0) }),
+      el("td", { textContent: perfSpeed(f.bytes, f.ms) }),
+      ...fcols.map(k => el("td", { textContent: f.acts && f.acts[k] ? fmtSec(f.acts[k].ms) : "" })),
+      el("td", { className: f.err ? "err" : "muted", textContent: f.err ? "прервано: " + f.err : "", style: "text-align:left" }))))));
+
+  $("perfBody").replaceChildren(sum, el("h3", { textContent: "Куда уходит время" }), table,
+    el("div", { className: "hint", textContent: "Времена сложены по всем потокам: при 3 потоках за минуту набирается до 180 с. «Доля передачи» — от времени всех шагов отправки файлов. Наведите на строку — что это за шаг." }),
+    ...perfChart("Время по шагам, секунд в минуту (по всем потокам)", t0, t1, { bars, bucket, max: barMax, ticks: numTicks(" с"), empty }),
+    legend(PERF_ACTS.filter(a => tot[a[0]].ms > 0)),
+    ...perfChart("Скорость: по сети (синяя, всего) и чтение с ASIAIR (оранжевая, на поток)", t0, t1, {
+      max: spMax, ticks: hi => speedTicks(0, hi), gap, empty,
+      lines: [{ pts: netPts, colour: "#3b82f6" }, { pts: readPts, colour: "#e0a030" }],
+    }),
+    ...perfChart("Процессор агента, % одного ядра" + (cores ? ` (ядер ${cores})` : ""), t0, t1, {
+      max: Math.max(10, ...cpuPts.map(p => p.v || 0)), ticks: numTicks("%"), gap, empty,
+      lines: [{ pts: cpuPts, colour: "#d660a8" }],
+    }),
+    el("h3", { textContent: `Последние файлы (${shown.length} из ${files.length})` }), ftable);
+}
 
 // ---------- speed tests ----------
 function renderSpeedTest() {

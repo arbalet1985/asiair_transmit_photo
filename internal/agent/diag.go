@@ -155,6 +155,7 @@ func diagText(d protocol.Diag, streams int) string {
 type timedBody struct {
 	r    io.Reader
 	d    *diag
+	fp   *filePerf // the perf log of the file, if set
 	last time.Time
 }
 
@@ -163,16 +164,28 @@ func (b *timedBody) Read(p []byte) (int, error) {
 	if !b.last.IsZero() {
 		b.d.netNs.Add(int64(start.Sub(b.last)))
 	}
+	var inner int64
+	if b.fp != nil {
+		b.fp.add(actNet, 0, start.Sub(time.Unix(0, b.fp.last.Load())))
+		inner = b.fp.inner.Load()
+	}
 	n, err := b.r.Read(p)
 	b.last = time.Now()
 	b.d.limitNs.Add(int64(b.last.Sub(start)))
 	b.d.bytes.Add(int64(n))
+	if b.fp != nil {
+		// what is not reading, hashing or compressing is the rate limit
+		b.fp.add(actLimit, 0, b.last.Sub(start)-time.Duration(b.fp.inner.Load()-inner))
+		b.fp.add(actNet, int64(n), 0)
+		b.fp.last.Store(b.last.UnixNano())
+	}
 	return n, err
 }
 
 type timedSource struct {
 	r     io.Reader
 	d     *diag
+	fp    *filePerf
 	share string // ASIAIR storage of the file
 }
 
@@ -180,6 +193,9 @@ func (s *timedSource) Read(p []byte) (int, error) {
 	start := time.Now()
 	n, err := s.r.Read(p)
 	ns := int64(time.Since(start))
+	if s.fp != nil {
+		s.fp.add(actRead, int64(n), time.Duration(ns))
+	}
 	s.d.readNs.Add(ns)
 	s.d.limitNs.Add(-ns) // it is inside the timedBody read
 	s.d.raw.Add(int64(n))
