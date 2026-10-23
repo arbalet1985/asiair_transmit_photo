@@ -87,6 +87,7 @@ type Server struct {
 	// Firewall manages the Windows firewall rule (set by the program).
 	Firewall Firewall
 	fw       fwCache
+	puts     sync.Map // remote path -> *activePut: uploads being received
 
 	// the agent API on Listen, opened and closed from the page
 	api    *http.Server
@@ -293,6 +294,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodHead, http.MethodGet:
+		s.takeOver(p) // it holds the file: the offset would wait for it
 		off, done := s.getStore().Offset(p, size, mtime)
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(off, 10))
 		w.Header().Set(protocol.HeaderEncodings, wire.Encoding)
@@ -314,11 +316,13 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, msg, http.StatusInsufficientStorage)
 			return
 		}
-		body := io.Reader(r.Body)
+		put := s.beginPut(p, w)
+		defer s.endPut(p, put)
+		body := put.reader(r.Body)
 		switch enc := r.Header.Get("Content-Encoding"); enc {
 		case "", "identity":
 		case wire.Encoding:
-			dec, err := wire.NewDecoder(r.Body, size-off)
+			dec, err := wire.NewDecoder(body, size-off)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -331,6 +335,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		got, sum, err := s.getStore().Write(p, size, mtime, off, body)
 		w.Header().Set(protocol.HeaderOffset, strconv.FormatInt(got, 10))
+		if err != nil {
+			// the rest of the body is not read: the server would wait for
+			// it on a connection that may be dead
+			w.Header().Set("Connection", "close")
+		}
 		var eo *ErrOffset
 		switch {
 		case errors.As(err, &eo):
