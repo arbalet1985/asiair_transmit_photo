@@ -261,6 +261,7 @@ func (a *Agent) tsConfirmed() {
 	}
 	os.Remove(tsConfirm(c))
 	os.RemoveAll(tsOld(c))
+	os.Remove(tsNeedLogin(c.TailscaleDir))
 	a.mu.Lock()
 	a.status.TSLoginBack = false
 	a.mu.Unlock()

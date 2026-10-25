@@ -169,6 +169,9 @@ type AgentStatus struct {
 	// TSLoginBack: the agent restarted with a new Tailscale login and goes
 	// back to the old one unless it reaches the receiver through it soon.
 	TSLoginBack bool `json:"ts_login_back,omitempty"`
+	// TSNeedLogin: Tailscale on the agent asked for a login and the agent
+	// switched to the internet; a new login is to be sent (TSLogin).
+	TSNeedLogin bool `json:"ts_need_login,omitempty"`
 }
 
 // Connections of the agent to the receiver (AgentStatus.Connection).

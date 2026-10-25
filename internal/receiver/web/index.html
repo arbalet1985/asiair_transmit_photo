@@ -2059,11 +2059,15 @@ function renderAgentTs(c) {
   const box = $("aTs"), known = !!(state.agent && state.agent.can_ts_login);
   box.hidden = !known;
   if (!known) return;
-  $("aTsNow").textContent = c.ts_hostname ? "· " + c.ts_hostname + (c.ts_control_url ? " @ " + c.ts_control_url : "") : "";
+  $("aTsNow").textContent = c.ts_need_login ? "· ⚠ требует входа" : c.ts_hostname ? "· " + c.ts_hostname + (c.ts_control_url ? " @ " + c.ts_control_url : "") : "";
+  $("aTsNow").style.color = c.ts_need_login ? "var(--warn)" : "";
+  // Tailscale of the agent asked for a login: the form is opened once
+  if (c.ts_need_login && !box.dataset.shown) { box.open = true; box.dataset.shown = "1"; }
   // filled with what the agent has, until edited
   for (const [id, v] of [["aTsHost", c.ts_hostname || ""], ["aTsCtl", c.ts_control_url || ""]])
     if (!$(id).dataset.edited && document.activeElement !== $(id)) $(id).value = v;
   const why = c.ts_login_busy ? "вход отправлен — агент проверяет его, итог появится в событиях агента"
+    : c.ts_need_login && c.can_ts_login ? "Tailscale агента требует входа, связь идёт через интернет — отправьте новый ключ"
     : c.ts_login_back ? "новый вход взят, ждёт подтверждения: если связи через него не будет, агент вернётся к прежнему"
     : c.ts_why || "";
   $("aTsWhy").textContent = why;

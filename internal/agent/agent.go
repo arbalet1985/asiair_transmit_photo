@@ -284,6 +284,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate.Load()))
 	a.reportCrash()
 	a.event("", "агент %s запущен (ASIAIR %s)", protocol.Version, a.cfg.ASIAIR)
+	a.failoverNoted()
 	if a.Restart != nil {
 		a.startupUpdate()
 	}
@@ -298,6 +299,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		{"команды удаления", a.commandLoop},
 		{"сведения о сети", a.netInfoLoop},
 		{"способ связи", a.connLoop},
+		{"запасной путь связи", a.failoverLoop},
 		{"журнал скорости", a.perfLoop},
 	}
 	for _, l := range loops {
@@ -1283,6 +1285,7 @@ func (a *Agent) Status() protocol.AgentStatus {
 	a.status.CanRestart = a.Restart != nil
 	a.status.CanTSLogin = a.Restart != nil
 	a.status.TSHostname, a.status.TSControlURL = a.cfg.TailscaleHostname, a.cfg.TailscaleControlURL
+	a.status.TSNeedLogin = a.cfg.TailscaleDir != "" && exists(tsNeedLogin(a.cfg.TailscaleDir))
 	a.status.Modes = a.modes()
 	a.status.SwitchBack = a.switchBackTo
 	a.status.Speed = a.lim.Speed()

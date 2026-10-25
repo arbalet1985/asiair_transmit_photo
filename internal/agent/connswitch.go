@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/config"
@@ -102,7 +103,7 @@ func (a *Agent) switchAsked(ctx context.Context, sw *protocol.ConnSwitch) {
 				done()
 			}
 		}()
-		if err := a.switchConn(ctx, sw); err != nil {
+		if err := a.switchConn(ctx, sw, "по просьбе приёмника"); err != nil {
 			a.event("warn", "переключение связи на %s не удалось: %v — связь остаётся через %s",
 				connName(sw.Connection), err, connName(a.cfg.Connection))
 			done()
@@ -112,10 +113,11 @@ func (a *Agent) switchAsked(ctx context.Context, sw *protocol.ConnSwitch) {
 
 // switchConn checks that the receiver answers the new way, saves it in
 // agent.yaml and restarts the agent; an error leaves everything as it was.
-func (a *Agent) switchConn(ctx context.Context, sw *protocol.ConnSwitch) error {
+// by tells who asked ("по просьбе приёмника", "автоматически").
+func (a *Agent) switchConn(ctx context.Context, sw *protocol.ConnSwitch, by string) error {
 	c := a.cfg
 	from, to := c.Connection, sw.Connection
-	a.event("", "переключение связи с приёмником: %s → %s по просьбе приёмника, проверяю новый путь", connName(from), connName(to))
+	a.event("", "переключение связи с приёмником: %s → %s %s, проверяю новый путь", connName(from), connName(to), by)
 	var urls []string
 	seen := map[string]bool{}
 	for _, u := range append([]string{c.URLFor(to)}, sw.URLs...) {
@@ -241,6 +243,9 @@ func (a *Agent) connLoop(ctx context.Context) {
 	}
 	if tsPending {
 		a.tsConfirmed()
+	}
+	if c.UseTailscale() {
+		os.Remove(tsNeedLogin(c.TailscaleDir)) // Tailscale works again
 	}
 	values := map[string]string{}
 	stored := c.ReceiverURLInternet

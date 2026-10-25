@@ -59,6 +59,7 @@ type agentCtl struct {
 	TSControlURL string `json:"ts_control_url,omitempty"`
 	TSLoginBusy  bool   `json:"ts_login_busy,omitempty"`
 	TSLoginBack  bool   `json:"ts_login_back,omitempty"`
+	TSNeedLogin  bool   `json:"ts_need_login,omitempty"`
 }
 
 func (s *Server) agentCtl(st protocol.AgentStatus, online bool) agentCtl {
@@ -67,7 +68,7 @@ func (s *Server) agentCtl(st protocol.AgentStatus, online bool) agentCtl {
 	c.RestartAt, c.SwitchTo = s.state.AgentCtlPending()
 	c.SwitchBack = st.SwitchBack
 	if st.CanTSLogin {
-		c.TSHostname, c.TSControlURL, c.TSLoginBack = st.TSHostname, st.TSControlURL, st.TSLoginBack
+		c.TSHostname, c.TSControlURL, c.TSLoginBack, c.TSNeedLogin = st.TSHostname, st.TSControlURL, st.TSLoginBack, st.TSNeedLogin
 		c.TSLoginBusy = s.state.TSLoginPending()
 		_, c.TSWhy = s.tsLoginURLs()
 		if !online {
