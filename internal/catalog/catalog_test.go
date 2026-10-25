@@ -2,6 +2,9 @@ package catalog
 
 import (
 	"bufio"
+	"bytes"
+	"image"
+	"image/jpeg"
 	"math"
 	"strconv"
 	"strings"
@@ -87,5 +90,33 @@ func TestCatalogsComplete(t *testing.T) {
 				t.Errorf("%s%d not found", c.prefix, i)
 			}
 		}
+	}
+}
+
+// TestStretch: a dark picture comes out bright, its hue kept.
+func TestStretch(t *testing.T) {
+	im := image.NewRGBA(image.Rect(0, 0, 40, 40))
+	for i := 0; i < len(im.Pix); i += 4 {
+		im.Pix[i], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3] = 10, 10, 12, 255 // the background
+	}
+	for y := 15; y < 25; y++ {
+		for x := 15; x < 25; x++ {
+			o := y*im.Stride + x*4
+			im.Pix[o], im.Pix[o+1], im.Pix[o+2] = 40, 20, 14 // a faint red nebula
+		}
+	}
+	var buf bytes.Buffer
+	jpeg.Encode(&buf, im, &jpeg.Options{Quality: 95})
+	b, err := Stretch(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := jpeg.Decode(bytes.NewReader(b))
+	r, g, bl, _ := out.At(20, 20).RGBA()
+	if r>>8 < 200 || r <= g || g < bl {
+		t.Fatalf("nebula %d %d %d", r>>8, g>>8, bl>>8)
+	}
+	if r, _, _, _ := out.At(2, 2).RGBA(); r>>8 > 60 { // the noise of the JPEG comes out a little
+		t.Fatalf("background %d", r>>8)
 	}
 }
