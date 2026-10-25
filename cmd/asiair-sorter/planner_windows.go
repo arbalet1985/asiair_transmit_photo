@@ -289,7 +289,7 @@ func (p *plannerUI) page() TabPage {
 							PushButton{Text: "↓", MaxSize: Size{Width: 30}, OnClicked: func() { p.moveTarget(1) }, ToolTipText: "Менее важно"},
 							HSpacer{},
 							PushButton{Text: "Атлас…", OnClicked: p.openAtlas,
-								ToolTipText: "Атлас неба в браузере: рамки поля зрения объектов плана (оптика по кадрам, редьюсер) и кадрирование — сдвиг и поворот рамки"},
+								ToolTipText: "Атлас неба в отдельном окне: карта неба как в ASIAIR, снимки неба с рамками поля зрения объектов плана\n(оптика по кадрам, редьюсер) и кадрирование — сдвиг и поворот рамки"},
 						}},
 						TableView{AssignTo: &p.targetTable, Model: p.targets, Columns: tcols, CheckBoxes: true, NotSortableByHeaderClick: true,
 							OnCurrentIndexChanged: p.targetChosen, StretchFactor: 1},

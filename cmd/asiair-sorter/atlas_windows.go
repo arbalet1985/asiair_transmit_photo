@@ -23,8 +23,8 @@ import (
 // openAtlas starts the page (once) and opens it.
 func (p *plannerUI) openAtlas() { p.showAtlas(true) }
 
-// showAtlas starts the page and opens it in the browser: always, or
-// (always false) only when no page of it is open.
+// showAtlas starts the page and opens it in a window of its own (or the
+// browser): always, or (always false) only when no page of it is open.
 func (p *plannerUI) showAtlas(always bool) {
 	p.ensureAtlas()
 	p.atlasChanged()
@@ -34,7 +34,11 @@ func (p *plannerUI) showAtlas(always bool) {
 		return
 	}
 	if always || !p.atlas.Watched() {
-		openURL(u)
+		if b := openAppWindow(u); b != "" {
+			log.Printf("Атлас открыт отдельным окном (%s)", b)
+		} else {
+			log.Printf("Атлас открыт в браузере: Edge и другие браузеры на Chromium не найдены")
+		}
 	}
 }
 
