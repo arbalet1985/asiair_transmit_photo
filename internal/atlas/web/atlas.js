@@ -1,9 +1,13 @@
 // The atlas of the planner: the sky (Aladin Lite, CDS Strasbourg) with the
 // field of view of every target of the plan, and the framing of a target:
 // its frame held in the middle while the sky is moved under it, turned by
-// the camera angle. Shared by the receiver page and the sorter's atlas page.
+// the camera angle; or the sky map as in ASIAIR (skymap.js), the sky of the
+// observatory turned with the finger. Shared by the receiver page and the
+// sorter's atlas page.
 "use strict";
 (function () {
+  // skymap.js and skydata.js lie next to this file
+  const BASE = (document.currentScript && document.currentScript.src || "").replace(/[?#].*$/, "").replace(/[^/]*$/, "");
   const ALADIN = "https://cdn.jsdelivr.net/npm/aladin-lite@3.8.2/dist/aladin.js";
   const SURVEYS = [["P/DSS2/color", "DSS2 (цвет)"], ["P/PanSTARRS/DR1/color-z-zg-g", "PanSTARRS"], ["P/2MASS/color", "2MASS (ИК)"], ["P/Mellinger/color", "Mellinger (широко)"]];
   const rad = Math.PI / 180;
@@ -83,7 +87,7 @@
   .atlas .asky .amsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
     padding: 16px; color: #bbb; font-size: 13px; }
   .atlas .ainfo { font-size: 12px; color: var(--muted, #888); overflow-wrap: anywhere; }
-  .atlas .aframe[hidden] { display: none; }
+  .atlas .aframe[hidden], .atlas [hidden] { display: none !important; }
   .atlas .aframe input[type=range] { flex: 1 1 140px; min-width: 100px; }
   .atlas button.on { background: var(--accent, #5b92f0); border-color: var(--accent, #5b92f0); color: #fff; }
   @media (max-width: 700px) { .atlas .asky { height: 340px; } }`;
@@ -97,7 +101,8 @@
 
   // create builds the atlas in div. opts: onFrame(i, ra, dec, angle) — the
   // framing of target i applied; onSelect(i) — a frame clicked; onOptics(o)
-  // — the optics changed.
+  // — the optics changed; for the sky map: objectsURL, find(q),
+  // onFavorite(o, on), onAdd(o) (see skymap.js).
   function create(div, opts) {
     opts = opts || {};
     if (!document.getElementById("atlasCss")) document.head.append(el("style", { id: "atlasCss", textContent: CSS }));
@@ -133,8 +138,54 @@
     const msg = el("div", { className: "amsg", textContent: "Загружаю атлас…" });
     sky.append(msg);
     const info = el("div", { className: "ainfo" });
-    const root = el("div", { className: "atlas" }, el("div", { className: "arow" }, survey, btnFrame), optRow, frameRow, photoRow, sky, info);
+    // the two atlases: the photographs of the sky and the sky map
+    const btnPhotos = el("button", { type: "button", textContent: "Снимки неба", title: "Снимки неба (Aladin): рамки объектов и кадрирование" });
+    const btnMap = el("button", { type: "button", textContent: "Карта неба", title: "Небо обсерватории, как в атласе ASIAIR: звёзды, созвездия, объекты, горизонт; крутите пальцем или мышью" });
+    const mapBox = el("div", { hidden: true });
+    const photoBar = el("span", { className: "arow" }, survey, btnFrame);
+    const root = el("div", { className: "atlas" }, el("div", { className: "arow" }, btnPhotos, btnMap, photoBar), optRow, frameRow, photoRow, sky, mapBox, info);
     div.replaceChildren(root);
+    let mode = "photos", map = null, aladinAsked = false;
+    const mapSt = { site: null, sky: null, favs: [], time: null };
+    try { mode = localStorage.getItem("atlas.mode") === "map" ? "map" : "photos"; } catch (e) { /* private window */ }
+    function ensureMap() {
+      if (map || !window.SkyMap) return map;
+      map = SkyMap.create(mapBox, { className: "asky", objectsURL: opts.objectsURL, dataURL: BASE + "skydata.js", find: opts.find,
+        onFavorite: opts.onFavorite, onAdd: opts.onAdd, onSelect: i => { if (opts.onSelect) opts.onSelect(i); },
+        onPhotos: o => { setMode("photos"); api.setPreview(o.ra, o.dec); } });
+      if (mapSt.site) map.setSite(...mapSt.site);
+      if (mapSt.sky) map.setSky(mapSt.sky);
+      map.setFavorites(mapSt.favs);
+      if (mapSt.time != null) map.setTime(mapSt.time);
+      mapSync();
+      return map;
+    }
+    function mapSync() {
+      if (!map) return;
+      map.setTargets(st.targets, st.colors, st.sel);
+      const [w, h] = fov(optics());
+      map.setFrame(w, h);
+    }
+    function setMode(m) {
+      mode = m;
+      try { localStorage.setItem("atlas.mode", m); } catch (e) { /* private window */ }
+      btnPhotos.classList.toggle("on", m === "photos");
+      btnMap.classList.toggle("on", m === "map");
+      const photos = m === "photos";
+      sky.hidden = !photos; photoBar.hidden = !photos;
+      if (!photos && st.framing) setFraming(null);
+      frameRow.hidden = !(photos && st.framing);
+      photoRow.hidden = !(photos && st.photo);
+      mapBox.hidden = photos;
+      if (photos) loadAladin();
+      else if (!window.SkyMap) {
+        document.head.append(el("script", { src: BASE + "skymap.js", onload: () => { ensureMap(); },
+          onerror: () => { info.textContent = "Карта неба не загрузилась."; } }));
+      } else ensureMap();
+      draw();
+    }
+    btnPhotos.onclick = () => setMode("photos");
+    btnMap.onclick = () => setMode("map");
 
     // the optics in effect: the ones chosen, else the last setup of the frames
     function optics() {
@@ -174,13 +225,15 @@
       const scale = o.pixel / 1000 / (o.focal * (o.reducer > 0 ? o.reducer : 1)) / rad * 3600;
       const deg = v => v >= 1 ? `${ru(v, 2)}°` : `${ru(v * 60, 1)}′`;
       let t = `Поле ${deg(w)} × ${deg(h)}, ${ru(scale, 2)}″/пикс.`;
-      if (st.framing) t += " Двигайте небо под рамкой (мышь, палец), поворачивайте её, затем «Применить».";
+      if (mode === "map") t += " Карта: тащите небо, колесо или два пальца — масштаб, щелчок по объекту — сведения, ♥ и «В план».";
+      else if (st.framing) t += " Двигайте небо под рамкой (мышь, палец), поворачивайте её, затем «Применить».";
       else if (st.sel < 0) t += " Выберите объект в таблице — атлас наведётся на него; щелчок по рамке выбирает объект.";
       return t;
     }
 
     function draw() {
       info.textContent = infoText();
+      mapSync();
       if (!al || !overlay || !labels) return;
       const [w, h] = fov(optics());
       overlay.removeAll(); dashed.removeAll(); labels.removeAll();
@@ -199,7 +252,7 @@
 
     function setFraming(f) {
       st.framing = f;
-      frameRow.hidden = !f;
+      frameRow.hidden = !f || mode !== "photos";
       btnFrame.classList.toggle("on", !!f);
       if (f) { angle.value = angleNum.value = String(asiairAngle(f.angle)); }
       draw();
@@ -242,7 +295,7 @@
 
     let photoLayer = null;
     function showPhoto() {
-      photoRow.hidden = !st.photo;
+      photoRow.hidden = !st.photo || mode !== "photos";
       if (!al || !A) return;
       if (photoLayer) { try { al.removeImageLayer("снимок"); } catch (e) { /* gone already */ } photoLayer = null; }
       if (!st.photo) return;
@@ -256,6 +309,7 @@
     function frameTarget(i) {
       const t = st.targets[i];
       if (!t) return;
+      if (mode !== "photos") setMode("photos");
       if (!al) { st.pendingFrame = i; return; }
       st.sel = i;
       al.gotoRaDec(t.ra, t.dec);
@@ -266,8 +320,10 @@
       setFraming({ i, angle: t.angle || 0 });
     }
 
-    // Aladin is loaded once the atlas is shown
-    (async () => {
+    // Aladin is loaded once its atlas is shown
+    async function loadAladin() {
+      if (aladinAsked) return;
+      aladinAsked = true;
       try {
         A = (await import(ALADIN)).default;
         await A.init;
@@ -303,11 +359,11 @@
         failed = true;
         msg.textContent = "Атлас не загрузился (нужен интернет в браузере и WebGL2): " + (e && e.message || e);
       }
-    })();
+    }
 
     showOptics();
-    draw();
-    return {
+    setMode(mode);
+    const api = {
       // the targets of the plan with their colours and the one chosen
       setTargets(targets, colors, sel) {
         st.targets = (targets || []).map(t => ({ name: t.name, ra: +t.ra, dec: +t.dec, angle: +t.angle || 0, off: !!t.off }));
@@ -327,12 +383,14 @@
       setPreview(ra, dec) {
         st.preview = ra == null || dec == null || isNaN(ra) || isNaN(dec) ? null : { ra: +ra, dec: +dec };
         if (st.preview && al && !st.framing) al.gotoRaDec(st.preview.ra, st.preview.dec);
+        if (st.preview && map && mode === "map") map.goTo(st.preview.ra, st.preview.dec);
         draw();
       },
       // the atlas to target i
       goTo(i) {
         if (st.framing) return;
         st.sel = i;
+        if (map && mode === "map") map.select(i);
         const t = st.targets[i];
         if (t && al) {
           al.gotoRaDec(t.ra, t.dec);
@@ -350,9 +408,17 @@
       },
       // framing of target i at once, as «Кадрировать» does
       frame(i) { frameTarget(i); },
+      // for the sky map: the observatory (lat, lon, tz hours), its sky of
+      // the planner, the favorites, the time shown (null: now)
+      setSite(lat, lon, tz) { mapSt.site = [lat, lon, tz]; if (map) map.setSite(lat, lon, tz); },
+      setSky(s) { mapSt.sky = s; if (map) map.setSky(s); },
+      setFavorites(l) { mapSt.favs = l || []; if (map) map.setFavorites(mapSt.favs); },
+      setTime(t) { mapSt.time = t; if (map) map.setTime(t); },
+      get mode() { return mode; },
       get failed() { return failed; },
       get aladin() { return al; },
     };
+    return api;
   }
 
   window.Atlas = { create, fov, frame, inFrame, fromPlane, toPlane, asiairAngle };

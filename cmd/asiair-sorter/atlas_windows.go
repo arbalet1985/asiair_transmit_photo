@@ -61,6 +61,23 @@ func (p *plannerUI) ensureAtlas() {
 				p.atlasChanged()
 			})
 		}
+		s.OnFavorite = func(f planner.Favorite, on bool) {
+			p.w.mw.Synchronize(func() {
+				if (favIndex(p.state.Favorites, f.Name) >= 0) == on {
+					return
+				}
+				p.toggleFavorite(f)
+				p.syncFavorites(func(msg string) {
+					if msg != "" {
+						setLong(p.planInfo, msg)
+					}
+					p.atlasChanged()
+				})
+			})
+		}
+		s.OnAdd = func(f planner.Favorite) {
+			p.w.mw.Synchronize(func() { setLong(p.planInfo, p.addObject(f)) })
+		}
 		s.OnSelect = func(i int) {
 			p.w.mw.Synchronize(func() {
 				if i >= 0 && i < len(p.state.Targets) && i != p.targetTable.CurrentIndex() {
@@ -136,7 +153,11 @@ func (p *plannerUI) atlasChanged() {
 		return
 	}
 	st := atlas.State{Targets: append([]planner.Target(nil), p.state.Targets...), Sel: p.targetTable.CurrentIndex(),
-		Optics: p.state.Optics, Setups: p.setups, Photo: p.photo, FrameReq: p.frameReq, FrameI: p.frameI}
+		Optics: p.state.Optics, Setups: p.setups, Photo: p.photo, FrameReq: p.frameReq, FrameI: p.frameI,
+		Lat: p.state.Lat, Lon: p.state.Lon, SiteSet: p.state.Lat != 0 || p.state.Lon != 0, TZ: p.tzEdit.Value(),
+		Favorites: append([]planner.Favorite(nil), p.state.Favorites...)}
+	sky := copySky(p.state.Sky)
+	st.Sky = &sky
 	for i := range st.Targets {
 		c := targetColor(i)
 		st.Colors = append(st.Colors, fmt.Sprintf("#%02x%02x%02x", c.R(), c.G(), c.B()))

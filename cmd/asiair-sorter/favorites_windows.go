@@ -74,6 +74,7 @@ func (p *plannerUI) toggleFavorite(o planner.Favorite) {
 		p.state.FavOps = p.state.FavOps[n-maxFavOps:]
 	}
 	p.w.settings().save()
+	p.atlasChanged()
 }
 
 // favOpsSum: the changes as what to add and what to remove, the last
@@ -151,6 +152,7 @@ func (p *plannerUI) syncFavorites(after func(msg string)) {
 				p.state.FavOps = p.state.FavOps[min(len(ops), len(p.state.FavOps)):]
 				if len(p.state.FavOps) == 0 {
 					p.state.Favorites = list
+					p.atlasChanged()
 				} else {
 					p.favAgain = true // changed while it was sent
 				}
@@ -775,16 +777,29 @@ func (d *favDialog) toPlan(o planner.Favorite) {
 	if d.inPlan(o) {
 		return
 	}
-	exp := d.exp[o.Name]
-	if exp <= 0 {
-		exp = d.p.expEdit.Value()
-	}
-	n := favTargetName(o)
-	d.p.state.Targets = append(d.p.state.Targets, planner.Target{Name: n, RA: math.Round(o.RA*1e5) / 1e5, Dec: math.Round(o.Dec*1e5) / 1e5, Exposure: exp})
-	d.p.renumber()
-	d.p.targetTable.SetCurrentIndex(len(d.p.state.Targets) - 1)
-	setLong(d.status, "«"+n+"» добавлен в объекты планировщика.")
+	setLong(d.status, d.p.addObject(o))
 	d.list.Invalidate()
+}
+
+// addObject adds the object to the targets of the planner, with the
+// exposure of its frames when it was shot; it says what was done.
+func (p *plannerUI) addObject(o planner.Favorite) string {
+	n := favTargetName(o)
+	for _, t := range p.state.Targets {
+		if t.Name == n {
+			return "«" + n + "» уже в плане."
+		}
+	}
+	exp := p.expEdit.Value()
+	for _, f := range p.frameObjs {
+		if f.name == o.Name && f.exp > 0 {
+			exp = f.exp
+		}
+	}
+	p.state.Targets = append(p.state.Targets, planner.Target{Name: n, RA: math.Round(o.RA*1e5) / 1e5, Dec: math.Round(o.Dec*1e5) / 1e5, Exposure: exp})
+	p.renumber()
+	p.targetTable.SetCurrentIndex(len(p.state.Targets) - 1)
+	return "«" + n + "» добавлен в объекты планировщика."
 }
 
 func (d *favDialog) visText(v *planner.Vis) string {

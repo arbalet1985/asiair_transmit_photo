@@ -52,6 +52,12 @@ const atlas = Atlas.create(document.getElementById("atlas"), {
   onFrame: (i, ra, dec, angle) => post("frame", { i, ra, dec, angle }).catch(e => { note.textContent = "Не сохранено: " + e.message; }),
   onSelect: i => select(i),
   onOptics: o => post("optics", o).catch(e => { note.textContent = "Не сохранено: " + e.message; }),
+  // the sky map
+  objectsURL: api("objects"),
+  find: q => fetch(api("find", "&q=" + encodeURIComponent(q))).then(r => r.ok ? r.json() : []),
+  onFavorite: (fav, on) => post("favorite", { fav, on }).catch(e => { note.textContent = "Избранное не сохранено: " + e.message; }),
+  onAdd: o => post("add", o).then(() => { note.textContent = `«${o.label ? o.label.split(" — ")[0] : o.name}» добавлен в планировщик сортировщика.`; })
+    .catch(e => { note.textContent = "Не добавлен: " + e.message; }),
 });
 function select(i) {
   S.sel = i;
@@ -87,6 +93,9 @@ async function poll() {
       S = s;
       render();
       atlas.setOptics(S.optics, S.setups);
+      if (S.site_set) atlas.setSite(S.lat, S.lon, S.tz);
+      atlas.setSky(S.sky || null);
+      atlas.setFavorites(S.favorites || []);
       atlas.setTargets(S.targets, S.colors, S.sel);
       if (selChanged && S.sel >= 0) atlas.goTo(S.sel);
       // a frame of the sorter over the sky, and the framing of its target
