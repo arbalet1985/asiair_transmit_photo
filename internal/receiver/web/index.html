@@ -288,6 +288,41 @@
   /* the night of an object: a dialog with the charts and the frame */
   #nightDlg { width: min(1320px, calc(100vw - 32px)); max-width: none; height: min(900px, calc(100vh - 32px)); max-height: none; padding: 0; overflow: hidden; }
   #nightDlg[open] { display: flex; flex-direction: column; }
+  /* the favorite objects: the search, the filter of ASIAIR and the
+     altitude of each object through the night */
+  #favDlg { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+  .favbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .favbar input[type=search] { flex: 1 1 220px; min-width: 0; }
+  #favFilterBtn.on { border-color: var(--ok); color: var(--ok); }
+  .favfilter { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .favfilter .favf { display: flex; flex-direction: column; gap: 6px; min-width: 200px; flex: 1 1 200px; }
+  .favfilter .favf label { display: flex; gap: 6px; align-items: center; }
+  .favfilter input[type=range] { flex: 1; min-width: 0; }
+  .favfilter .favtime { display: flex; gap: 6px 10px; flex-wrap: wrap; }
+  .favfilter select { min-width: 0; max-width: 100%; }
+  .favrose { width: 170px; height: 170px; flex: none; touch-action: manipulation; }
+  .favrose path { cursor: pointer; }
+  .favrose .sec { fill: var(--row); stroke: var(--border); }
+  .favrose .sec.on { fill: color-mix(in srgb, var(--ok) 35%, transparent); stroke: var(--ok); }
+  .favrose .band { fill: var(--ok); opacity: .55; pointer-events: none; }
+  .favrose text { font-size: 11px; fill: var(--muted); pointer-events: none; }
+  .favrose circle { fill: none; stroke: var(--border); pointer-events: none; }
+  .favtabs { display: flex; gap: 6px; margin-bottom: 6px; }
+  .favtabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .favrow { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--border); }
+  .favrow.faded { opacity: .5; }
+  .favrow .heart { font-size: 20px; line-height: 1; padding: 4px 8px; color: var(--danger); background: none; border-color: transparent; }
+  .favrow .fname { font-weight: 600; }
+  .favrow .fmeta, .favrow .fvis { font-size: 12px; color: var(--muted); }
+  .favrow .fchart { grid-column: 2 / 4; }
+  .favrow svg { display: block; width: 100%; height: auto; max-height: 90px; }
+  .favchart .night { fill: var(--row); }
+  .favchart .grid { stroke: var(--border); stroke-width: .5; }
+  .favchart .win { fill: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .favchart .alt { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 2; }
+  .favchart .open { fill: none; stroke: var(--ok); stroke-width: 2.2; }
+  .favchart .now { stroke: var(--danger); stroke-width: 1; }
+  .favchart text { font-size: 9px; fill: var(--muted); }
   .nhead { display: flex; gap: 10px 16px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border); }
   .ntitles { display: flex; flex-direction: column; flex: 1 1 260px; min-width: 0; }
   .ntitles b { font-size: 15px; }
@@ -721,7 +756,8 @@
       <div class="plgroup">
         <div class="plform plfind">
           <div class="fld wide"><span>Найти в каталоге</span>
-            <div class="fin"><input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" aria-label="Найти в каталоге"><button id="plFind">Найти</button></div></div>
+            <div class="fin"><input type="search" id="plName" placeholder="M31, NGC 7000, Медуза…" title="Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце»" aria-label="Найти в каталоге"><button id="plFind">Найти</button>
+              <button id="plFavOpen" title="Избранные объекты: поиск, ♥, когда объект виден этой ночью, фильтр по высоте и сторонам света, как в ASIAIR">♥ Избранные</button></div></div>
           <label class="fld wide"><span>Найденное</span><select id="plFound"></select></label>
           <label class="fld wide" title="Объекты, уже снятые (по полученным кадрам): координаты последнего наведения и выдержка — чтобы продолжить съёмку"><span>Уже снятые</span><select id="plShot"></select></label>
         </div>
@@ -1258,6 +1294,36 @@
   </div>
   <div class="muted" id="perfFrom"></div>
   <div id="perfBody"></div>
+</dialog>
+<dialog id="favDlg" aria-labelledby="favTitle">
+  <div class="toolbar" style="margin:0">
+    <h2 id="favTitle" style="margin:0">Избранные объекты</h2>
+    <span class="spacer"></span>
+    <button id="favClose" title="Закрыть (Esc)" aria-label="Закрыть">✕</button>
+  </div>
+  <div class="muted" id="favNight"></div>
+  <div class="favbar">
+    <input type="search" id="favQ" placeholder="M 31, NGC 7000, Медуза…" aria-label="Найти объект">
+    <button id="favBest" title="Объекты каталога, которые этой ночью попадают в фильтр: сначала Мессье и известные, дольше всего в фильтре">Лучшее этой ночью</button>
+    <button id="favFilterBtn" title="Фильтр по высоте, сторонам света и времени, как в ASIAIR">⏷ Фильтр</button>
+  </div>
+  <div class="favfilter" id="favFilter" hidden>
+    <svg class="favrose" id="favRose" viewBox="-85 -85 170 170" role="group" aria-label="Стороны света: нажмите сектор, чтобы выбрать"></svg>
+    <div class="favf">
+      <label><input type="checkbox" id="favOn"> фильтр включён</label>
+      <div>Высота <b id="favAltText"></b></div>
+      <label>от <input type="range" id="favAltMin" min="0" max="90" step="5"></label>
+      <label>до <input type="range" id="favAltMax" min="0" max="90" step="5"></label>
+      <div class="favtime"><label>Время с <select id="favFrom"></select></label><label>до <select id="favTo"></select></label></div>
+      <label>Тип <select id="favKind"><option value="">все</option><option value="nebula">туманности</option><option value="galaxy">галактики</option><option value="cluster">скопления</option></select></label>
+      <label title="Объект ещё и не закрыт горизонтом и зонами планировщика"><input type="checkbox" id="favOpenSky"> только открытое небо обсерватории</label>
+      <div class="toolbar" style="margin:0"><button id="favDirsAll">Все стороны</button><button id="favReset">Сбросить</button></div>
+      <div class="hint" style="margin:0">Объект проходит фильтр, если в какой-то момент выбранного времени он на этой высоте и в выбранной стороне неба (сектор на розе — сторона, кольца — высота: в центре зенит). Не прошедшие фильтр — в конце списка, бледные.</div>
+    </div>
+  </div>
+  <div class="favtabs"><button id="favTabFound">Поиск</button><button id="favTabFav">♥ Избранные</button></div>
+  <div id="favList"></div>
+  <div class="hint">♥ — добавить в избранное или убрать. График — высота объекта от заката до восхода (часы обсерватории): серая полоса — тёмная ночь, зелёная линия — объект открыт телескопу (над горизонтом и вне закрытых зон планировщика), красная черта — сейчас. «В план» добавляет объект в список объектов планировщика.</div>
 </dialog>
 <dialog id="delDirDlg">
   <h2>Удалить папку на ASIAIR целиком</h2>
@@ -4300,6 +4366,7 @@ async function plLoad() {
     PL.st = d.state; PL.guess = d.guess; PL.objects = d.objects || []; PL.tzGuess = d.tz_guess; PL.frames = d.frames; PL.setups = d.setups || [];
     // empty lists are left out of the answer
     PL.st.sky.zones = PL.st.sky.zones || []; PL.st.sky.horizon = PL.st.sky.horizon || []; PL.st.targets = PL.st.targets || [];
+    PL.st.favorites = PL.st.favorites || [];
     PL.loaded = true;
     if (!$("plNight").value) $("plNight").value = plDefaultNight();
     const p = PL.st.params;
@@ -5199,6 +5266,312 @@ $("plShot").onchange = () => {
   $("plInfo").textContent = i >= 0 ? `«${o.name}» уже в списке (строка ${i + 1}) — «Изменить» запишет поля в выбранную строку.`
     : `«${o.name}»: последнее наведение и выдержка из кадров — нажмите «Добавить».`;
 };
+// ---- the favorite objects: a search with hearts, the list of the hearted
+// with how each is seen in the night (as in ASIAIR) and the filter of
+// ASIAIR by altitude, side of the sky and time
+const FV = { tab: "fav", found: [], foundVis: null, favVis: null, seq: 0, qH: 0, best: false,
+  f: Object.assign({ on: false, alt_min: 30, alt_max: 90, dirs: 0, kind: "", open: false, from: "", to: "" }, store.get("favFilter", {})) };
+const favSides = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"];
+const favKinds = { G: "галактика", GPair: "пара галактик", GTrpl: "три галактики", GGroup: "группа галактик", HII: "область HII", Neb: "туманность",
+  EmN: "эмиссионная туманность", RfN: "отражательная туманность", SNR: "остаток сверхновой", PN: "планетарная туманность", "Cl+N": "скопление с туманностью",
+  DrkN: "тёмная туманность", OCl: "рассеянное скопление", GCl: "шаровое скопление", "*Ass": "звёздная ассоциация", "кадры": "из кадров" };
+// as ASIAIR writes them: 00h42m44s, +41°16'09"
+function favRA(deg) {
+  const s = Math.round(((deg / 15 * 3600) % 86400 + 86400) % 86400);
+  return `${String(s / 3600 | 0).padStart(2, "0")}h${String((s / 60 | 0) % 60).padStart(2, "0")}m${String(s % 60).padStart(2, "0")}s`;
+}
+function favDec(deg) {
+  const s = Math.round(Math.abs(deg) * 3600);
+  return `${deg < 0 ? "-" : "+"}${String(s / 3600 | 0).padStart(2, "0")}°${String((s / 60 | 0) % 60).padStart(2, "0")}'${String(s % 60).padStart(2, "0")}"`;
+}
+const favList = () => PL.st.favorites || (PL.st.favorites = []);
+const favIs = o => favList().some(f => f.name === o.name);
+const favTargetName = o => o.kind === "кадры" ? o.name : (o.label || o.name).split(" — ")[0];
+function favSave() {
+  clearTimeout(PL.saveH);
+  PL.saveH = setTimeout(() => post("/ui/api/planner", PL.st).catch(e => toast("Избранное не сохранено: " + e.message)), 300);
+}
+function favFilterReq() {
+  const f = FV.f;
+  if (!f.on) return null;
+  const opt = (sel, v) => [...$(sel).options].find(o => o.textContent === v);
+  const a = f.from && opt("favFrom", f.from), b = f.to && opt("favTo", f.to);
+  return { alt_min: Math.min(f.alt_min, f.alt_max), alt_max: Math.max(f.alt_min, f.alt_max), dirs: f.dirs, kind: f.kind, open: f.open,
+    from: a ? +a.value : 0, to: b ? +b.value : 0 };
+}
+async function favVis(objects, best) {
+  const body = { night: $("plNight").value || plDefaultNight(), sun_alt: PL.st.params.sun_alt, sky: PL.st.sky, objects, filter: favFilterReq(), best };
+  if (best && !body.filter) body.filter = { alt_min: 30, alt_max: 90 };
+  return post("/ui/api/visibility", body);
+}
+async function favOpen() {
+  if (!PL.loaded) await plLoad();
+  if (!PL.st) { toast("Планировщик не загрузился"); return; }
+  $("favDlg").showModal();
+  favFilterShow();
+  favTab(favList().length || !FV.found.length ? "fav" : "found");
+  await favRefresh();
+}
+$("plFavOpen").onclick = favOpen;
+$("favClose").onclick = () => $("favDlg").close();
+function favTab(t) {
+  FV.tab = t;
+  $("favTabFound").classList.toggle("on", t === "found");
+  $("favTabFav").classList.toggle("on", t === "fav");
+  favRender();
+}
+$("favTabFound").onclick = () => favTab("found");
+$("favTabFav").onclick = () => { favTab("fav"); favRefresh(); };
+// favRefresh: how the favorites (and what was found) are seen in the night
+async function favRefresh() {
+  const seq = ++FV.seq;
+  try {
+    const v = await favVis(favList(), false);
+    if (seq !== FV.seq) return;
+    FV.favVis = v;
+    favTimes(v);
+    if (FV.found.length && !FV.best) FV.foundVis = await favVis(FV.found, false);
+    else if (FV.best) await favBest(true);
+    if (seq !== FV.seq) return;
+    $("favNight").textContent = favNightText(v);
+  } catch (e) {
+    $("favNight").textContent = "Не посчитано: " + e.message;
+  }
+  favRender();
+}
+function favNightText(v) {
+  const d = $("plNight").value || plDefaultNight();
+  return `Ночь ${d.slice(8, 10)}.${d.slice(5, 7)}: закат ${plHM(v.from)}, восход ${plHM(v.to)}, ` +
+    (v.dusk ? `тёмная ночь ${plHM(v.dusk)}–${plHM(v.dawn)}` : "тёмной ночи нет") + ". Время — часы обсерватории.";
+}
+// favTimes: the times of the filter, every 30 minutes from the sunset
+function favTimes(v) {
+  for (const id of ["favFrom", "favTo"]) {
+    const sel = $(id), opts = [el("option", { value: "", textContent: id === "favFrom" ? "начала тёмной ночи" : "конца тёмной ночи" })];
+    for (let t = Math.ceil(v.from / 1800e3) * 1800e3; t <= v.to; t += 1800e3) opts.push(el("option", { value: t, textContent: plHM(t) }));
+    sel.replaceChildren(...opts);
+    const want = id === "favFrom" ? FV.f.from : FV.f.to, o = [...sel.options].find(o => o.textContent === want);
+    sel.value = o ? o.value : "";
+  }
+}
+// ---- the search
+$("favQ").oninput = () => { clearTimeout(FV.qH); FV.qH = setTimeout(favSearch, 300); };
+$("favQ").addEventListener("keydown", e => { if (e.key === "Enter") { clearTimeout(FV.qH); favSearch(true); } });
+async function favSearch(simbad) {
+  const q = $("favQ").value.trim(), seq = ++FV.seq;
+  FV.best = false;
+  if (!q) { FV.found = []; FV.foundVis = null; favRender(); return; }
+  favTab("found");
+  try {
+    let r = await fetch("/ui/api/catalog?q=" + encodeURIComponent(q));
+    let list = r.ok ? await r.json() : [];
+    if (!list.length && simbad) {
+      $("favList").replaceChildren(el("div", { className: "muted", textContent: `В каталоге нет «${q}», ищу в SIMBAD…` }));
+      r = await fetch("/ui/api/catalog?resolve=1&q=" + encodeURIComponent(q));
+      if (!r.ok) throw new Error((await r.text()).trim());
+      list = await r.json();
+    }
+    list = list.slice(0, 30);
+    const v = list.length ? await favVis(list, false) : null;
+    if (seq !== FV.seq) return;
+    FV.found = list; FV.foundVis = v;
+  } catch (e) {
+    if (seq !== FV.seq) return;
+    FV.found = []; FV.foundVis = null;
+    $("favList").replaceChildren(el("div", { className: "err", textContent: e.message }));
+    return;
+  }
+  favRender();
+}
+$("favBest").onclick = () => { $("favQ").value = ""; FV.seq++; favBest(); };
+async function favBest(inRefresh) {
+  FV.best = true;
+  if (!inRefresh) { favTab("found"); $("favList").replaceChildren(el("div", { className: "muted", textContent: "Подбираю объекты…" })); }
+  const seq = inRefresh ? FV.seq : ++FV.seq;
+  try {
+    const v = await favVis([], true);
+    if (seq !== FV.seq) return;
+    FV.found = v.list || []; FV.foundVis = v;
+  } catch (e) {
+    FV.found = []; FV.foundVis = null;
+    $("favList").replaceChildren(el("div", { className: "err", textContent: e.message }));
+    return;
+  }
+  if (!inRefresh) favRender();
+}
+// ---- the list
+function favRender() {
+  if (!$("favDlg").open) return;
+  const n = favList().length;
+  $("favTabFav").textContent = `♥ Избранные (${n})`;
+  $("favTabFound").textContent = FV.best ? "Лучшее этой ночью" : "Поиск";
+  const fav = FV.tab === "fav", list = fav ? favList() : FV.found, vis = fav ? FV.favVis : FV.foundVis;
+  if (!list.length) {
+    $("favList").replaceChildren(el("div", { className: "muted", style: "padding:8px 0",
+      textContent: fav ? "Избранных пока нет: найдите объект и нажмите ♡." : FV.best ? "Под фильтр ничего не попало." : "Введите название объекта: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза». Enter — искать и в SIMBAD." }));
+    return;
+  }
+  const rows = list.map((o, i) => ({ o, v: vis && vis.objects && vis.objects.length === list.length ? vis.objects[i] : null }));
+  // the ones out of the filter go last
+  rows.sort((a, b) => (b.v ? b.v.match : 1) - (a.v ? a.v.match : 1));
+  $("favList").replaceChildren(...rows.map(r => favRow(r.o, r.v, vis)));
+}
+function favRow(o, v, vis) {
+  const on = favIs(o);
+  const heart = el("button", { className: "heart", textContent: on ? "♥" : "♡", title: on ? "Убрать из избранного" : "В избранное",
+    ariaLabel: on ? "Убрать из избранного" : "В избранное" });
+  heart.onclick = () => {
+    const l = favList(), i = l.findIndex(f => f.name === o.name);
+    if (i >= 0) {
+      l.splice(i, 1);
+      if (FV.favVis && FV.favVis.objects) FV.favVis.objects.splice(i, 1);
+    } else {
+      l.push({ name: o.name, label: o.label || "", ra: o.ra, dec: o.dec, kind: o.kind || "" });
+      if (FV.favVis && FV.favVis.objects) FV.favVis.objects.push(v);
+    }
+    favSave();
+    favRender();
+  };
+  const name = favTargetName(o), inPlan = PL.st.targets.some(t => t.name === name);
+  const add = el("button", { textContent: inPlan ? "в плане" : "В план", disabled: inPlan, title: "Добавить в объекты планировщика" });
+  add.onclick = () => {
+    PL.st.targets.push({ name, ra: Math.round(o.ra * 1e5) / 1e5, dec: Math.round(o.dec * 1e5) / 1e5,
+      exposure: o.exp > 0 ? o.exp : Math.max(1, parseFloat($("plExp").value) || 300), want_sec: 0, filter: "", priority: 0 });
+    PL.sel = PL.st.targets.length - 1;
+    plChanged();
+    toast(`«${name}» добавлен в план`);
+    favRender();
+  };
+  const label = o.label && o.label !== o.name ? o.label + (o.label.startsWith(o.name) ? "" : ` (${o.name})`) : o.name;
+  const info = el("div", {},
+    el("div", { className: "fname", textContent: label }),
+    el("div", { className: "fmeta", textContent: [favKinds[o.kind] || o.kind, `RA ${favRA(o.ra)}`, `Dec ${favDec(o.dec)}`].filter(Boolean).join(" · ") }));
+  if (v) info.append(el("div", { className: "fvis", textContent: favVisText(v) }));
+  const row = el("div", { className: "favrow" + (v && !v.match ? " faded" : "") }, heart, info, add);
+  if (v && vis) row.append(el("div", { className: "fchart" }, favChart(v, vis)));
+  return row;
+}
+function favVisText(v) {
+  const parts = [];
+  if (v.rise || v.set) parts.push(`восход ${v.rise ? plHM(v.rise) : "—"}`, `заход ${v.set ? plHM(v.set) : "—"}`);
+  else parts.push(v.up ? "не заходит" : "не восходит");
+  parts.push(`кульминация ${plHM(v.transit)} на ${Math.round(v.transit_alt)}°`);
+  const spans = v.spans.map(s => `${plHM(s[0])}–${plHM(s[1])}`);
+  parts.push(spans.length ? `открыт ${spans.slice(0, 3).join(", ")}${spans.length > 3 ? "…" : ""}` : "телескопу не открыт");
+  if (v.dark) parts.push(`в темноте ${fmtHours(v.dark)}`);
+  if (FV.f.on) parts.push(v.match ? `в фильтре ${fmtHours(v.match_sec)}` : "вне фильтра");
+  return parts.join(" · ");
+}
+// favChart: the altitude through the night, as in the list of ASIAIR
+function favChart(v, vis) {
+  const ns = "http://www.w3.org/2000/svg", W = 320, H = 74, T = 4, B = 14, ph = H - T - B;
+  const mk = (tag, a) => { const e = document.createElementNS(ns, tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  const span = vis.to - vis.from || 1, x = t => (t - vis.from) / span * W, y = alt => T + (1 - Math.max(0, alt) / 90) * ph;
+  const svg = mk("svg", { viewBox: `0 0 ${W} ${H}`, class: "favchart", role: "img", "aria-label": "Высота объекта за ночь" });
+  if (vis.dusk) svg.append(mk("rect", { x: x(vis.dusk), y: T, width: x(vis.dawn) - x(vis.dusk), height: ph, class: "night" }));
+  if (FV.f.on && vis.filter_from) {
+    const f = FV.f, lo = Math.min(f.alt_min, f.alt_max), hi = Math.max(f.alt_min, f.alt_max);
+    svg.append(mk("rect", { x: x(vis.filter_from), y: y(hi), width: x(vis.filter_to) - x(vis.filter_from), height: y(lo) - y(hi), class: "win" }));
+  }
+  for (const a of [0, 30, 60]) svg.append(mk("line", { x1: 0, x2: W, y1: y(a), y2: y(a), class: "grid" }));
+  for (const a of [30, 60]) {
+    const lb = mk("text", { x: 2, y: y(a) - 1 });
+    lb.textContent = a + "°";
+    svg.append(lb);
+  }
+  const step = 2 * 3600e3, tz = plTZ() * 3600e3;
+  for (let t = Math.ceil((vis.from + tz) / step) * step - tz; t <= vis.to; t += step) {
+    svg.append(mk("line", { x1: x(t), x2: x(t), y1: T, y2: T + ph, class: "grid" }));
+    const lb = mk("text", { x: x(t), y: H - 3, "text-anchor": "middle" });
+    lb.textContent = plHM(t);
+    svg.append(lb);
+  }
+  const pts = v.alt.map((a, i) => [x(vis.from + i * vis.every), y(a)]);
+  svg.append(mk("polyline", { points: pts.map(p => p.join(",")).join(" "), class: "alt" }));
+  // the parts open to the telescope
+  let run = [];
+  const flush = () => { if (run.length > 1) svg.append(mk("polyline", { points: run.map(p => p.join(",")).join(" "), class: "open" })); run = []; };
+  pts.forEach((p, i) => { if (v.open[i] === "1") run.push(p); else flush(); });
+  flush();
+  const now = Date.now();
+  if (now > vis.from && now < vis.to) svg.append(mk("line", { x1: x(now), x2: x(now), y1: T, y2: T + ph, class: "now" }));
+  return svg;
+}
+// ---- the filter of ASIAIR
+$("favFilterBtn").onclick = () => { $("favFilter").hidden = !$("favFilter").hidden; };
+function favFilterShow() {
+  const f = FV.f;
+  $("favOn").checked = f.on;
+  $("favAltMin").value = f.alt_min; $("favAltMax").value = f.alt_max;
+  $("favAltText").textContent = `${Math.min(f.alt_min, f.alt_max)}°–${Math.max(f.alt_min, f.alt_max)}°`;
+  $("favKind").value = f.kind; $("favOpenSky").checked = f.open;
+  $("favFilterBtn").classList.toggle("on", f.on);
+  $("favFilterBtn").textContent = f.on ? "⏷ Фильтр: " + favFilterSummary() : "⏷ Фильтр";
+  favRose();
+}
+function favFilterSummary() {
+  const f = FV.f, s = [];
+  s.push(`${Math.min(f.alt_min, f.alt_max)}–${Math.max(f.alt_min, f.alt_max)}°`);
+  if (f.dirs) s.push(favSides.filter((_, i) => f.dirs & 1 << i).join(" "));
+  if (f.from || f.to) s.push(`${f.from || "…"}–${f.to || "…"}`);
+  return s.join(", ");
+}
+// favRose: the sides of the sky as sectors, the rings the altitude (the
+// zenith in the centre), the band of the altitude filled in the chosen ones
+function favRose() {
+  const ns = "http://www.w3.org/2000/svg", svg = $("favRose"), R = 70, f = FV.f;
+  const mk = (tag, a) => { const e = document.createElementNS(ns, tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  const r = alt => R * (1 - alt / 90);
+  // azimuth clockwise from the north at the top
+  const pt = (az, rr) => [rr * Math.sin(az * Math.PI / 180), -rr * Math.cos(az * Math.PI / 180)];
+  const wedge = (a1, a2, r1, r2) => {
+    const [x1, y1] = pt(a1, r2), [x2, y2] = pt(a2, r2), [x3, y3] = pt(a2, r1), [x4, y4] = pt(a1, r1);
+    return `M${x1},${y1} A${r2},${r2} 0 0 1 ${x2},${y2} L${x3},${y3} ` + (r1 > 0 ? `A${r1},${r1} 0 0 0 ${x4},${y4} ` : "") + "Z";
+  };
+  svg.replaceChildren();
+  const lo = Math.min(f.alt_min, f.alt_max), hi = Math.max(f.alt_min, f.alt_max);
+  favSides.forEach((name, i) => {
+    const on = !f.dirs || f.dirs & 1 << i, a = i * 45;
+    const p = mk("path", { d: wedge(a - 22.5, a + 22.5, 0, R), class: "sec" + (f.dirs & 1 << i ? " on" : ""), tabindex: 0, role: "button",
+      "aria-pressed": String(!!(f.dirs & 1 << i)), "aria-label": name });
+    const toggle = () => { f.dirs ^= 1 << i; if (f.dirs === 255) f.dirs = 0; f.on = true; favFilterChanged(); };
+    p.onclick = toggle;
+    p.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+    svg.append(p);
+    if (on) svg.append(mk("path", { d: wedge(a - 22.5, a + 22.5, r(hi), r(lo)), class: "band" }));
+    const [tx, ty] = pt(a, R + 9), t = mk("text", { x: tx, y: ty + 4, "text-anchor": "middle" });
+    t.textContent = name;
+    svg.append(t);
+  });
+  for (const a of [30, 60]) svg.append(mk("circle", { cx: 0, cy: 0, r: r(a) }));
+}
+function favFilterChanged() {
+  store.set("favFilter", FV.f);
+  favFilterShow();
+  favRefresh();
+}
+$("favOn").onchange = () => { FV.f.on = $("favOn").checked; favFilterChanged(); };
+for (const id of ["favAltMin", "favAltMax"]) {
+  $(id).oninput = () => {
+    FV.f.alt_min = +$("favAltMin").value; FV.f.alt_max = +$("favAltMax").value;
+    $("favAltText").textContent = `${Math.min(FV.f.alt_min, FV.f.alt_max)}°–${Math.max(FV.f.alt_min, FV.f.alt_max)}°`;
+    favRose();
+  };
+  $(id).onchange = () => { FV.f.on = true; favFilterChanged(); };
+}
+$("favKind").onchange = () => { FV.f.kind = $("favKind").value; FV.f.on = true; favFilterChanged(); };
+$("favOpenSky").onchange = () => { FV.f.open = $("favOpenSky").checked; FV.f.on = true; favFilterChanged(); };
+for (const id of ["favFrom", "favTo"]) {
+  $(id).onchange = () => {
+    const o = $(id).selectedOptions[0];
+    FV.f[id === "favFrom" ? "from" : "to"] = o && o.value ? o.textContent : "";
+    FV.f.on = true;
+    favFilterChanged();
+  };
+}
+$("favDirsAll").onclick = () => { FV.f.dirs = 0; favFilterChanged(); };
+$("favReset").onclick = () => { FV.f = { on: false, alt_min: 30, alt_max: 90, dirs: 0, kind: "", open: false, from: "", to: "" }; favFilterChanged(); };
+
 function plFieldsTarget() {
   let name = $("plName").value.trim();
   const o = PL.found[+$("plFound").value];

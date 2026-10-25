@@ -31,6 +31,9 @@ type PlannerState struct {
 	TZ      *float64         `json:"tz,omitempty"` // hours from UTC of the observatory clock
 	// Optics: of the frames of the atlas (nil: the last setup of the frames)
 	Optics *planner.Optics `json:"optics,omitempty"`
+	// Favorites: the objects hearted in the search of the page; nil when
+	// posted by a page of an older version, which keeps them
+	Favorites []Favorite `json:"favorites,omitempty"`
 }
 
 // skyEntry is where a Light frame was taken, read from its header.
@@ -75,6 +78,9 @@ func (s *State) SetPlanner(p PlannerState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if p.Favorites == nil {
+		p.Favorites = s.p.Planner.Favorites
+	}
 	s.p.Planner = p
 	return s.save()
 }

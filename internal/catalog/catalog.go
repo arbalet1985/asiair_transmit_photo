@@ -248,3 +248,38 @@ func Search(prefix string, n int) []Object {
 	}
 	return out
 }
+
+// All is every object of the catalog.
+func All() []Object {
+	once.Do(load)
+	return objects
+}
+
+// Group is what kind of object it is, as the filter of ASIAIR sorts them:
+// "galaxy", "nebula", "cluster", or "" for stars and the rest.
+func Group(kind string) string {
+	switch kind {
+	case "G", "GPair", "GTrpl", "GGroup":
+		return "galaxy"
+	case "HII", "Neb", "EmN", "RfN", "SNR", "PN", "Cl+N", "DrkN":
+		return "nebula"
+	case "OCl", "GCl", "*Ass":
+		return "cluster"
+	}
+	return ""
+}
+
+// Fame: 0 for a Messier object, 1 for a Caldwell one or one with a popular
+// name, 2 for the rest.
+func (o Object) Fame() int {
+	f := 2
+	for _, a := range o.Aliases {
+		switch {
+		case strings.HasPrefix(a, "M "):
+			return 0
+		case strings.HasPrefix(a, "C ") || !isID(a) && !strings.HasPrefix(a, "PN "):
+			f = 1
+		}
+	}
+	return f
+}
