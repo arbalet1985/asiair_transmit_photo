@@ -128,6 +128,8 @@
   const CSS = `
   .smap { position: relative; border-radius: 6px; overflow: hidden; background: #04060c; touch-action: none; user-select: none; -webkit-user-select: none; }
   .smap canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+  .smap .sal { position: absolute; inset: 0; pointer-events: none; }
+  .smap .sal * { pointer-events: none !important; }
   .smap canvas.drag { cursor: grabbing; }
   .smap .sbar { position: absolute; left: 6px; right: 6px; top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; pointer-events: none; }
   .smap .sbar > * { pointer-events: auto; }
@@ -305,6 +307,54 @@
     }
     function drawGround() { ctx.imageSmoothingEnabled = true; ctx.drawImage(groundCv, 0, 0, W, H); }
 
+    // The photographs of the sky under the map: Aladin Lite (CDS) in a layer
+    // below the canvas, in the projection of the map (stereographic) with
+    // its centre, field and turn set at each drawing — DSS2 zoomed in to
+    // AL_DSS, the all-sky photograph of Mellinger wider; its tiles come at
+    // once. Loaded when the map is first drawn with the photograph on.
+    const ALADIN = "https://cdn.jsdelivr.net/npm/aladin-lite@3.8.2/dist/aladin.js", AL_DSS = 30;
+    let AL = null, alState = "", alSurvey = "", alDiv = null;
+    async function alLoad() {
+      alState = "loading";
+      try {
+        const A = (await import(ALADIN)).default;
+        await A.init;
+        alDiv = el("div", { className: "sal" });
+        root.insertBefore(alDiv, canvas);
+        AL = A.aladin(alDiv, { survey: "P/DSS2/color", projection: "STG", fov: view.fov, target: "0 +0", cooFrame: "ICRS",
+          showReticle: false, showZoomControl: false, showFullscreenControl: false, showLayersControl: false, showGotoControl: false,
+          showFrame: false, showCooGrid: false, showCooGridControl: false, showSimbadPointerControl: false, showContextMenu: false,
+          showStatusBar: false, showProjectionControl: false, showSettingsControl: false, showShareControl: false, showCooLocation: false,
+          showFov: false });
+        alState = "ready";
+      } catch (e) {
+        alState = "failed"; // no WebGL2 or no internet: the pictures of hips2fits
+      }
+      draw();
+    }
+    // alSync puts Aladin under the view: whether it is shown
+    function alSync(P, ra, dec, sunAlt) {
+      if (!alState) alLoad();
+      if (alState !== "ready") { if (alDiv) alDiv.hidden = true; return false; }
+      alDiv.hidden = false;
+      const survey = view.fov <= AL_DSS ? "P/DSS2/color" : "P/Mellinger/color";
+      if (survey !== alSurvey) {
+        alSurvey = survey;
+        AL.setBaseImageLayer(survey);
+        const l = AL.getBaseImageLayer && AL.getBaseImageLayer();
+        // a faint nebula comes out (DSS gives it nearly black)
+        if (l && l.setGamma && survey === "P/DSS2/color") { l.setGamma(1.6); l.setSaturation(1.3); }
+      }
+      // the turn: north at the centre, as the map has it
+      const C = P(ra, dec), N = P(ra, Math.min(dec + 0.05, 89.999));
+      const turn = C && N ? Math.atan2(N[0] - C[0], C[1] - N[1]) * deg : 0;
+      // the same field across; Aladin turns the other way round
+      AL.setFoV(view.fov);
+      AL.gotoRaDec(ra, dec);
+      AL.setRotation(-turn);
+      return true;
+    }
+
     // The photograph of the sky under the map, from hips2fits (CDS), at any
     // field up to DSS_WIDE. A wide view asks for the all-sky photograph of
     // Mellinger in the projection of the map (stereographic) centred on the
@@ -470,13 +520,21 @@
       const pxPerDeg = scale * rad;
       // the Sun gives the colour of the sky
       const sunEq = eclToEq(sunEcl(t), 0), [sunAlt, sunAz] = altAz(sunEq[0], sunEq[1], lat, sid);
+      const [cAlt, cAz] = unproj(W / 2, H / 2), [cRa, cDec] = raDec(cAlt, cAz, lat, sid);
+      const cu = unit(cRa, cDec);
+      // the photographs of Aladin under the map (the canvas is clear where
+      // the sky is), or else the photograph of hips2fits
+      const alOn = show.dss && view.fov <= DSS_WIDE && alSync(P, cRa, cDec, sunAlt);
+      if (!alOn && alDiv) alDiv.hidden = true;
+      ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = skyColor(sunAlt);
+      ctx.globalAlpha = alOn ? clamp((sunAlt + 10) / 12, 0, 0.85) : 1; // a photograph of the night sky under a day sky
       ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
       // the photograph of the sky, and the Milky Way of skydata.js on a
       // dark sky where there is none (no internet)
-      const dssAlpha = show.dss && view.fov <= DSS_WIDE ? 0.92 : 0;
-      const [cAlt, cAz] = unproj(W / 2, H / 2), [cRa, cDec] = raDec(cAlt, cAz, lat, sid);
-      const cu = unit(cRa, cDec), dssShown = dssAlpha > 0 && dssOver(cu).over.length > 0;
+      const dssAlpha = !alOn && alState === "failed" && show.dss && view.fov <= DSS_WIDE ? 0.92 : 0;
+      const dssShown = alOn || dssAlpha > 0 && dssOver(cu).over.length > 0;
       layers(lat, sid, show.mw && !dssShown ? clamp((-sunAlt - 8) / 8, 0, 1) : 0);
       if (dssAlpha > 0) dssNeeded(cRa, cDec, cu, dssNow);
       dssNow = false;
@@ -668,7 +726,8 @@
         : new Date(t + zone * 3600e3).toISOString().slice(5, 16).replace("T", " ").replace(/^(\d\d)-(\d\d)/, "$2.$1");
       hud.textContent = `${tt}${st.time == null ? " (сейчас)" : ""} · центр ${side(view.az)} ${Math.round(view.az)}°, высота ${Math.round(view.alt)}° · поле ${Math.round(view.fov)}°` +
         (st.lat == null ? " · координаты обсерватории не заданы" : "") + (sunAlt > -6 ? ` · Солнце на ${Math.round(sunAlt)}°` : "") +
-        (dssAlpha > 0 ? (dssErr ? " · " + dssErr : dssLoading.size ? " · загружаю снимок неба…" : dssShown ? (view.fov > DSS_NARROW ? " · снимок неба Mellinger (CDS)" : " · снимок DSS2 (CDS)") : "") : "");
+        (alOn ? (view.fov <= AL_DSS ? " · снимки DSS2 (Aladin, CDS)" : " · снимок неба Mellinger (Aladin, CDS)") :
+          dssAlpha > 0 ? (dssErr ? " · " + dssErr : dssLoading.size ? " · загружаю снимок неба…" : dssShown ? (view.fov > DSS_NARROW ? " · снимок неба Mellinger (CDS)" : " · снимок DSS2 (CDS)") : "") : "");
     }
 
     // where the one picked is now: [ra, dec]
