@@ -553,6 +553,8 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/api/weather", s.handleUIWeather)
 	mux.HandleFunc("/ui/api/catalog", s.handleUICatalog)
 	mux.HandleFunc("/ui/api/visibility", s.handleUIVisibility)
+	mux.HandleFunc("/ui/api/favorites", s.handleUIFavorites)
+	mux.HandleFunc("/ui/api/objectpic", s.handleUIObjectPic)
 	mux.HandleFunc("/ui/api/open", s.handleUIOpen)
 	mux.HandleFunc("/ui/api/tilt", s.handleUITilt)
 	mux.HandleFunc("/ui/api/region", s.handleUIRegion)

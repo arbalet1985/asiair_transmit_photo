@@ -142,3 +142,40 @@ func (r *Receiver) PlannerSky(ctx context.Context) (*ReceiverSky, error) {
 	}
 	return &ReceiverSky{Sky: v.State.Sky, Lat: v.Site.Lat, Lon: v.Site.Lon, SiteSet: v.Site.Set, TZ: v.State.TZ, Edited: v.State.SkySet}, nil
 }
+
+// ErrNoFavorites: the receiver is older than the favorites of the planner.
+var ErrNoFavorites = errors.New("на приёмнике нет избранных объектов: нужен приёмник новой версии")
+
+// Favorites asks the receiver for the favorite objects of its planner.
+func (r *Receiver) Favorites(ctx context.Context) ([]planner.Favorite, error) {
+	resp, err := r.get(ctx, "/ui/api/favorites", nil, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "ответил 404") {
+			return nil, ErrNoFavorites
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var v struct {
+		Favorites []planner.Favorite `json:"favorites"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, err
+	}
+	return v.Favorites, nil
+}
+
+// ChangeFavorites adds and removes (by name) favorite objects on the
+// receiver and gives its list after that.
+func (r *Receiver) ChangeFavorites(ctx context.Context, add []planner.Favorite, remove []string) ([]planner.Favorite, error) {
+	var v struct {
+		Favorites []planner.Favorite `json:"favorites"`
+	}
+	if err := r.post(ctx, "/ui/api/favorites", map[string]any{"add": add, "remove": remove}, &v); err != nil {
+		if strings.Contains(err.Error(), "ответил 404") {
+			return nil, ErrNoFavorites
+		}
+		return nil, err
+	}
+	return v.Favorites, nil
+}

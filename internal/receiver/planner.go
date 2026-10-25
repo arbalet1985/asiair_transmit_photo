@@ -31,9 +31,9 @@ type PlannerState struct {
 	TZ      *float64         `json:"tz,omitempty"` // hours from UTC of the observatory clock
 	// Optics: of the frames of the atlas (nil: the last setup of the frames)
 	Optics *planner.Optics `json:"optics,omitempty"`
-	// Favorites: the objects hearted in the search of the page; nil when
-	// posted by a page of an older version, which keeps them
-	Favorites []Favorite `json:"favorites,omitempty"`
+	// Favorites: the objects hearted on the page or in the sorter; changed
+	// only by /ui/api/favorites, so that neither undoes the other
+	Favorites []planner.Favorite `json:"favorites,omitempty"`
 }
 
 // skyEntry is where a Light frame was taken, read from its header.
@@ -78,9 +78,7 @@ func (s *State) SetPlanner(p PlannerState) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p.Favorites == nil {
-		p.Favorites = s.p.Planner.Favorites
-	}
+	p.Favorites = s.p.Planner.Favorites // changed by /ui/api/favorites only
 	s.p.Planner = p
 	return s.save()
 }
@@ -121,6 +119,7 @@ type plannerObject struct {
 	RA    float64 `json:"ra"`
 	Dec   float64 `json:"dec"`
 	Kind  string  `json:"kind,omitempty"`
+	Size  float64 `json:"size,omitempty"` // arcminutes across
 	// of the frames: the exposure of the last one, how many and their
 	// exposure in all (seconds), the last night
 	Exp    float64 `json:"exp,omitempty"`
@@ -289,7 +288,7 @@ func (s *Server) handleUICatalog(w http.ResponseWriter, r *http.Request) {
 	add := func(o catalog.Object) {
 		if !seen[o.Name] {
 			seen[o.Name] = true
-			out = append(out, plannerObject{Name: o.Name, Label: o.Label(), RA: o.RA, Dec: o.Dec, Kind: o.Kind})
+			out = append(out, plannerObject{Name: o.Name, Label: o.Label(), RA: o.RA, Dec: o.Dec, Kind: o.Kind, Size: o.Size})
 		}
 	}
 	if o, ok := catalog.Lookup(q); ok {

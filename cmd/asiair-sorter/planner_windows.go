@@ -37,6 +37,11 @@ type plannerSettings struct {
 	Params  *planner.Params  `json:"params,omitempty"`
 	// Optics: of the frames of the atlas (nil: the last setup of the frames)
 	Optics *planner.Optics `json:"optics,omitempty"`
+	// the favorite objects (the receiver's, when one is known), the changes
+	// not yet sent to it and the filter of their window
+	Favorites []planner.Favorite `json:"favorites,omitempty"`
+	FavOps    []favOp            `json:"fav_ops,omitempty"`
+	FavFilter *favFilterSettings `json:"fav_filter,omitempty"`
 }
 
 // frameTarget is an object of the frames taken, as a suggestion: where it
@@ -105,6 +110,8 @@ type plannerUI struct {
 	photo            *atlas.Photo
 	photoV, frameReq int64
 	frameI           int
+	// the favorites are being sent to the receiver; again: changed meanwhile
+	favSyncing, favAgain bool
 }
 
 func newPlanner(w *window, s plannerSettings) *plannerUI {
@@ -254,6 +261,8 @@ func (p *plannerUI) page() TabPage {
 									}
 								}, ToolTipText: "Название или номер: M 31, NGC 7000, IC 1805, Sh2-274, «Медуза», «Сердце». Enter — найти"},
 							PushButton{Text: "Найти", OnClicked: p.find, MaxSize: Size{Width: 60}},
+							PushButton{Text: "♥ Избранные…", OnClicked: p.openFavorites,
+								ToolTipText: "Избранные объекты: поиск, ♥, когда объект виден этой ночью, фильтр по высоте и сторонам света, как в ASIAIR"},
 							ComboBox{AssignTo: &p.foundBox, MinSize: Size{Width: 160}, OnCurrentIndexChanged: p.foundChosen,
 								ToolTipText: "Найденное в каталоге (OpenNGC, Sh2), в кадрах и, если нет, в SIMBAD"},
 							ComboBox{AssignTo: &p.shotBox, MinSize: Size{Width: 170}, Model: []string{"снятые объекты…"}, CurrentIndex: 0,
@@ -334,9 +343,30 @@ func (p *plannerUI) page() TabPage {
 	}}
 }
 
-// startNow puts the clock of the observatory into «Начать в».
+// startNow plans the night going on now from now on the clock of the
+// observatory: before its dusk from the dusk, after its dawn the next night.
 func (p *plannerUI) startNow() {
-	p.startEdit.SetText(time.Now().In(p.params().Zone).Format("15:04"))
+	prm := p.params()
+	now := time.Now()
+	night := now.In(prm.Zone)
+	if night.Hour() < 12 {
+		night = night.AddDate(0, 0, -1)
+	}
+	start, msg := now.In(prm.Zone).Format("15:04"), ""
+	if dusk, dawn, err := planner.Night(night.Format("2006-01-02"), prm.Lat, prm.Lon, prm.SunAlt); err == nil {
+		switch {
+		case !now.Before(dawn):
+			night, start, msg = now.In(prm.Zone), "", "Эта ночь уже кончилась — план на следующую ночь с её начала."
+		case now.Before(dusk):
+			start, msg = "", "Ночь ещё не началась (с "+dusk.In(prm.Zone).Format("15:04")+") — план с начала ночи."
+		}
+	}
+	p.startEdit.SetText(start)
+	p.dateEdit.SetDate(time.Date(night.Year(), night.Month(), night.Day(), 0, 0, 0, 0, time.Local))
+	p.paramsChanged()
+	if msg != "" {
+		setLong(p.planInfo, msg)
+	}
 }
 
 // defaultNight: this evening, or last evening before noon.
