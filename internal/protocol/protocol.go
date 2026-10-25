@@ -157,6 +157,21 @@ type AgentStatus struct {
 	// was refused; the events tell why). A switch made restarts the agent
 	// with the new Connection instead.
 	SwitchDone int64 `json:"switch_done,omitempty"`
+	// CanTSLogin: the agent takes new Tailscale credentials from the
+	// receiver (SyncResponse.TSLogin); TSHostname and TSControlURL are its
+	// name in the tailnet and its coordination server ("" Tailscale).
+	CanTSLogin   bool   `json:"can_ts_login,omitempty"`
+	TSHostname   string `json:"ts_hostname,omitempty"`
+	TSControlURL string `json:"ts_control_url,omitempty"`
+	// TSLoginDone: the last TSLogin ID the agent gave up (the events tell
+	// why); a login taken restarts the agent instead.
+	TSLoginDone int64 `json:"ts_login_done,omitempty"`
+	// TSLoginBack: the agent restarted with a new Tailscale login and goes
+	// back to the old one unless it reaches the receiver through it soon.
+	TSLoginBack bool `json:"ts_login_back,omitempty"`
+	// TSNeedLogin: Tailscale on the agent asked for a login and the agent
+	// switched to the internet; a new login is to be sent (TSLogin).
+	TSNeedLogin bool `json:"ts_need_login,omitempty"`
 }
 
 // Connections of the agent to the receiver (AgentStatus.Connection).
@@ -174,6 +189,20 @@ type ConnSwitch struct {
 	// (seen in the agent's requests, or its Tailscale name), tried after
 	// the one the agent remembers.
 	URLs []string `json:"urls,omitempty"`
+}
+
+// TSLogin gives the agent new Tailscale credentials, entered on the
+// receiver page. The agent logs in with them aside, checks that the
+// receiver answers through that login, and only then takes it and
+// restarts.
+type TSLogin struct {
+	ID         int64  `json:"id"`       // once per ID
+	AuthKey    string `json:"auth_key"` // tskey-auth-…
+	ControlURL string `json:"control_url,omitempty"`
+	Hostname   string `json:"hostname,omitempty"` // "" keeps the agent's
+	// ReceiverURLs: the receiver in the tailnet, tried after the address
+	// the agent remembers
+	ReceiverURLs []string `json:"receiver_urls,omitempty"`
 }
 
 // DeleteProgress is how far the agent is with the delete commands.
@@ -284,6 +313,9 @@ type SyncResponse struct {
 	Restart int64 `json:"restart,omitempty"`
 	// Switch: connect another way, asked on the receiver page.
 	Switch *ConnSwitch `json:"switch,omitempty"`
+	// TSLogin: new Tailscale credentials, asked on the receiver page (sent
+	// until the agent takes them — restarting — or gives up).
+	TSLogin *TSLogin `json:"ts_login,omitempty"`
 }
 
 // StorageSpace is the free space of one ASIAIR share.

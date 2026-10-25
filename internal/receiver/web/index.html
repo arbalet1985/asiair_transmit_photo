@@ -106,6 +106,11 @@
   .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
   /* a long error (an address) under a chart is broken: once it widened the page, and on a phone everything, the viewer too, got small */
   .line, .hint { overflow-wrap: anywhere; }
+  .ats { margin-top: 8px; }
+  .ats summary { cursor: pointer; }
+  .atsform { display: grid; gap: 6px; margin-top: 6px; max-width: 520px; }
+  .atsform label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+  .atsform input { font-size: 14px; }
   dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); padding: 16px; width: min(640px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   dialog h2 { font-size: 15px; margin: 0 0 10px; }
@@ -559,7 +564,17 @@
         <dt>Версия агента</dt><dd id="aVersion">—</dd>
         <dt>ASIAIR</dt><dd id="aAsiair">—</dd>
         <dt>Связь</dt><dd id="aSeen">—</dd>
-        <dt>Управление</dt><dd id="aCtl">—</dd>
+        <dt>Управление</dt><dd><div id="aCtl">—</div>
+          <details id="aTs" class="ats" hidden>
+            <summary>Вход Tailscale агента <span class="muted" id="aTsNow"></span></summary>
+            <div class="hint" style="margin-top:4px">Новый ключ авторизации — когда старый истёк, агент вышел из сети Tailscale или его нужно перенести в другую сеть (другой аккаунт, Headscale). Создайте ключ в <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noopener">настройках Tailscale</a> (Generate auth key). Агент сначала войдёт с ним отдельно и проверит, что приёмник отвечает через новый вход; если нет — ничего не изменится. Потом он перезапустится, а если через 10 минут не выйдет на связь через новый вход — вернётся к прежнему. Ключ передаётся агенту по защищённому каналу и на приёмнике не сохраняется.</div>
+            <div class="atsform">
+              <label>Ключ <input type="password" id="aTsKey" autocomplete="off" placeholder="tskey-auth-…" spellcheck="false"></label>
+              <label>Имя агента в Tailscale <input type="text" id="aTsHost" autocomplete="off" spellcheck="false" placeholder="asiair-agent"></label>
+              <label>Сервер управления <input type="text" id="aTsCtl" autocomplete="off" spellcheck="false" placeholder="пусто — Tailscale; Headscale — https://…"></label>
+              <div><button class="primary" id="aTsSend">Отправить агенту</button> <span class="muted" id="aTsWhy"></span></div>
+            </div>
+          </details></dd>
         <dt>Wi-Fi</dt><dd id="aWifi">—</dd>
         <dt>Последний обход</dt><dd id="aScan">—</dd>
         <dt>Очередь</dt><dd id="aQueue">—</dd>
@@ -2005,6 +2020,7 @@ function renderAgentCtl(a) {
   const asked = t => t && !t.startsWith("0001") && Date.now() - new Date(t).getTime() < 300e3;
   if (!a || !a.can_restart) {
     dd.append(el("span", { className: "muted", textContent: state.agent_online ? "этот агент не принимает команды перезапуска — обновите его" : "—" }));
+    renderAgentTs(c);
     return;
   }
   const restarting = asked(c.restart_at);
@@ -2035,7 +2051,43 @@ function renderAgentCtl(a) {
     dd.append(el("div", { className: "muted", textContent: "переключить связь нельзя: " + c.switch_why }));
   }
   if (c.switch_back) dd.append(el("div", { style: "color:var(--warn)", textContent: `связь только что переключена; если она не заработает, агент вернётся на ${connName(c.switch_back)}` }));
+  renderAgentTs(c);
 }
+// the Tailscale login of the agent: a new auth key (agents that report
+// can_ts_login); the form is not redrawn, only its state, so what is typed stays
+function renderAgentTs(c) {
+  const box = $("aTs"), known = !!(state.agent && state.agent.can_ts_login);
+  box.hidden = !known;
+  if (!known) return;
+  $("aTsNow").textContent = c.ts_need_login ? "· ⚠ требует входа" : c.ts_hostname ? "· " + c.ts_hostname + (c.ts_control_url ? " @ " + c.ts_control_url : "") : "";
+  $("aTsNow").style.color = c.ts_need_login ? "var(--warn)" : "";
+  // Tailscale of the agent asked for a login: the form is opened once
+  if (c.ts_need_login && !box.dataset.shown) { box.open = true; box.dataset.shown = "1"; }
+  // filled with what the agent has, until edited
+  for (const [id, v] of [["aTsHost", c.ts_hostname || ""], ["aTsCtl", c.ts_control_url || ""]])
+    if (!$(id).dataset.edited && document.activeElement !== $(id)) $(id).value = v;
+  const why = c.ts_login_busy ? "вход отправлен — агент проверяет его, итог появится в событиях агента"
+    : c.ts_need_login && c.can_ts_login ? "Tailscale агента требует входа, связь идёт через интернет — отправьте новый ключ"
+    : c.ts_login_back ? "новый вход взят, ждёт подтверждения: если связи через него не будет, агент вернётся к прежнему"
+    : c.ts_why || "";
+  $("aTsWhy").textContent = why;
+  $("aTsSend").disabled = !c.can_ts_login || !!c.ts_login_busy || !!c.ts_login_back;
+}
+for (const id of ["aTsHost", "aTsCtl"]) $(id).addEventListener("input", () => { $(id).dataset.edited = "1"; });
+$("aTsSend").onclick = async () => {
+  const key = $("aTsKey").value.trim();
+  if (!key) { toast("Введите ключ авторизации Tailscale"); $("aTsKey").focus(); return; }
+  if (!confirm("Отправить агенту новый вход Tailscale?\n\nАгент проверит его отдельно и только если приёмник отвечает через новый вход — сохранит и перезапустится. " +
+    "Если после перезапуска связи через него не будет 10 минут, агент вернётся к прежнему входу.")) return;
+  $("aTsSend").disabled = true;
+  try {
+    await post("/ui/api/agentctl", { action: "tslogin", auth_key: key, hostname: $("aTsHost").value.trim(), control_url: $("aTsCtl").value.trim() });
+    $("aTsKey").value = "";
+    for (const id of ["aTsHost", "aTsCtl"]) delete $(id).dataset.edited;
+    toast("Вход отправлен агенту — итог появится в событиях агента");
+    refresh();
+  } catch (e) { $("aTsSend").disabled = false; toast("Не отправлено: " + e.message); }
+};
 
 function renderStatus() {
   const a = state.agent;

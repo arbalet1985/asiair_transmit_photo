@@ -4,7 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/protocol"
@@ -48,6 +50,16 @@ type agentCtl struct {
 	SwitchTo  string `json:"switch_to,omitempty"` // being switched to
 	// SwitchBack: the agent was switched and is not yet confirmed.
 	SwitchBack string `json:"switch_back,omitempty"`
+	// the Tailscale login of the agent: whether it takes new credentials
+	// (TSWhy: why not), its name and coordination server, credentials on
+	// the way, a new login not yet confirmed
+	CanTSLogin   bool   `json:"can_ts_login,omitempty"`
+	TSWhy        string `json:"ts_why,omitempty"`
+	TSHostname   string `json:"ts_hostname,omitempty"`
+	TSControlURL string `json:"ts_control_url,omitempty"`
+	TSLoginBusy  bool   `json:"ts_login_busy,omitempty"`
+	TSLoginBack  bool   `json:"ts_login_back,omitempty"`
+	TSNeedLogin  bool   `json:"ts_need_login,omitempty"`
 }
 
 func (s *Server) agentCtl(st protocol.AgentStatus, online bool) agentCtl {
@@ -55,6 +67,15 @@ func (s *Server) agentCtl(st protocol.AgentStatus, online bool) agentCtl {
 	c.CanRestart = online && st.CanRestart
 	c.RestartAt, c.SwitchTo = s.state.AgentCtlPending()
 	c.SwitchBack = st.SwitchBack
+	if st.CanTSLogin {
+		c.TSHostname, c.TSControlURL, c.TSLoginBack, c.TSNeedLogin = st.TSHostname, st.TSControlURL, st.TSLoginBack, st.TSNeedLogin
+		c.TSLoginBusy = s.state.TSLoginPending()
+		_, c.TSWhy = s.tsLoginURLs()
+		if !online {
+			c.TSWhy = "агент не на связи"
+		}
+		c.CanTSLogin = c.TSWhy == ""
+	}
 	if !st.CanRestart || st.Modes == nil {
 		return c // an old agent
 	}
@@ -111,11 +132,38 @@ func (s *Server) switchTarget(st protocol.AgentStatus) (to string, urls []string
 	return to, urls, ""
 }
 
-// handleUIAgentCtl: {"action": "restart"} or {"action": "switch", "connection": "tailscale"}
+// tsLoginURLs: the receiver in the tailnet, for the agent to check a new
+// login, or why there is none.
+func (s *Server) tsLoginURLs() ([]string, string) {
+	ts := s.tailscaleInfo()
+	if ts.State != tsnode.StateRunning {
+		return nil, "Tailscale на приёмнике не включён — агенту не через что проверить новый вход"
+	}
+	scheme := "https"
+	if s.tlsCert == nil {
+		scheme = "http"
+	}
+	var urls []string
+	if u := s.state.AgentURL(protocol.ConnTailscale); u != "" {
+		urls = append(urls, u)
+	}
+	for _, h := range []string{ts.Name, ts.DNSName, ts.IP} {
+		if u := scheme + "://" + h + ":" + s.apiPort(); h != "" && !slices.Contains(urls, u) {
+			urls = append(urls, u)
+		}
+	}
+	return urls, ""
+}
+
+// handleUIAgentCtl: {"action": "restart"}, {"action": "switch", "connection": "tailscale"}
+// or {"action": "tslogin", "auth_key": …, "control_url": …, "hostname": …}
 func (s *Server) handleUIAgentCtl(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action     string `json:"action"`
 		Connection string `json:"connection"`
+		AuthKey    string `json:"auth_key"`
+		ControlURL string `json:"control_url"`
+		Hostname   string `json:"hostname"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -148,9 +196,36 @@ func (s *Server) handleUIAgentCtl(w http.ResponseWriter, r *http.Request) {
 		}
 		s.state.AskSwitch(to, urls)
 		log.Printf("Приёмник: агента попросили переключить связь на %s (адреса: %v)", to, urls)
+	case "tslogin":
+		urls, why := s.tsLoginURLs()
+		key, ctl, host := strings.TrimSpace(req.AuthKey), strings.TrimSpace(req.ControlURL), strings.TrimSpace(req.Hostname)
+		switch {
+		case !st.CanTSLogin:
+			why = "этот агент не принимает вход Tailscale с приёмника — обновите его"
+		case st.TSLoginBack:
+			why = "прошлый новый вход ещё не подтверждён"
+		case key == "":
+			why = "введите ключ авторизации Tailscale (tskey-auth-…)"
+		case strings.ContainsAny(key, " \t\r\n"):
+			why = "в ключе не должно быть пробелов"
+		case host != "" && !validHostname(host):
+			why = "имя в Tailscale: латинские буквы, цифры и дефис"
+		case ctl != "" && !strings.HasPrefix(ctl, "https://") && !strings.HasPrefix(ctl, "http://"):
+			why = "сервер управления — адрес вида https://…"
+		}
+		if why != "" {
+			http.Error(w, why, http.StatusConflict)
+			return
+		}
+		s.state.AskTSLogin(protocol.TSLogin{AuthKey: key, ControlURL: ctl, Hostname: host, ReceiverURLs: urls})
+		log.Printf("Приёмник: агенту отправлен новый вход Tailscale (имя %q, сервер %q)", host, ctl) // never the key
 	default:
 		http.Error(w, "неизвестное действие", http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+var hostnameRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+func validHostname(h string) bool { return hostnameRe.MatchString(h) }

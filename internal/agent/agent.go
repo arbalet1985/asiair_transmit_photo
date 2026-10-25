@@ -137,6 +137,7 @@ type Agent struct {
 
 	restartSeen  int64       // the last restart asked by the receiver (poll loop only)
 	switchSeen   int64       // the last connection switch asked by the receiver (poll loop only)
+	tsLoginSeen  int64       // the last Tailscale login asked by the receiver (poll loop only)
 	switching    atomic.Bool // a connection switch is being tried
 	switchBackTo string      // guarded by mu; the connection to go back to until the switch is confirmed
 
@@ -150,6 +151,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 	}
 	var node *tsnode.Node
 	var dial DialFunc
+	tsStartup(cfg) // a new Tailscale login taken, or the old one back
 	if cfg.UseTailscale() {
 		node, err = tsnode.Start(tsnode.Config{
 			Dir:        cfg.TailscaleDir,
@@ -189,6 +191,7 @@ func New(cfg *config.Agent) (*Agent, error) {
 	a.status.ASIAIR = cfg.ASIAIR
 	a.status.Connection = cfg.Connection
 	a.switchBackTo = cfg.ConnectionFallback
+	a.status.TSLoginBack = exists(tsConfirm(cfg))
 	a.status.Rate = rate
 	a.localRate.Store(rate)
 	a.streams.Store(1) // until the receiver says
@@ -281,6 +284,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		protocol.Version, a.cfg.ASIAIR, a.cfg.ReceiverURL, config.FormatRate(a.localRate.Load()))
 	a.reportCrash()
 	a.event("", "агент %s запущен (ASIAIR %s)", protocol.Version, a.cfg.ASIAIR)
+	a.failoverNoted()
 	if a.Restart != nil {
 		a.startupUpdate()
 	}
@@ -295,6 +299,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		{"команды удаления", a.commandLoop},
 		{"сведения о сети", a.netInfoLoop},
 		{"способ связи", a.connLoop},
+		{"запасной путь связи", a.failoverLoop},
 		{"журнал скорости", a.perfLoop},
 	}
 	for _, l := range loops {
@@ -1278,6 +1283,9 @@ func (a *Agent) Status() protocol.AgentStatus {
 	a.status.WiFi = a.wifi.Load()
 	a.status.Build = protocol.Build
 	a.status.CanRestart = a.Restart != nil
+	a.status.CanTSLogin = a.Restart != nil
+	a.status.TSHostname, a.status.TSControlURL = a.cfg.TailscaleHostname, a.cfg.TailscaleControlURL
+	a.status.TSNeedLogin = a.cfg.TailscaleDir != "" && exists(tsNeedLogin(a.cfg.TailscaleDir))
 	a.status.Modes = a.modes()
 	a.status.SwitchBack = a.switchBackTo
 	a.status.Speed = a.lim.Speed()
@@ -1369,6 +1377,7 @@ func (a *Agent) poll(ctx context.Context) (held bool, err error) {
 	a.searchAsked(ctx, resp.Rediscover)
 	a.restartAsked(resp.Restart)
 	a.switchAsked(ctx, resp.Switch)
+	a.tsLoginAsked(ctx, resp.TSLogin)
 	return held, nil
 }
 

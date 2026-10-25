@@ -629,6 +629,8 @@ func (w *window) applyAgentConfig(values map[string]string) {
 			f.pass.SetText(v)
 		case "receiver_fingerprint":
 			f.fingerprint.SetText(v)
+		case "tailscale_authkey": // a new Tailscale login sent by the receiver
+			f.tsKey.SetText(v)
 		}
 	}
 }

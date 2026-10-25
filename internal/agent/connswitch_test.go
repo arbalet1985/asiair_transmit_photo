@@ -37,7 +37,7 @@ state_file: state.json
 	switchCheckWait = 3 * time.Second
 
 	sw := &protocol.ConnSwitch{ID: 1, Connection: protocol.ConnInternet, URLs: []string{"https://127.0.0.1:1"}}
-	if err := a.switchConn(context.Background(), sw); err == nil || restarts != 0 {
+	if err := a.switchConn(context.Background(), sw, "по просьбе приёмника"); err == nil || restarts != 0 {
 		t.Fatalf("switched to an address that does not answer: %v", err)
 	}
 	if c, _ := config.LoadAgent(cfg.Path); c.Connection != config.ConnInternet || c.ConnectionFallback != "" {
@@ -45,7 +45,7 @@ state_file: state.json
 	}
 
 	sw.URLs = append(sw.URLs, recv.URL)
-	if err := a.switchConn(context.Background(), sw); err != nil || restarts != 1 {
+	if err := a.switchConn(context.Background(), sw, "по просьбе приёмника"); err != nil || restarts != 1 {
 		t.Fatalf("switch: %v, restarts %d", err, restarts)
 	}
 	c, err := config.LoadAgent(cfg.Path)
