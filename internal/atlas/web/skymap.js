@@ -192,7 +192,7 @@
       tog("сетка", "grid", "Высота и азимут, меридиан, «не ниже» планировщика"), tog("созвездия", "lines", "Фигуры созвездий"),
       tog("имена", "names", "Названия звёзд, созвездий и объектов"), tog("объекты", "dso", "Галактики, туманности, скопления каталога"),
       tog("Млечный Путь", "mw", "Млечный Путь на тёмном небе"),
-      tog("снимок", "dss", "При приближении (поле меньше 15°) — снимок неба DSS2 под картой (CDS, нужен интернет)"),
+      tog("снимок", "dss", "Снимок неба DSS2 под картой (CDS, нужен интернет): при общем виде — широкий, при приближении — чёткий"),
       btn("−1 ч", "На час назад", () => setTime(now() - 3600e3)), btn("+1 ч", "На час вперёд", () => setTime(now() + 3600e3)),
       btn("−", "Отдалить", () => zoom(1.4)), btn("+", "Приблизить", () => zoom(1 / 1.4)),
       btn("⛶", "Во весь экран", () => { if (document.fullscreenElement) document.exitFullscreen(); else if (root.requestFullscreen) root.requestFullscreen(); })));
@@ -202,7 +202,7 @@
     const root = el("div", { className: "smap " + (opts.className || "") }, canvas, bar, hud, card, msg);
     div.append(root);
     const ctx = canvas.getContext("2d");
-    let W = 0, H = 0, dpr = 1, scale = 1, groundCv = null, faintAsked = false;
+    let W = 0, H = 0, dpr = 1, scale = 1, groundCv = null, faintAsked = false, dssNow = false;
 
     const now = () => st.time == null ? Date.now() : st.time;
     function setTime(t) {
@@ -305,40 +305,113 @@
     }
     function drawGround() { ctx.imageSmoothingEnabled = true; ctx.drawImage(groundCv, 0, 0, W, H); }
 
-    // the photograph under the map when zoomed in: DSS2 of hips2fits (CDS),
-    // asked a moment after the view stops, kept while it covers the view
-    let dss = null, dssWant = "", dssH = 0, dssErr = "";
-    function dssNeeded(ra, dec) {
-      const want = Math.min(view.fov * Math.max(1, H / W) * 1.6, 30);
-      if (dss) {
-        const sep = Math.acos(clamp(unit(ra, dec).reduce((s, v, i) => s + v * unit(dss.ra, dss.dec)[i], 0), -1, 1)) * deg;
-        if (sep < dss.fov * 0.3 && dss.fov <= want * 1.8 && dss.fov >= want * 0.7) return;
-      }
-      const key = `${ra.toFixed(2)} ${dec.toFixed(2)} ${want.toFixed(2)}`;
-      if (key === dssWant) return;
-      dssWant = key;
+    // The photograph of the sky under the map, from hips2fits (CDS), at any
+    // field up to DSS_WIDE. A wide view asks for the all-sky photograph of
+    // Mellinger in the projection of the map (stereographic) centred on the
+    // view, which then lies on it exactly, square over the diagonal so that
+    // the sky turned leaves no corner; a narrow one (DSS_NARROW) a square
+    // DSS2 picture (gnomonic) around the centre. It takes the service a second or two: asked a moment
+    // after the view stops, first small and quick, then sharp; the last ones
+    // are kept and the sharpest drawn over the blurrier (back to a place or
+    // zoomed out: at once). Each is stretched as it comes: a faint nebula
+    // is black as DSS gives it.
+    const DSS_WIDE = 170, DSS_NARROW = 8, DSS_KEEP = 14;
+    const dssCache = [], dssLoading = new Set();
+    let dssH = 0, dssErr = "", dssKey = "";
+    const sepDeg = (a, b) => Math.acos(clamp(a.reduce((s, v, i) => s + v * b[i], 0), -1, 1)) * deg;
+    // what the view needs: the projection, the field (degrees, across)
+    function dssWant() {
+      if (view.fov > DSS_NARROW) return { proj: "STG", fov: Math.min(view.fov * Math.hypot(1, H / W) * 1.1, 220) };
+      return { proj: "TAN", fov: clamp(view.fov * Math.hypot(1, H / W) * 1.4, 0.5, 16) };
+    }
+    // the photographs to draw, the blurriest first; covers: one is sharp
+    // enough and lies right for the whole view
+    function dssOver(cu) {
+      const half = view.fov * Math.hypot(1, H / W) / 2, want = dssWant();
+      let covers = false;
+      const over = dssCache.filter(d => {
+        const sep = sepDeg(cu, d.u);
+        if (d.proj === "STG") {
+          // centred elsewhere it lies right only near its centre
+          if (sep > 0.2 * d.fov) return false;
+          if (want.proj === "STG" && sep < 0.06 * d.fov && d.fov >= half * 2 && d.fov <= half * 3.2 && d.big) covers = true;
+          return true;
+        }
+        if (want.proj === "TAN" && sep + half <= d.fov / 2 && d.fov <= want.fov * 2.2 && d.big) covers = true;
+        return sep < d.fov / 2 + half;
+      });
+      over.sort((a, b) => b.fov / b.w - a.fov / a.w);
+      return { over, covers };
+    }
+    // stretched as the thumbnails of the receiver: the background of each
+    // colour away, one factor for the three (the picture as it is when the
+    // service does not let it be read); soft: for the wide photograph,
+    // whose sky is to stay dark
+    function stretch(img, soft) { // soft: 0 strong, 1 a wider DSS picture (its plates show), 2 Mellinger
+      try {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const g = c.getContext("2d");
+        g.drawImage(img, 0, 0);
+        const im = g.getImageData(0, 0, c.width, c.height), d = im.data, n = d.length / 4;
+        const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+        for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) hist[k][d[i + k]]++;
+        const at = (h, q) => { let s = 0; for (let v = 0; v < 256; v++) { s += h[v]; if (s >= q * n) return v; } return 255; };
+        const bg = hist.map(h => at(h, soft === 2 ? 0.02 : 0.05)), lh = new Uint32Array(256);
+        for (let i = 0; i < d.length; i += 4) lh[Math.max(0, d[i] - bg[0], d[i + 1] - bg[1], d[i + 2] - bg[2])]++;
+        const [q, top, gam] = [[0.995, 255, 0.8], [0.998, 245, 1], [0.9995, 225, 1.25]][soft || 0];
+        const hi = Math.max(at(lh, q), 1), lut = new Uint8Array(256);
+        for (let v = 0; v < 256; v++) lut[v] = Math.min(255, Math.round(top * Math.pow(v / hi, gam)));
+        for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) d[i + k] = lut[Math.max(0, d[i + k] - bg[k])];
+        g.putImageData(im, 0, 0);
+        return c;
+      } catch (e) { return img; }
+    }
+    function dssNeeded(ra, dec, cu, now) {
+      if (dssOver(cu).covers) return;
+      const want = dssWant(), key = `${want.proj} ${ra.toFixed(2)} ${dec.toFixed(2)} ${want.fov.toFixed(2)}`;
+      if (key === dssKey) return;
+      dssKey = key;
       clearTimeout(dssH);
       dssH = setTimeout(() => {
-        const px = 640, img = new Image();
-        img.onload = () => { if (dssWant === key) { dss = { img, ra, dec, fov: want, px }; dssErr = ""; draw(); } };
-        img.onerror = () => { if (dssWant === key) { dssErr = "снимок неба не загружен (нужен интернет)"; dssWant = ""; draw(); } };
-        img.src = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=CDS%2FP%2FDSS2%2Fcolor&format=jpg&projection=TAN" +
-          `&width=${px}&height=${px}&fov=${want.toFixed(3)}&ra=${ra.toFixed(4)}&dec=${dec.toFixed(4)}`;
-      }, 350);
+        for (const big of [false, true]) {
+          const w = want.proj === "STG" ? (big ? 768 : 320) : (big ? 768 : 256), h = w, k = key + " " + w;
+          if (dssLoading.has(k)) continue;
+          dssLoading.add(k);
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => {
+            dssLoading.delete(k);
+            dssCache.push({ img: stretch(img, want.proj === "STG" ? 2 : want.fov > 4 ? 1 : 0), ra, dec, u: unit(ra, dec), fov: want.fov, proj: want.proj, w, h, big });
+            // the small one gives way to the sharp one of the same place
+            if (big) { const q = dssCache.findIndex(d => !d.big && d.ra === ra && d.dec === dec && d.fov === want.fov); if (q >= 0) dssCache.splice(q, 1); }
+            while (dssCache.length > DSS_KEEP) dssCache.shift();
+            dssErr = "";
+            draw();
+          };
+          img.onerror = () => { dssLoading.delete(k); dssErr = "снимок неба не загружен (нужен интернет)"; if (dssKey === key) dssKey = ""; draw(); };
+          const survey = want.proj === "STG" ? "P%2FMellinger%2Fcolor" : "CDS%2FP%2FDSS2%2Fcolor";
+          img.src = `https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=${survey}&format=jpg` +
+            `&projection=${want.proj}&width=${w}&height=${h}&fov=${want.fov.toFixed(3)}&ra=${ra.toFixed(4)}&dec=${dec.toFixed(4)}`;
+        }
+      }, now ? 0 : 150);
     }
-    // the photograph placed by three points: its centre and a step east and north
-    function drawDss(P, alpha) {
-      if (!dss || alpha <= 0) return;
-      const dd = dss.fov * 0.1, s = dss.fov / dss.px;
-      const C = P(dss.ra, dss.dec), E = P(...fromPlane(dss.ra, dss.dec, dd, 0)), N = P(...fromPlane(dss.ra, dss.dec, 0, dd));
-      if (!C || !E || !N) return;
-      // east is to the left of the photograph, north up
-      const ux = -(E[0] - C[0]) / dd * s, uy = -(E[1] - C[1]) / dd * s, vx = -(N[0] - C[0]) / dd * s, vy = -(N[1] - C[1]) / dd * s;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.setTransform(ux, uy, vx, vy, C[0] - ux * dss.px / 2 - vx * dss.px / 2, C[1] - uy * dss.px / 2 - vy * dss.px / 2);
-      ctx.drawImage(dss.img, 0, 0);
-      ctx.restore();
+    // a photograph placed by three points: its centre and a small step east
+    // and north (exact for one centred on the view: the same projection)
+    function drawDss(P, alpha, cu) {
+      if (alpha <= 0) return;
+      for (const d of dssOver(cu).over) {
+        const dd = Math.min(d.fov * 0.01, 0.2), s = d.fov / d.w;
+        const C = P(d.ra, d.dec), E = P(...fromPlane(d.ra, d.dec, dd, 0)), N = P(...fromPlane(d.ra, d.dec, 0, dd));
+        if (!C || !E || !N) continue;
+        // east is to the left of the photograph, north up
+        const ux = -(E[0] - C[0]) / dd * s, uy = -(E[1] - C[1]) / dd * s, vx = -(N[0] - C[0]) / dd * s, vy = -(N[1] - C[1]) / dd * s;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.setTransform(ux, uy, vx, vy, C[0] - ux * d.w / 2 - vx * d.h / 2, C[1] - uy * d.w / 2 - vy * d.h / 2);
+        ctx.drawImage(d.img, 0, 0, d.w, d.h);
+        ctx.restore();
+      }
     }
 
     function skyColor(sunAlt) {
@@ -399,11 +472,15 @@
       const sunEq = eclToEq(sunEcl(t), 0), [sunAlt, sunAz] = altAz(sunEq[0], sunEq[1], lat, sid);
       ctx.fillStyle = skyColor(sunAlt);
       ctx.fillRect(0, 0, W, H);
-      // the Milky Way on a dark sky, fading as the photograph comes
-      const dssAlpha = show.dss ? clamp((15 - view.fov) / 6, 0, 1) * 0.92 : 0;
-      layers(lat, sid, show.mw ? clamp((-sunAlt - 8) / 8, 0, 1) * (1 - dssAlpha) : 0);
+      // the photograph of the sky, and the Milky Way of skydata.js on a
+      // dark sky where there is none (no internet)
+      const dssAlpha = show.dss && view.fov <= DSS_WIDE ? 0.92 : 0;
       const [cAlt, cAz] = unproj(W / 2, H / 2), [cRa, cDec] = raDec(cAlt, cAz, lat, sid);
-      if (dssAlpha > 0) { dssNeeded(cRa, cDec); drawDss(P, dssAlpha); }
+      const cu = unit(cRa, cDec), dssShown = dssAlpha > 0 && dssOver(cu).over.length > 0;
+      layers(lat, sid, show.mw && !dssShown ? clamp((-sunAlt - 8) / 8, 0, 1) : 0);
+      if (dssAlpha > 0) dssNeeded(cRa, cDec, cu, dssNow);
+      dssNow = false;
+      drawDss(P, dssAlpha, cu);
       // the grid of altitude and azimuth, the meridian, «не ниже»
       if (show.grid) {
         const gc = "rgba(120,150,200,.22)";
@@ -451,7 +528,7 @@
         }
         if (F) {
           const lim = view.fov < 25 ? 8.1 : 7.2, cu = unit(cRa, cDec), cl = Math.cos(Math.min(85, view.fov * 0.85) * rad);
-          ctx.globalAlpha = dssAlpha > 0.5 ? 0.55 : 1;
+          ctx.globalAlpha = dssShown ? 0.55 : 1;
           for (let i = F.n - 1; i >= 0; i--) {
             if (F.mag[i] > lim || F.x[i] * cu[0] + F.y[i] * cu[1] + F.z[i] * cu[2] < cl) continue;
             const p = P(F.ra[i], F.dec[i]);
@@ -591,7 +668,7 @@
         : new Date(t + zone * 3600e3).toISOString().slice(5, 16).replace("T", " ").replace(/^(\d\d)-(\d\d)/, "$2.$1");
       hud.textContent = `${tt}${st.time == null ? " (сейчас)" : ""} · центр ${side(view.az)} ${Math.round(view.az)}°, высота ${Math.round(view.alt)}° · поле ${Math.round(view.fov)}°` +
         (st.lat == null ? " · координаты обсерватории не заданы" : "") + (sunAlt > -6 ? ` · Солнце на ${Math.round(sunAlt)}°` : "") +
-        (dssAlpha > 0 ? (dssErr ? " · " + dssErr : dss ? " · снимок DSS2 (CDS)" : " · загружаю снимок неба…") : "");
+        (dssAlpha > 0 ? (dssErr ? " · " + dssErr : dssLoading.size ? " · загружаю снимок неба…" : dssShown ? (view.fov > DSS_NARROW ? " · снимок неба Mellinger (CDS)" : " · снимок DSS2 (CDS)") : "") : "");
     }
 
     // where the one picked is now: [ra, dec]
@@ -735,6 +812,7 @@
       goTo(w[0], w[1], s.type === "dso" && s.o.size ? clamp(s.o.size / 60 * 6, 3, 60) : null);
     }
     function goTo(ra, dec, fov) {
+      dssNow = true; // the photograph of the place asked at once
       const lat = st.lat == null ? 50 : st.lat, [alt, az] = altAz(ra, dec, lat, lst(now(), st.lon || 0));
       view.az = az; view.alt = clamp(alt, -30, 90);
       if (fov) view.fov = Math.min(view.fov, fov);

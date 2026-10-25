@@ -1,22 +1,27 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
 
 // A picture of an object, as the lists of ASIAIR show: the sky around it
 // (DSS2 in colour) from the hips2fits service of CDS over the internet,
-// kept on disk so that each is asked once.
+// stretched (a faint nebula is black as it comes) and kept on disk so that
+// each is asked once.
 
 // ThumbPx: the side of the picture, pixels.
 const ThumbPx = 160
@@ -48,7 +53,7 @@ func SizeOf(name string) float64 {
 // Thumb is the picture (JPEG) of the sky around ra, dec (J2000, degrees)
 // of fov degrees; dir keeps the pictures ("" = not kept).
 func Thumb(ctx context.Context, dir string, ra, dec, fov float64) ([]byte, error) {
-	key := fmt.Sprintf("%.3f_%+.3f_%.2f", ra, dec, fov)
+	key := fmt.Sprintf("%.3f_%+.3f_%.2f_s", ra, dec, fov) // _s: stretched
 	file := ""
 	if dir != "" {
 		file = filepath.Join(dir, key+".jpg")
@@ -110,5 +115,66 @@ func fetchThumb(ctx context.Context, ra, dec, fov float64) ([]byte, error) {
 	if len(b) < 3 || b[0] != 0xFF || b[1] != 0xD8 {
 		return nil, errors.New("CDS hips2fits: не картинка")
 	}
+	if s, err := Stretch(b); err == nil {
+		b = s
+	}
 	return b, nil
+}
+
+// Stretch brings out a faint picture of the sky: the background of each
+// colour taken away (the 5th percentile), then one factor for the three, so
+// that the brightest (the 99.5th percentile) is white and the hues stay;
+// a bright picture hardly changes.
+func Stretch(jpg []byte) ([]byte, error) {
+	im, err := jpeg.Decode(bytes.NewReader(jpg))
+	if err != nil {
+		return nil, err
+	}
+	r := im.Bounds()
+	n := r.Dx() * r.Dy()
+	if n == 0 {
+		return nil, errors.New("пустая картинка")
+	}
+	px := make([][3]float64, 0, n)
+	var ch [3][]float64
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			cr, cg, cb, _ := im.At(x, y).RGBA()
+			p := [3]float64{float64(cr >> 8), float64(cg >> 8), float64(cb >> 8)}
+			px = append(px, p)
+			for k := range ch {
+				ch[k] = append(ch[k], p[k])
+			}
+		}
+	}
+	pct := func(v []float64, q float64) float64 {
+		s := append([]float64(nil), v...)
+		sort.Float64s(s)
+		return s[min(len(s)-1, int(q*float64(len(s))))]
+	}
+	var bg [3]float64
+	for k := range bg {
+		bg[k] = pct(ch[k], 0.05)
+	}
+	lum := make([]float64, n)
+	for i, p := range px {
+		for k := range p {
+			px[i][k] = math.Max(0, p[k]-bg[k])
+			lum[i] = math.Max(lum[i], px[i][k])
+		}
+	}
+	hi := math.Max(pct(lum, 0.995), 1)
+	out := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for i, p := range px {
+		o := (i/r.Dx())*out.Stride + (i%r.Dx())*4
+		for k := range p {
+			out.Pix[o+k] = uint8(math.Min(255, 255*math.Pow(p[k]/hi, 0.8)))
+		}
+		out.Pix[o+3] = 255
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: 88}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
