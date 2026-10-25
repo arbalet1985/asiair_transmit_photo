@@ -313,11 +313,11 @@
     // AL_DSS, the all-sky photograph of Mellinger wider; its tiles come at
     // once. Loaded when the map is first drawn with the photograph on.
     const ALADIN = "https://cdn.jsdelivr.net/npm/aladin-lite@3.8.2/dist/aladin.js", AL_DSS = 30;
-    let AL = null, alState = "", alSurvey = "", alDiv = null;
+    let AL = null, AlA = null, alState = "", alSurvey = "", alDiv = null;
     async function alLoad() {
       alState = "loading";
       try {
-        const A = (await import(ALADIN)).default;
+        const A = AlA = (await import(ALADIN)).default;
         await A.init;
         alDiv = el("div", { className: "sal" });
         root.insertBefore(alDiv, canvas);
@@ -340,10 +340,10 @@
       const survey = view.fov <= AL_DSS ? "P/DSS2/color" : "P/Mellinger/color";
       if (survey !== alSurvey) {
         alSurvey = survey;
-        AL.setBaseImageLayer(survey);
-        const l = AL.getBaseImageLayer && AL.getBaseImageLayer();
-        // a faint nebula comes out (DSS gives it nearly black)
-        if (l && l.setGamma && survey === "P/DSS2/color") { l.setGamma(1.6); l.setSaturation(1.3); }
+        // a faint nebula comes out with DSS brightened (it gives one nearly
+        // black); the gamma of Aladin below 1 brightens, and it is given with
+        // the layer: set on the layer just switched to it is lost
+        AL.setBaseImageLayer(survey === "P/DSS2/color" ? AlA.imageHiPS(survey, { gamma: 0.6, saturation: 1.3 }) : survey);
       }
       // the turn: north at the centre, as the map has it
       const C = P(ra, dec), N = P(ra, Math.min(dec + 0.05, 89.999));
