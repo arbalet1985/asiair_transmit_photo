@@ -31,6 +31,14 @@ type State struct {
 	// FrameReq: start the framing of target FrameI (once per value)
 	FrameReq int64 `json:"frame_req,omitempty"`
 	FrameI   int   `json:"frame_i"`
+	// for the sky map: the observatory (TZ: hours of its clock), the sky of
+	// the planner and the favorite objects
+	Lat       float64            `json:"lat"`
+	Lon       float64            `json:"lon"`
+	SiteSet   bool               `json:"site_set,omitempty"`
+	TZ        float64            `json:"tz"`
+	Sky       *planner.Sky       `json:"sky,omitempty"`
+	Favorites []planner.Favorite `json:"favorites"`
 }
 
 // Photo describes the frame over the sky: V changes with its picture.
@@ -49,6 +57,9 @@ type Server struct {
 	OnFrame  func(i int, ra, dec, angle float64) // the framing of target i applied
 	OnOptics func(o planner.Optics)              // the optics changed
 	OnSelect func(i int)                         // target i chosen
+	// on the sky map: an object hearted or not, an object to the plan
+	OnFavorite func(f planner.Favorite, on bool)
+	OnAdd      func(f planner.Favorite)
 
 	token string
 	mu    sync.Mutex
@@ -92,6 +103,9 @@ func (s *Server) Publish(st State) {
 	if st.Setups == nil {
 		st.Setups = []planner.Setup{}
 	}
+	if st.Favorites == nil {
+		st.Favorites = []planner.Favorite{}
+	}
 	s.st = st
 	close(s.wake)
 	s.wake = make(chan struct{})
@@ -130,15 +144,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "сбой", http.StatusInternalServerError)
 		}
 	}()
-	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("t")), []byte(s.token)) != 1 && r.URL.Path != "/atlas.js" {
+	public := r.URL.Path == "/atlas.js" || r.URL.Path == "/skymap.js" || r.URL.Path == "/skydata.js" // no secret in them
+	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("t")), []byte(s.token)) != 1 && !public {
 		http.Error(w, "неверная ссылка", http.StatusForbidden)
 		return
 	}
 	switch r.URL.Path {
 	case "/":
 		Static(w, "atlas.html")
-	case "/atlas.js":
-		Static(w, "atlas.js")
+	case "/atlas.js", "/skymap.js", "/skydata.js":
+		Static(w, r.URL.Path[1:], r)
+	case "/objects":
+		Objects(w)
+	case "/find":
+		Find(w, r.URL.Query().Get("q"))
 	case "/state":
 		s.handleState(w, r)
 	case "/photo.jpg":
@@ -151,7 +170,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "image/jpeg")
 		w.Write(jpg)
-	case "/frame", "/optics", "/select":
+	case "/frame", "/optics", "/select", "/favorite", "/add":
 		if r.Method != http.MethodPost {
 			http.Error(w, "нужен POST", http.StatusMethodNotAllowed)
 			return
@@ -207,6 +226,19 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		var v struct{ I int }
 		if err = dec.Decode(&v); err == nil && s.OnSelect != nil {
 			s.OnSelect(v.I)
+		}
+	case "/favorite":
+		var v struct {
+			Fav planner.Favorite
+			On  bool
+		}
+		if err = dec.Decode(&v); err == nil && v.Fav.Name != "" && s.OnFavorite != nil {
+			s.OnFavorite(v.Fav, v.On)
+		}
+	case "/add":
+		var f planner.Favorite
+		if err = dec.Decode(&f); err == nil && f.Name != "" && s.OnAdd != nil {
+			s.OnAdd(f)
 		}
 	}
 	if err != nil {

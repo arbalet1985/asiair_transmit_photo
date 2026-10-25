@@ -4370,7 +4370,7 @@ async function plLoad() {
     const r = await fetch("/ui/api/planner");
     if (!r.ok) throw new Error(await r.text());
     const d = await r.json();
-    PL.st = d.state; PL.guess = d.guess; PL.objects = d.objects || []; PL.tzGuess = d.tz_guess; PL.frames = d.frames; PL.setups = d.setups || [];
+    PL.st = d.state; PL.guess = d.guess; PL.site = d.site; PL.objects = d.objects || []; PL.tzGuess = d.tz_guess; PL.frames = d.frames; PL.setups = d.setups || [];
     // empty lists are left out of the answer
     PL.st.sky.zones = PL.st.sky.zones || []; PL.st.sky.horizon = PL.st.sky.horizon || []; PL.st.targets = PL.st.targets || [];
     PL.st.favorites = PL.st.favorites || [];
@@ -4574,6 +4574,9 @@ function plSelect(i) {
 // their framing; Aladin is loaded once the atlas is opened
 function plAtlasSync() {
   if (!PL.atlas || !PL.st) return;
+  if (PL.site && PL.site.set) PL.atlas.setSite(PL.site.lat, PL.site.lon, plTZ());
+  PL.atlas.setSky(PL.st.sky);
+  PL.atlas.setFavorites(PL.st.favorites || []);
   PL.atlas.setOptics(PL.st.optics || null, PL.setups || []);
   PL.atlas.setTargets(PL.st.targets, PL.st.targets.map((t, i) => plColor(i)), PL.sel);
 }
@@ -4591,6 +4594,11 @@ function plAtlasOpen() {
       },
       onSelect: i => plSelect(i),
       onOptics: o => { PL.st.optics = o; plChanged(); },
+      // the sky map
+      objectsURL: "/ui/api/skyobjects",
+      find: async q => { const r = await fetch("/ui/api/catalog?q=" + encodeURIComponent(q)); return r.ok ? r.json() : []; },
+      onFavorite: (o, on) => favChange(on ? [{ name: o.name, label: o.label || "", ra: o.ra, dec: o.dec, kind: o.kind || "", size: o.size || 0 }] : [], on ? [] : [o.name]),
+      onAdd: o => plAddObject(o),
     });
     plAtlasSync();
     if (PL.sel >= 0) PL.atlas.goTo(PL.sel);
@@ -5303,6 +5311,7 @@ async function favChange(add, remove) {
     const r = await post("/ui/api/favorites", { add, remove });
     const old = favList(), vis = FV.favVis && FV.favVis.objects && FV.favVis.objects.length === old.length ? FV.favVis.objects : null;
     PL.st.favorites = r.favorites || [];
+    if (PL.atlas) PL.atlas.setFavorites(PL.st.favorites);
     // the curves already known go along; a new one comes with the next refresh
     if (vis && FV.favVis) FV.favVis.objects = PL.st.favorites.map(f => vis[old.findIndex(o => o.name === f.name)] || FV.pending[f.name] || null);
   } catch (e) { toast("Избранное не сохранено: " + e.message); }
@@ -5449,14 +5458,7 @@ function favRow(o, v, vis) {
   };
   const name = favTargetName(o), inPlan = PL.st.targets.some(t => t.name === name);
   const add = el("button", { textContent: inPlan ? "в плане" : "В план", disabled: inPlan, title: "Добавить в объекты планировщика" });
-  add.onclick = () => {
-    PL.st.targets.push({ name, ra: Math.round(o.ra * 1e5) / 1e5, dec: Math.round(o.dec * 1e5) / 1e5,
-      exposure: o.exp > 0 ? o.exp : Math.max(1, parseFloat($("plExp").value) || 300), want_sec: 0, filter: "", priority: 0 });
-    PL.sel = PL.st.targets.length - 1;
-    plChanged();
-    toast(`«${name}» добавлен в план`);
-    favRender();
-  };
+  add.onclick = () => { plAddObject(o); favRender(); };
   const label = o.label && o.label !== o.name ? o.label + (o.label.startsWith(o.name) ? "" : ` (${o.name})`) : o.name;
   const info = el("div", {},
     el("div", { className: "fname", textContent: label }),
@@ -5469,6 +5471,17 @@ function favRow(o, v, vis) {
   const row = el("div", { className: "favrow" + (v && !v.match ? " faded" : "") }, heart, pic, info, add);
   if (v && vis) row.append(el("div", { className: "fchart" }, favChart(v, vis)));
   return row;
+}
+// plAddObject: an object of the catalog (or of the frames) to the targets
+function plAddObject(o) {
+  const name = favTargetName(o);
+  if (PL.st.targets.some(t => t.name === name)) { toast(`«${name}» уже в плане`); return; }
+  const shot = PL.objects.find(x => x.kind === "кадры" && x.name === o.name);
+  const exp = o.exp > 0 ? o.exp : shot && shot.exp > 0 ? shot.exp : Math.max(1, parseFloat($("plExp").value) || 300);
+  PL.st.targets.push({ name, ra: Math.round(o.ra * 1e5) / 1e5, dec: Math.round(o.dec * 1e5) / 1e5, exposure: exp, want_sec: 0, filter: "", priority: 0 });
+  PL.sel = PL.st.targets.length - 1;
+  plChanged();
+  toast(`«${name}» добавлен в план`);
 }
 function favVisText(v) {
   const parts = [];

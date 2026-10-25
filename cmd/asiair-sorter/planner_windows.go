@@ -469,6 +469,7 @@ func (p *plannerUI) paramsChanged() {
 			dawn.In(prm.Zone).Format("15:04"), planner.Hours(dawn.Sub(dusk).Seconds()), phaseName(&m), int(math.Round(m.Illum*100))))
 	}
 	p.weatherNeeded()
+	p.atlasChanged() // the site and the clock of the sky map
 	if p.plan != nil {
 		p.makePlan()
 		return
@@ -573,6 +574,7 @@ func (p *plannerUI) skyChanged() {
 		p.makePlan()
 	}
 	p.sky.invalidate()
+	p.atlasChanged() // the sky map shows the horizon and the zones
 }
 
 // find looks the name up in the catalog, in the frames and, when nothing
