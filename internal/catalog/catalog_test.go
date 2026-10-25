@@ -93,30 +93,33 @@ func TestCatalogsComplete(t *testing.T) {
 	}
 }
 
-// TestStretch: a dark picture comes out bright, its hue kept.
-func TestStretch(t *testing.T) {
-	im := image.NewRGBA(image.Rect(0, 0, 40, 40))
+// TestBrighten: a dark picture comes out brighter and smaller, its hue kept.
+func TestBrighten(t *testing.T) {
+	im := image.NewRGBA(image.Rect(0, 0, 60, 60))
 	for i := 0; i < len(im.Pix); i += 4 {
-		im.Pix[i], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3] = 10, 10, 12, 255 // the background
+		im.Pix[i], im.Pix[i+1], im.Pix[i+2], im.Pix[i+3] = 6, 6, 8, 255 // the background
 	}
-	for y := 15; y < 25; y++ {
-		for x := 15; x < 25; x++ {
+	for y := 21; y < 39; y++ {
+		for x := 21; x < 39; x++ {
 			o := y*im.Stride + x*4
-			im.Pix[o], im.Pix[o+1], im.Pix[o+2] = 40, 20, 14 // a faint red nebula
+			im.Pix[o], im.Pix[o+1], im.Pix[o+2] = 60, 30, 20 // a faint red nebula
 		}
 	}
 	var buf bytes.Buffer
 	jpeg.Encode(&buf, im, &jpeg.Options{Quality: 95})
-	b, err := Stretch(buf.Bytes())
+	b, err := Brighten(buf.Bytes(), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out, _ := jpeg.Decode(bytes.NewReader(b))
-	r, g, bl, _ := out.At(20, 20).RGBA()
-	if r>>8 < 200 || r <= g || g < bl {
+	if w := out.Bounds().Dx(); w != 20 {
+		t.Fatalf("width %d", w)
+	}
+	r, g, bl, _ := out.At(10, 10).RGBA()
+	if r>>8 < 100 || r <= g || g < bl {
 		t.Fatalf("nebula %d %d %d", r>>8, g>>8, bl>>8)
 	}
-	if r, _, _, _ := out.At(2, 2).RGBA(); r>>8 > 60 { // the noise of the JPEG comes out a little
+	if r, _, _, _ := out.At(1, 1).RGBA(); r>>8 > 50 {
 		t.Fatalf("background %d", r>>8)
 	}
 }
