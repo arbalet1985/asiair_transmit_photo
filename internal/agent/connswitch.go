@@ -183,6 +183,8 @@ func (a *Agent) switchConn(ctx context.Context, sw *protocol.ConnSwitch) error {
 	return nil
 }
 
+var errTSLogin = errors.New("Tailscale на агенте требует входа — войдите в окне агента")
+
 // waitTailscale waits until the node is in the tailnet.
 func waitTailscale(ctx context.Context, n *tsnode.Node) error {
 	deadline := time.Now().Add(switchTSWait)
@@ -192,7 +194,11 @@ func waitTailscale(ctx context.Context, n *tsnode.Node) error {
 		case tsnode.StateRunning:
 			return nil
 		case tsnode.StateLogin:
-			return errors.New("Tailscale на агенте требует входа — войдите в окне агента")
+			// with an auth key the node passes this state before it logs in:
+			// a login is needed only when Tailscale gives the link for it
+			if st.AuthURL != "" {
+				return errTSLogin
+			}
 		case tsnode.StateError:
 			return fmt.Errorf("Tailscale: %s", st.Error)
 		}
@@ -214,17 +220,27 @@ func waitTailscale(ctx context.Context, n *tsnode.Node) error {
 func (a *Agent) connLoop(ctx context.Context) {
 	c := a.cfg
 	fallback := c.ConnectionFallback
+	tsPending := exists(tsConfirm(c)) // a new Tailscale login taken
 	deadline := time.Now().Add(switchConfirm)
 	for !a.synced.Load() {
-		if fallback != "" && time.Now().After(deadline) {
-			a.switchBack(fallback)
-			return
+		if time.Now().After(deadline) {
+			if tsPending && c.UseTailscale() {
+				a.tsGoBack()
+				return
+			}
+			if fallback != "" {
+				a.switchBack(fallback)
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(2 * time.Second):
 		}
+	}
+	if tsPending {
+		a.tsConfirmed()
 	}
 	values := map[string]string{}
 	stored := c.ReceiverURLInternet

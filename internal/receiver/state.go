@@ -133,6 +133,11 @@ type State struct {
 	connSwitch *protocol.ConnSwitch
 	switchAt   time.Time
 	lastCtlID  int64
+	// new Tailscale credentials for the agent, until it takes them (a new
+	// run) or gives up; in memory only: the key is never written here
+	tsLogin        *protocol.TSLogin
+	tsLoginAt      time.Time
+	tsLoginSession string
 }
 
 // bump marks a change for the agent. Caller holds s.mu.
@@ -704,6 +709,30 @@ func (s *State) agentCtlLocked(req protocol.SyncRequest, resp *protocol.SyncResp
 			resp.Switch = sw
 		}
 	}
+	if l := s.tsLogin; l != nil {
+		switch {
+		case req.Session != "" && req.Session != s.tsLoginSession, req.Status.TSLoginDone == l.ID, time.Since(s.tsLoginAt) >= agentCtlKeep:
+			s.tsLogin = nil // taken (another run), given up, or never came
+		default:
+			resp.TSLogin = l
+		}
+	}
+}
+
+// AskTSLogin gives the agent new Tailscale credentials.
+func (s *State) AskTSLogin(l protocol.TSLogin) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l.ID = s.ctlID()
+	s.tsLogin, s.tsLoginAt, s.tsLoginSession = &l, time.Now(), s.session
+	s.bump()
+}
+
+// TSLoginPending: new Tailscale credentials are on the way to the agent.
+func (s *State) TSLoginPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tsLogin != nil && time.Since(s.tsLoginAt) < agentCtlKeep
 }
 
 // ctlID is a new ID of a restart or a switch, larger than any before
