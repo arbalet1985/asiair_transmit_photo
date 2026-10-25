@@ -144,7 +144,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "сбой", http.StatusInternalServerError)
 		}
 	}()
-	public := r.URL.Path == "/atlas.js" || r.URL.Path == "/skymap.js" || r.URL.Path == "/skydata.js" // no secret in them
+	public := r.URL.Path == "/atlas.js" || r.URL.Path == "/skymap.js" || r.URL.Path == "/skydata.js" || r.URL.Path == "/skystars8.js" // no secret in them
 	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("t")), []byte(s.token)) != 1 && !public {
 		http.Error(w, "неверная ссылка", http.StatusForbidden)
 		return
@@ -152,7 +152,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/":
 		Static(w, "atlas.html")
-	case "/atlas.js", "/skymap.js", "/skydata.js":
+	case "/atlas.js", "/skymap.js", "/skydata.js", "/skystars8.js":
 		Static(w, r.URL.Path[1:], r)
 	case "/objects":
 		Objects(w)

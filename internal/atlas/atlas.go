@@ -17,7 +17,7 @@ import (
 var webFS embed.FS
 
 // Static answers with a file of the atlas: "atlas.js", "skymap.js",
-// "skydata.js" or "atlas.html"; r (may be nil) asked again gets "not
+// "skydata.js", "skystars8.js" or "atlas.html"; r (may be nil) asked again gets "not
 // modified" while the file is the same.
 func Static(w http.ResponseWriter, name string, r ...*http.Request) {
 	b, err := webFS.ReadFile("web/" + path.Base(name))

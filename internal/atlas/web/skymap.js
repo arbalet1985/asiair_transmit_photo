@@ -2,9 +2,11 @@
 // the observatory at a time — the ground, the horizon and the zones hidden
 // by wires of the planner, the stars and the figures of the constellations
 // (skydata.js), the objects of the catalog, the Moon, the Sun and the
-// planets — turned by dragging, zoomed by the wheel or two fingers; a tap on
-// an object shows it with a heart and «В план». No library: a canvas with
-// the stereographic projection of the sky of altitude and azimuth.
+// planets, the Milky Way — turned by dragging, zoomed by the wheel or two
+// fingers; zoomed in, the fainter stars (skystars8.js) and a photograph of
+// the sky (DSS2 from CDS, over the internet) under the map; a tap on an
+// object shows it with a heart and «В план». No library: a canvas with the
+// stereographic projection of the sky of altitude and azimuth.
 "use strict";
 (function () {
   const rad = Math.PI / 180, deg = 180 / Math.PI;
@@ -38,6 +40,44 @@
     const ra = Math.atan2(Math.sin(l) * Math.cos(EPS) - Math.tan(b) * Math.sin(EPS), Math.cos(l)) * deg;
     return [norm360(ra), Math.asin(Math.sin(b) * Math.cos(EPS) + Math.cos(b) * Math.sin(EPS) * Math.sin(l)) * deg];
   }
+  // the sky point at the offset (xi east, eta north, degrees) on the plane
+  // tangent at ra0, dec0
+  function fromPlane(ra0, dec0, xi, eta) {
+    const x = xi * rad, y = eta * rad, d0 = dec0 * rad;
+    const dec = Math.asin((Math.sin(d0) + y * Math.cos(d0)) / Math.sqrt(1 + x * x + y * y));
+    return [norm360(ra0 + Math.atan2(x, Math.cos(d0) - y * Math.sin(d0)) * deg), dec * deg];
+  }
+  const unit = (ra, dec) => [Math.cos(dec * rad) * Math.cos(ra * rad), Math.cos(dec * rad) * Math.sin(ra * rad), Math.sin(dec * rad)];
+  // the Milky Way of skydata.js: 0…5 by degree, read between the degrees
+  let mwGrid = null;
+  function milkyWay(ra, dec) {
+    if (!mwGrid) {
+      const m = window.SkyData && window.SkyData.mw;
+      if (!m) return 0;
+      mwGrid = new Uint8Array(m.length);
+      for (let i = 0; i < m.length; i++) mwGrid[i] = m.charCodeAt(i) - 48;
+    }
+    const x = norm360(ra - 0.5), y = clamp(dec + 89.5, 0, 179), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const x1 = (x0 + 1) % 360, y1 = Math.min(y0 + 1, 179), g = (xx, yy) => mwGrid[yy * 360 + xx];
+    return (g(x0, y0) * (1 - fx) + g(x1, y0) * fx) * (1 - fy) + (g(x0, y1) * (1 - fx) + g(x1, y1) * fx) * fy;
+  }
+  // the fainter stars of skystars8.js, unpacked once
+  let faint = null;
+  function faintStars() {
+    if (faint || !window.SkyStars8) return faint;
+    const b = atob(window.SkyStars8), n = b.length / 6;
+    const f = { n, ra: new Float32Array(n), dec: new Float32Array(n), mag: new Float32Array(n), bv: new Float32Array(n),
+      x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n) };
+    for (let i = 0; i < n; i++) {
+      const o = i * 6, c = k => b.charCodeAt(o + k);
+      let d = c(2) | c(3) << 8;
+      if (d >= 32768) d -= 65536;
+      f.ra[i] = (c(0) | c(1) << 8) / 65536 * 360; f.dec[i] = d / 32767 * 90; f.mag[i] = c(4) / 20 - 2; f.bv[i] = (c(5) << 24 >> 24) / 50;
+      [f.x[i], f.y[i], f.z[i]] = unit(f.ra[i], f.dec[i]);
+    }
+    return faint = f;
+  }
+
   function sunEcl(ms) {
     const n = jd(ms) - 2451545, g = (357.528 + 0.9856003 * n) * rad;
     return norm360(280.460 + 0.9856474 * n + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g));
@@ -133,7 +173,7 @@
     opts = opts || {};
     if (!document.getElementById("skymapCss")) document.head.append(el("style", { id: "skymapCss", textContent: CSS }));
     const view = Object.assign({ az: 180, alt: 35, fov: 100 }, store.get("view", {}));
-    const show = Object.assign({ grid: true, lines: true, names: true, dso: true }, store.get("show", {}));
+    const show = Object.assign({ grid: true, lines: true, names: true, dso: true, mw: true, dss: true }, store.get("show", {}));
     const st = { lat: null, lon: 0, tz: null, sky: null, horizon: null, zones: [], minAlt: 0, targets: [], colors: [], sel: -1, favs: new Set(),
       frame: [0, 0], time: null, objects: [], picked: null, hits: [] };
     const canvas = el("canvas");
@@ -151,6 +191,8 @@
     const bar = el("div", { className: "sbar" }, q, timeBtn, menu, el("span", { className: "smore" },
       tog("сетка", "grid", "Высота и азимут, меридиан, «не ниже» планировщика"), tog("созвездия", "lines", "Фигуры созвездий"),
       tog("имена", "names", "Названия звёзд, созвездий и объектов"), tog("объекты", "dso", "Галактики, туманности, скопления каталога"),
+      tog("Млечный Путь", "mw", "Млечный Путь на тёмном небе"),
+      tog("снимок", "dss", "При приближении (поле меньше 15°) — снимок неба DSS2 под картой (CDS, нужен интернет)"),
       btn("−1 ч", "На час назад", () => setTime(now() - 3600e3)), btn("+1 ч", "На час вперёд", () => setTime(now() + 3600e3)),
       btn("−", "Отдалить", () => zoom(1.4)), btn("+", "Приблизить", () => zoom(1 / 1.4)),
       btn("⛶", "Во весь экран", () => { if (document.fullscreenElement) document.exitFullscreen(); else if (root.requestFullscreen) root.requestFullscreen(); })));
@@ -160,7 +202,7 @@
     const root = el("div", { className: "smap " + (opts.className || "") }, canvas, bar, hud, card, msg);
     div.append(root);
     const ctx = canvas.getContext("2d");
-    let W = 0, H = 0, dpr = 1, scale = 1, groundCv = null;
+    let W = 0, H = 0, dpr = 1, scale = 1, groundCv = null, faintAsked = false;
 
     const now = () => st.time == null ? Date.now() : st.time;
     function setTime(t) {
@@ -231,13 +273,17 @@
       if (alt < Math.min(z.alt1, z.alt2) || alt > Math.max(z.alt1, z.alt2)) return false;
       return norm360(az - z.az1) <= norm360(z.az2 - z.az1);
     }
-    // the ground, the obstacles and the zones: a picture of a point per two
-    // pixels of the screen, smoothed when drawn
-    function ground() {
+    // the ground, the obstacles and the zones, and the Milky Way (mw: its
+    // brightness, 0 — not drawn): pictures of a point per two pixels of the
+    // screen, smoothed when drawn; the Milky Way is drawn at once, the
+    // ground over the rest later (drawGround)
+    let mwCv = null;
+    function layers(lat, sid, mw) {
       const k = Math.max(2, Math.round(2 * dpr)), gw = Math.ceil(W / k), gh = Math.ceil(H / k);
-      if (!groundCv) groundCv = document.createElement("canvas");
-      if (groundCv.width !== gw || groundCv.height !== gh) { groundCv.width = gw; groundCv.height = gh; }
+      if (!groundCv) { groundCv = document.createElement("canvas"); mwCv = document.createElement("canvas"); }
+      for (const c of [groundCv, mwCv]) if (c.width !== gw || c.height !== gh) { c.width = gw; c.height = gh; }
       const g = groundCv.getContext("2d"), im = g.createImageData(gw, gh), d = im.data;
+      const m = mwCv.getContext("2d"), mi = mw > 0 ? m.createImageData(gw, gh) : null;
       const zones = st.zones;
       for (let y = 0; y < gh; y++) {
         for (let x = 0; x < gw; x++) {
@@ -247,11 +293,52 @@
           else if (alt < horizonAt(az)) { r = 46; gg = 38; b = 24; a = 215; }
           else if (zones.some(z => inZone(z, az, alt))) { r = 200; gg = 60; b = 60; a = 70; }
           d[o] = r; d[o + 1] = gg; d[o + 2] = b; d[o + 3] = a;
+          if (mi && a < 255) {
+            const [ra, dec] = raDec(alt, az, lat, sid), v = milkyWay(ra, dec);
+            if (v > 0) { mi.data[o] = 190; mi.data[o + 1] = 200; mi.data[o + 2] = 235; mi.data[o + 3] = Math.round(v / 5 * 70 * mw); }
+          }
         }
       }
       g.putImageData(im, 0, 0);
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(groundCv, 0, 0, W, H);
+      if (mi) { m.putImageData(mi, 0, 0); ctx.drawImage(mwCv, 0, 0, W, H); }
+    }
+    function drawGround() { ctx.imageSmoothingEnabled = true; ctx.drawImage(groundCv, 0, 0, W, H); }
+
+    // the photograph under the map when zoomed in: DSS2 of hips2fits (CDS),
+    // asked a moment after the view stops, kept while it covers the view
+    let dss = null, dssWant = "", dssH = 0, dssErr = "";
+    function dssNeeded(ra, dec) {
+      const want = Math.min(view.fov * Math.max(1, H / W) * 1.6, 30);
+      if (dss) {
+        const sep = Math.acos(clamp(unit(ra, dec).reduce((s, v, i) => s + v * unit(dss.ra, dss.dec)[i], 0), -1, 1)) * deg;
+        if (sep < dss.fov * 0.3 && dss.fov <= want * 1.8 && dss.fov >= want * 0.7) return;
+      }
+      const key = `${ra.toFixed(2)} ${dec.toFixed(2)} ${want.toFixed(2)}`;
+      if (key === dssWant) return;
+      dssWant = key;
+      clearTimeout(dssH);
+      dssH = setTimeout(() => {
+        const px = 640, img = new Image();
+        img.onload = () => { if (dssWant === key) { dss = { img, ra, dec, fov: want, px }; dssErr = ""; draw(); } };
+        img.onerror = () => { if (dssWant === key) { dssErr = "снимок неба не загружен (нужен интернет)"; dssWant = ""; draw(); } };
+        img.src = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits?hips=CDS%2FP%2FDSS2%2Fcolor&format=jpg&projection=TAN" +
+          `&width=${px}&height=${px}&fov=${want.toFixed(3)}&ra=${ra.toFixed(4)}&dec=${dec.toFixed(4)}`;
+      }, 350);
+    }
+    // the photograph placed by three points: its centre and a step east and north
+    function drawDss(P, alpha) {
+      if (!dss || alpha <= 0) return;
+      const dd = dss.fov * 0.1, s = dss.fov / dss.px;
+      const C = P(dss.ra, dss.dec), E = P(...fromPlane(dss.ra, dss.dec, dd, 0)), N = P(...fromPlane(dss.ra, dss.dec, 0, dd));
+      if (!C || !E || !N) return;
+      // east is to the left of the photograph, north up
+      const ux = -(E[0] - C[0]) / dd * s, uy = -(E[1] - C[1]) / dd * s, vx = -(N[0] - C[0]) / dd * s, vy = -(N[1] - C[1]) / dd * s;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.setTransform(ux, uy, vx, vy, C[0] - ux * dss.px / 2 - vx * dss.px / 2, C[1] - uy * dss.px / 2 - vy * dss.px / 2);
+      ctx.drawImage(dss.img, 0, 0);
+      ctx.restore();
     }
 
     function skyColor(sunAlt) {
@@ -312,6 +399,11 @@
       const sunEq = eclToEq(sunEcl(t), 0), [sunAlt, sunAz] = altAz(sunEq[0], sunEq[1], lat, sid);
       ctx.fillStyle = skyColor(sunAlt);
       ctx.fillRect(0, 0, W, H);
+      // the Milky Way on a dark sky, fading as the photograph comes
+      const dssAlpha = show.dss ? clamp((15 - view.fov) / 6, 0, 1) * 0.92 : 0;
+      layers(lat, sid, show.mw ? clamp((-sunAlt - 8) / 8, 0, 1) * (1 - dssAlpha) : 0);
+      const [cAlt, cAz] = unproj(W / 2, H / 2), [cRa, cDec] = raDec(cAlt, cAz, lat, sid);
+      if (dssAlpha > 0) { dssNeeded(cRa, cDec); drawDss(P, dssAlpha); }
       // the grid of altitude and azimuth, the meridian, «не ниже»
       if (show.grid) {
         const gc = "rgba(120,150,200,.22)";
@@ -350,8 +442,27 @@
             if (p) label(name.toUpperCase(), p[0], p[1], "rgba(130,170,230,.65)", 10, "center");
           }
         }
+        // the fainter stars when zoomed in, near the centre only
+        const boost = clamp(Math.sqrt(90 / view.fov), 0.8, 2.2);
+        const F = view.fov < 60 ? faintStars() : null;
+        if (view.fov < 60 && !F && !faintAsked && opts.dataURL) {
+          faintAsked = true;
+          document.head.append(el("script", { src: opts.dataURL.replace(/skydata\.js/, "skystars8.js"), onload: draw }));
+        }
+        if (F) {
+          const lim = view.fov < 25 ? 8.1 : 7.2, cu = unit(cRa, cDec), cl = Math.cos(Math.min(85, view.fov * 0.85) * rad);
+          ctx.globalAlpha = dssAlpha > 0.5 ? 0.55 : 1;
+          for (let i = F.n - 1; i >= 0; i--) {
+            if (F.mag[i] > lim || F.x[i] * cu[0] + F.y[i] * cu[1] + F.z[i] * cu[2] < cl) continue;
+            const p = P(F.ra[i], F.dec[i]);
+            if (!p || p[0] < -3 || p[1] < -3 || p[0] > W + 3 || p[1] > H + 3) continue;
+            ctx.fillStyle = starColor(F.bv[i]);
+            ctx.beginPath(); ctx.arc(p[0], p[1], Math.max(0.5, (0.45 + 0.42 * (8.6 - F.mag[i])) * boost * 0.7) * dpr, 0, 2 * Math.PI); ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+        }
         // the stars, the brightest last so they lie on top
-        const boost = clamp(Math.sqrt(90 / view.fov), 0.8, 2.2), s = D.stars, limit = view.fov > 120 ? 5.2 : 6.5;
+        const s = D.stars, limit = view.fov > 120 ? 5.2 : 6.5;
         for (let i = s.length - 4; i >= 0; i -= 4) {
           const mag = s[i + 2];
           if (mag > limit) continue;
@@ -375,11 +486,14 @@
           const g = group(kind), c = DSO_COLOR[g], r = Math.max(4.5 * dpr, (size || 5) / 60 * pxPerDeg / 2);
           ctx.strokeStyle = c; ctx.lineWidth = 1.2 * dpr;
           ctx.beginPath();
-          if (g === "galaxy") ctx.ellipse(p[0], p[1], r, r * 0.55, -0.5, 0, 2 * Math.PI);
+          // a large one: its extent as a dashed circle (the catalog has no
+          // tilt of the galaxies, a tilted ellipse would lie on the photograph)
+          if (r > 22 * dpr) { ctx.setLineDash([5 * dpr, 4 * dpr]); ctx.globalAlpha = 0.6; ctx.arc(p[0], p[1], r, 0, 2 * Math.PI); }
+          else if (g === "galaxy") ctx.ellipse(p[0], p[1], r, r * 0.55, -0.5, 0, 2 * Math.PI);
           else if (g === "cluster") { ctx.setLineDash([2 * dpr, 2 * dpr]); ctx.arc(p[0], p[1], r, 0, 2 * Math.PI); }
           else if (g === "pn") { ctx.arc(p[0], p[1], r, 0, 2 * Math.PI); ctx.moveTo(p[0] + 1.2 * dpr, p[1]); ctx.arc(p[0], p[1], 1.2 * dpr, 0, 2 * Math.PI); }
           else ctx.rect(p[0] - r, p[1] - r, 2 * r, 2 * r);
-          ctx.stroke(); ctx.setLineDash([]);
+          ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
           hits.push({ x: p[0], y: p[1], r, pri: 2, sel: { type: "dso", o: { name, label: lbl, ra, dec, kind, size } } });
           if (show.names && (fame === 0 && view.fov < 150 || fame === 1 && view.fov < 90 || view.fov < 35)) label(short, p[0] + r + 3 * dpr, p[1] - r * 0.6, c, 10);
         }
@@ -449,7 +563,7 @@
       st.bodies = { "Солнце": sunEq, "Луна": raDec(mAlt, mAz, lat, sid), illum, waxing: elong < 180 };
       for (const pl of planets(t)) st.bodies[pl.name] = [pl.ra, pl.dec];
       // the ground over everything below it
-      ground();
+      drawGround();
       // the horizon and the sides of the sky
       const hz = [];
       for (let z = 0; z <= 360; z += 2) hz.push(proj(0, z));
@@ -476,7 +590,8 @@
       const tt = zone == null ? new Date(t).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
         : new Date(t + zone * 3600e3).toISOString().slice(5, 16).replace("T", " ").replace(/^(\d\d)-(\d\d)/, "$2.$1");
       hud.textContent = `${tt}${st.time == null ? " (сейчас)" : ""} · центр ${side(view.az)} ${Math.round(view.az)}°, высота ${Math.round(view.alt)}° · поле ${Math.round(view.fov)}°` +
-        (st.lat == null ? " · координаты обсерватории не заданы" : "") + (sunAlt > -6 ? ` · Солнце на ${Math.round(sunAlt)}°` : "");
+        (st.lat == null ? " · координаты обсерватории не заданы" : "") + (sunAlt > -6 ? ` · Солнце на ${Math.round(sunAlt)}°` : "") +
+        (dssAlpha > 0 ? (dssErr ? " · " + dssErr : dss ? " · снимок DSS2 (CDS)" : " · загружаю снимок неба…") : "");
     }
 
     // where the one picked is now: [ra, dec]

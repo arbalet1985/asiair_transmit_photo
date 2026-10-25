@@ -527,6 +527,7 @@ func (s *Server) uiMux() *http.ServeMux {
 	mux.HandleFunc("/ui/atlas.js", func(w http.ResponseWriter, r *http.Request) { atlas.Static(w, "atlas.js", r) })
 	mux.HandleFunc("/ui/skymap.js", func(w http.ResponseWriter, r *http.Request) { atlas.Static(w, "skymap.js", r) })
 	mux.HandleFunc("/ui/skydata.js", func(w http.ResponseWriter, r *http.Request) { atlas.Static(w, "skydata.js", r) })
+	mux.HandleFunc("/ui/skystars8.js", func(w http.ResponseWriter, r *http.Request) { atlas.Static(w, "skystars8.js", r) })
 	mux.HandleFunc("/ui/api/skyobjects", func(w http.ResponseWriter, r *http.Request) { atlas.Objects(w) })
 	mux.HandleFunc("/ui/api/remote", s.handleUIRemote)
 	mux.HandleFunc("/ui/api/state", gzipped(s.handleUIState))
