@@ -45,6 +45,9 @@ func TestSkyMap(t *testing.T) {
 	if r2, _ := get("/skydata.js", "If-None-Match", r.Header.Get("ETag")); r2.StatusCode != http.StatusNotModified {
 		t.Fatalf("not cached: %d", r2.StatusCode)
 	}
+	if r, b := get("/skystars8.js"); r.StatusCode != 200 || !strings.Contains(b, "window.SkyStars8") {
+		t.Fatalf("skystars8: %d", r.StatusCode)
+	}
 	if r, b := get("/skymap.js"); r.StatusCode != 200 || !strings.Contains(b, "window.SkyMap") {
 		t.Fatalf("skymap: %d", r.StatusCode)
 	}
