@@ -40,7 +40,7 @@ func TestFavorites(t *testing.T) {
 	if got, err := r.Favorites(ctx); err != nil || len(got) != 1 || got[0].Name != "NGC 224" {
 		t.Fatalf("favorites: %v %+v", err, got)
 	}
-	got, err := r.ChangeFavorites(ctx, []planner.Favorite{{Name: "IC 1805"}}, []string{"NGC 224"})
+	got, err := r.ChangeFavorites(ctx, []planner.Favorite{{Name: "IC 1805"}}, []string{"NGC 224"}, nil)
 	if err != nil || len(got) != 1 || got[0].Name != "IC 1805" {
 		t.Fatalf("changed: %v %+v", err, got)
 	}

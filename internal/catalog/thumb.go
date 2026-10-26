@@ -55,6 +55,35 @@ func Thumb(ctx context.Context, dir string, ra, dec, fov float64) ([]byte, error
 	// _g: brightened as in the atlas; changed with the v= of the page of the
 	// receiver (index.html), which the browser keeps the pictures by
 	key := fmt.Sprintf("%.3f_%+.3f_%.2f_g", ra, dec, fov)
+	return skyPicture(ctx, dir, key, ra, dec, fov, ThumbPx, ThumbPx, thumbScale)
+}
+
+// ViewPx: the longer side of the picture of the field of the camera, pixels.
+const ViewPx = 480
+
+// View is the picture (JPEG) of the field of the camera, fovW × fovH
+// degrees, centred on ra, dec, north up: the object as the telescope shows
+// it; dir keeps the pictures ("" = not kept).
+func View(ctx context.Context, dir string, ra, dec, fovW, fovH float64) ([]byte, error) {
+	if fovW <= 0 || fovH <= 0 {
+		return nil, errors.New("поле камеры не известно")
+	}
+	// a field too long for a picture is cut to 1:4
+	fovW, fovH = math.Min(fovW, 30), math.Min(fovH, 30)
+	fovW, fovH = math.Max(fovW, fovH/4), math.Max(fovH, fovW/4)
+	w, h := ViewPx, ViewPx
+	if fovW >= fovH {
+		h = int(math.Round(ViewPx * fovH / fovW))
+	} else {
+		w = int(math.Round(ViewPx * fovW / fovH))
+	}
+	key := fmt.Sprintf("view_%.3f_%+.3f_%.3f_%.3f_g", ra, dec, fovW, fovH)
+	return skyPicture(ctx, dir, key, ra, dec, fovW, w, h, viewScale)
+}
+
+// skyPicture: the picture of key, kept in dir, else asked of hips2fits: w ×
+// h pixels, fov degrees across.
+func skyPicture(ctx context.Context, dir, key string, ra, dec, fov float64, w, h, scale int) ([]byte, error) {
 	file := ""
 	if dir != "" {
 		file = filepath.Join(dir, key+".jpg")
@@ -74,7 +103,7 @@ func Thumb(ctx context.Context, dir string, ra, dec, fov float64) ([]byte, error
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	b, err := fetchThumb(ctx, ra, dec, fov)
+	b, err := fetchPicture(ctx, ra, dec, fov, w, h, scale)
 	if err != nil {
 		if ctx.Err() == nil {
 			thumbMu.Lock()
@@ -92,12 +121,12 @@ func Thumb(ctx context.Context, dir string, ra, dec, fov float64) ([]byte, error
 	return b, nil
 }
 
-func fetchThumb(ctx context.Context, ra, dec, fov float64) ([]byte, error) {
+func fetchPicture(ctx context.Context, ra, dec, fov float64, w, h, scale int) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	px := fmt.Sprint(ThumbPx * thumbScale)
-	q := url.Values{"hips": {"CDS/P/DSS2/color"}, "width": {px}, "height": {px},
-		"fov": {fmt.Sprintf("%.3f", fov)}, "projection": {"TAN"}, "ra": {fmt.Sprintf("%.5f", ra)}, "dec": {fmt.Sprintf("%.5f", dec)}, "format": {"jpg"}}
+	// fov is the width of the picture for hips2fits
+	q := url.Values{"hips": {"CDS/P/DSS2/color"}, "width": {fmt.Sprint(w * scale)}, "height": {fmt.Sprint(h * scale)},
+		"fov": {fmt.Sprintf("%.4f", fov)}, "projection": {"TAN"}, "ra": {fmt.Sprintf("%.5f", ra)}, "dec": {fmt.Sprintf("%.5f", dec)}, "format": {"jpg"}}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://alasky.cds.unistra.fr/hips-image-services/hips2fits?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -110,14 +139,14 @@ func fetchThumb(ctx context.Context, ra, dec, fov float64) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("CDS hips2fits: %s", resp.Status)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}
 	if len(b) < 3 || b[0] != 0xFF || b[1] != 0xD8 {
 		return nil, errors.New("CDS hips2fits: не картинка")
 	}
-	if s, err := Brighten(b, thumbScale); err == nil {
+	if s, err := Brighten(b, scale); err == nil {
 		b = s
 	}
 	return b, nil
@@ -126,6 +155,9 @@ func fetchThumb(ctx context.Context, ra, dec, fov float64) ([]byte, error) {
 // thumbScale: the picture is asked this many times larger and made smaller
 // here: the noise and the seams of the DSS plates brightened smooth out.
 const thumbScale = 3
+
+// viewScale: the same for the picture of the field of the camera.
+const viewScale = 2
 
 // Brighten brings out a faint picture of the sky as the atlas shows it in
 // Aladin: a gamma of 0.6 and the colours a little stronger (saturation

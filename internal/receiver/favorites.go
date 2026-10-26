@@ -23,9 +23,10 @@ func (s *State) Favorites() []planner.Favorite {
 	return append([]planner.Favorite{}, s.p.Planner.Favorites...)
 }
 
-// ChangeFavorites adds and removes favorites (by name), in one step so
-// that a page and a sorter changing them at once do not undo each other.
-func (s *State) ChangeFavorites(add []planner.Favorite, remove []string) ([]planner.Favorite, error) {
+// ChangeFavorites adds and removes favorites (by name) and then sets the
+// notes of favorites (by name; "" takes the note away), in one step so that
+// a page and a sorter changing them at once do not undo each other.
+func (s *State) ChangeFavorites(add []planner.Favorite, remove []string, notes map[string]string) ([]planner.Favorite, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	gone := map[string]bool{}
@@ -47,7 +48,13 @@ func (s *State) ChangeFavorites(add []planner.Favorite, remove []string) ([]plan
 			dup = dup || g.Name == f.Name
 		}
 		if !dup {
+			f.Note = planner.CleanNote(f.Note)
 			out = append(out, f)
+		}
+	}
+	for i := range out {
+		if n, ok := notes[out[i].Name]; ok {
+			out[i].Note = planner.CleanNote(n)
 		}
 	}
 	s.p.Planner.Favorites = out
@@ -59,11 +66,12 @@ func (s *Server) handleUIFavorites(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Add    []planner.Favorite `json:"add"`
 			Remove []string           `json:"remove"`
+			Notes  map[string]string  `json:"notes,omitempty"` // name → note
 		}
 		if !readJSON(w, r, &req) {
 			return
 		}
-		out, err := s.state.ChangeFavorites(req.Add, req.Remove)
+		out, err := s.state.ChangeFavorites(req.Add, req.Remove, req.Notes)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -127,6 +135,7 @@ func (s *Server) handleUIVisibility(w http.ResponseWriter, r *http.Request) {
 
 // handleUIObjectPic: the picture of an object (catalog.Thumb), kept in
 // receiver-data/thumbs; size (arcminutes) or else the name gives its field.
+// With fw and fh (degrees): the field of the camera (catalog.View).
 func (s *Server) handleUIObjectPic(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	ra, err1 := strconv.ParseFloat(q.Get("ra"), 64)
@@ -135,11 +144,20 @@ func (s *Server) handleUIObjectPic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "нужны ra и dec в градусах", http.StatusBadRequest)
 		return
 	}
-	size, _ := strconv.ParseFloat(q.Get("size"), 64)
-	if size <= 0 {
-		size = catalog.SizeOf(q.Get("name"))
+	dir := filepath.Join(s.cfg.DataDir, "thumbs")
+	var b []byte
+	var err error
+	fw, _ := strconv.ParseFloat(q.Get("fw"), 64)
+	fh, _ := strconv.ParseFloat(q.Get("fh"), 64)
+	if fw > 0 && fh > 0 {
+		b, err = catalog.View(r.Context(), dir, ra, dec, fw, fh)
+	} else {
+		size, _ := strconv.ParseFloat(q.Get("size"), 64)
+		if size <= 0 {
+			size = catalog.SizeOf(q.Get("name"))
+		}
+		b, err = catalog.Thumb(r.Context(), dir, ra, dec, catalog.ThumbFOV(size))
 	}
-	b, err := catalog.Thumb(r.Context(), filepath.Join(s.cfg.DataDir, "thumbs"), ra, dec, catalog.ThumbFOV(size))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

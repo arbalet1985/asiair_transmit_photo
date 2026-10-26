@@ -17,6 +17,7 @@ import (
 
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
+	"github.com/lxn/win"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/catalog"
 	"github.com/arbalet1985/asiair_transmit_photo/internal/planner"
@@ -29,12 +30,6 @@ import (
 // altitude, side of the sky and time, and the best objects of the night.
 // The list is the receiver's when one is known: the changes made here go
 // to it, later when it cannot be reached.
-
-// favOp is a change of the favorites not yet sent to the receiver.
-type favOp struct {
-	Add    *planner.Favorite `json:"add,omitempty"`
-	Remove string            `json:"remove,omitempty"`
-}
 
 const maxFavOps = 500
 
@@ -70,40 +65,26 @@ func (p *plannerUI) toggleFavorite(o planner.Favorite) {
 		p.state.Favorites = append(p.state.Favorites, o)
 		p.state.FavOps = append(p.state.FavOps, favOp{Add: &o})
 	}
+	p.favChanged()
+}
+
+// setFavNote sets the note of a favorite.
+func (p *plannerUI) setFavNote(name, note string) {
+	i := favIndex(p.state.Favorites, name)
+	if note = planner.CleanNote(note); i < 0 || p.state.Favorites[i].Note == note {
+		return
+	}
+	p.state.Favorites[i].Note = note
+	p.state.FavOps = append(p.state.FavOps, favOp{NoteOf: name, Note: note})
+	p.favChanged()
+}
+
+func (p *plannerUI) favChanged() {
 	if n := len(p.state.FavOps); n > maxFavOps {
 		p.state.FavOps = p.state.FavOps[n-maxFavOps:]
 	}
 	p.w.settings().save()
 	p.atlasChanged()
-}
-
-// favOpsSum: the changes as what to add and what to remove, the last
-// change of an object counting.
-func favOpsSum(ops []favOp) (add []planner.Favorite, remove []string) {
-	adds, removes := map[string]planner.Favorite{}, map[string]bool{}
-	var order []string
-	for _, o := range ops {
-		if o.Add != nil {
-			delete(removes, o.Add.Name)
-			if _, ok := adds[o.Add.Name]; !ok {
-				order = append(order, o.Add.Name)
-			}
-			adds[o.Add.Name] = *o.Add
-		} else if o.Remove != "" {
-			delete(adds, o.Remove)
-			removes[o.Remove] = true
-		}
-	}
-	for _, n := range order {
-		if f, ok := adds[n]; ok {
-			add = append(add, f)
-		}
-	}
-	for n := range removes {
-		remove = append(remove, n)
-	}
-	sort.Strings(remove)
-	return add, remove
 }
 
 // syncFavorites sends the changes made here to the receiver and takes its
@@ -134,8 +115,8 @@ func (p *plannerUI) syncFavorites(after func(msg string)) {
 		r, err := p.w.connect(ctx, addr, "", "")
 		if err == nil {
 			if len(ops) > 0 {
-				add, remove := favOpsSum(ops)
-				list, err = r.ChangeFavorites(ctx, add, remove)
+				add, remove, notes := favOpsSum(ops)
+				list, err = r.ChangeFavorites(ctx, add, remove, notes)
 			} else {
 				list, err = r.Favorites(ctx)
 			}
@@ -205,6 +186,13 @@ type favDialog struct {
 	// asked for
 	pics    map[string]*walk.Bitmap
 	picsAsk map[string]bool
+	// the object in the field of the camera (catalog.View), shown over the
+	// list while the mouse is on the small picture of row hover (-1: none)
+	scroll   *walk.ScrollView
+	hover    int
+	views    map[string]*walk.Bitmap
+	viewsAsk map[string]bool
+	viewsErr map[string]bool
 }
 
 type favRow struct {
@@ -216,7 +204,8 @@ func (d *favDialog) dpi() float64 { return float64(d.list.DPI()) / 96 }
 
 // openFavorites shows the window of the favorites.
 func (p *plannerUI) openFavorites() {
-	d := &favDialog{p: p, f: defaultFavFilter(), exp: map[string]float64{}, pics: map[string]*walk.Bitmap{}, picsAsk: map[string]bool{}}
+	d := &favDialog{p: p, f: defaultFavFilter(), exp: map[string]float64{}, pics: map[string]*walk.Bitmap{}, picsAsk: map[string]bool{},
+		hover: -1, views: map[string]*walk.Bitmap{}, viewsAsk: map[string]bool{}, viewsErr: map[string]bool{}}
 	if p.state.FavFilter != nil {
 		d.f = *p.state.FavFilter
 	}
@@ -300,9 +289,9 @@ func (p *plannerUI) openFavorites() {
 				RadioButton{AssignTo: &d.tabFav, Text: "♥ Избранные", OnClicked: func() { d.setTab(1) }},
 				HSpacer{},
 			}},
-			ScrollView{HorizontalFixed: true, Layout: VBox{MarginsZero: true}, StretchFactor: 1, Children: []Widget{
+			ScrollView{AssignTo: &d.scroll, HorizontalFixed: true, Layout: VBox{MarginsZero: true}, StretchFactor: 1, Children: []Widget{
 				CustomWidget{AssignTo: &d.list, PaintPixels: d.paintList, DoubleBuffering: true, InvalidatesOnResize: true,
-					OnMouseDown: d.listClick},
+					OnMouseDown: d.listClick, OnMouseMove: d.listMove},
 			}},
 			Label{AssignTo: &d.status, EllipsisMode: EllipsisEnd},
 			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
@@ -335,6 +324,9 @@ func (p *plannerUI) openFavorites() {
 	d.closed = true
 	if d.timer != nil {
 		d.timer.Stop()
+	}
+	for _, b := range d.views {
+		b.Dispose()
 	}
 	for _, b := range d.pics {
 		b.Dispose()
@@ -700,6 +692,7 @@ func (d *favDialog) render() {
 		list, vis = d.p.state.Favorites, d.visFav
 	}
 	d.rows = d.rows[:0]
+	d.hover = -1 // its row may be another now
 	for _, o := range list {
 		d.rows = append(d.rows, favRow{o, vis[o.Name]})
 	}
@@ -715,7 +708,7 @@ func (d *favDialog) render() {
 	d.list.Invalidate()
 }
 
-const favRowH = 156 // DIP
+const favRowH = 176 // DIP
 
 // the parts of a row, in DIP from its top left
 const (
@@ -723,7 +716,8 @@ const (
 	favPicW   = 66
 	favTextX  = 114
 	favBtnW   = 90
-	favChartY = 76
+	favNoteY  = 76
+	favChartY = 96
 	favChartH = 74
 )
 
@@ -752,6 +746,8 @@ func (d *favDialog) listClick(x, y int, b walk.MouseButton) {
 		})
 	case float64(x) > W-(favBtnW+8)*s && yy < 36*s:
 		d.toPlan(r.o)
+	case float64(x) > W-(favBtnW+8)*s && yy >= 38*s && yy < 66*s && favIndex(d.p.state.Favorites, r.o.Name) >= 0:
+		d.editNote(r.o.Name)
 	}
 }
 
@@ -938,6 +934,15 @@ func (d *favDialog) paintList(c *walk.Canvas, _ walk.Rectangle) error {
 		}
 		text(bt, font, bc, br, walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
 		tx, tw := px(favTextX), W-px(favTextX+favBtnW+16)
+		// the note: «✎ заметка» under «В план», the note under the times
+		if fi := favIndex(d.p.state.Favorites, r.o.Name); fi >= 0 {
+			text("✎ заметка", font, walk.RGB(47, 111, 222), walk.Rectangle{X: br.X, Y: top + px(40), Width: br.Width, Height: px(24)},
+				walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
+			if n := d.p.state.Favorites[fi].Note; n != "" {
+				text("✎ "+n, font, walk.RGB(120, 80, 20), walk.Rectangle{X: tx, Y: top + px(favNoteY), Width: tw, Height: px(18)},
+					walk.TextSingleLine|walk.TextEndEllipsis|walk.TextVCenter)
+			}
+		}
 		label := r.o.Name
 		if r.o.Label != "" && r.o.Label != r.o.Name {
 			label = r.o.Label
@@ -957,9 +962,10 @@ func (d *favDialog) paintList(c *walk.Canvas, _ walk.Rectangle) error {
 		if r.v == nil || d.vis == nil {
 			continue
 		}
-		text(d.visText(r.v), font, muted, walk.Rectangle{X: tx, Y: top + px(44), Width: W - tx - px(8), Height: px(32)}, walk.TextWordbreak|walk.TextEndEllipsis)
+		text(d.visText(r.v), font, muted, walk.Rectangle{X: tx, Y: top + px(44), Width: tw, Height: px(32)}, walk.TextWordbreak|walk.TextEndEllipsis)
 		d.paintChart(c, r.v, walk.Rectangle{X: tx, Y: top + px(favChartY), Width: W - tx - px(10), Height: px(favChartH)}, faded, small)
 	}
+	d.paintView(c, font)
 	return nil
 }
 
@@ -1136,4 +1142,229 @@ func (d *favDialog) roseClick(x, y int, b walk.MouseButton) {
 	}
 	d.turnOn()
 	d.filterChanged()
+}
+
+// picRect: the small picture of row i, in pixels of the list.
+func (d *favDialog) picRect(i int) walk.Rectangle {
+	s := d.dpi()
+	px := func(v float64) int { return int(math.Round(v * s)) }
+	return walk.Rectangle{X: px(favPicX), Y: int(float64(i)*favRowH*s) + px(6), Width: px(favPicW), Height: px(favPicW)}
+}
+
+func inRect(x, y int, r walk.Rectangle) bool {
+	return x >= r.X && x < r.X+r.Width && y >= r.Y && y < r.Y+r.Height
+}
+
+// listMove shows the object in the field of the camera while the mouse is
+// on its small picture.
+func (d *favDialog) listMove(x, y int, _ walk.MouseButton) {
+	i := int(float64(y) / (favRowH * d.dpi()))
+	if i < 0 || i >= len(d.rows) || !inRect(x, y, d.picRect(i)) {
+		i = -1
+	}
+	if i == d.hover {
+		return
+	}
+	d.hover = i
+	d.list.Invalidate()
+	if i >= 0 {
+		for k := range d.viewsErr {
+			delete(d.viewsAsk, k)
+			delete(d.viewsErr, k)
+		}
+		d.watchHover()
+	}
+}
+
+// watchHover hides the picture when the mouse has left the small one (the
+// list hears no more of the mouse once it is outside).
+func (d *favDialog) watchHover() {
+	time.AfterFunc(150*time.Millisecond, func() {
+		d.p.w.mw.Synchronize(func() {
+			if d.closed || d.hover < 0 {
+				return
+			}
+			var pt win.POINT
+			win.GetCursorPos(&pt)
+			win.ScreenToClient(d.list.Handle(), &pt)
+			if d.hover >= len(d.rows) || !inRect(int(pt.X), int(pt.Y), d.picRect(d.hover)) {
+				d.hover = -1
+				d.list.Invalidate()
+				return
+			}
+			d.watchHover()
+		})
+	})
+}
+
+// viewField: the field of the camera, degrees, and what the picture tells
+// of it.
+func (d *favDialog) viewField(o planner.Favorite) (fw, fh float64, text string) {
+	op := planner.InEffect(d.p.state.Optics, d.p.setups)
+	fw, fh = op.FOV()
+	if fw > 0 && fh > 0 {
+		deg := func(v float64) string {
+			if v < 1 {
+				return fmt.Sprintf("%d′", int(math.Round(v*60)))
+			}
+			return strings.Replace(fmt.Sprintf("%.2f°", v), ".", ",", 1)
+		}
+		f := op.Focal
+		if op.Reducer > 0 {
+			f *= op.Reducer
+		}
+		text = "В кадре телескопа: поле " + deg(fw) + " × " + deg(fh)
+		if op.Camera != "" {
+			text += " · " + op.Camera
+		}
+		return fw, fh, text + fmt.Sprintf(" · %.0f мм. Север вверху.", f)
+	}
+	size := o.Size
+	if size <= 0 {
+		size = catalog.SizeOf(o.Name)
+	}
+	if size <= 0 {
+		size = 15
+	}
+	fw = math.Min(math.Max(size*3/60, 0.5), 6)
+	return fw, fw, "Оптика не известна (задаётся в атласе или берётся из кадров): поле по размеру объекта. Север вверху."
+}
+
+// view is the picture of the object in the field fw × fh, asked for in the
+// background when not there yet (nil until it comes).
+func (d *favDialog) view(o planner.Favorite, fw, fh float64) *walk.Bitmap {
+	key := fmt.Sprintf("%.4f %.4f %.4f %.4f", o.RA, o.Dec, fw, fh)
+	if b := d.views[key]; b != nil || d.viewsAsk[key] {
+		return b
+	}
+	d.viewsAsk[key] = true
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Снимок поля объекта: сбой: %v", r)
+			}
+		}()
+		var im image.Image
+		b, err := catalog.View(context.Background(), filepath.Join(configDir(), "thumbs"), o.RA, o.Dec, fw, fh)
+		if err == nil {
+			im, _, err = image.Decode(bytes.NewReader(b))
+		}
+		d.p.w.mw.Synchronize(func() {
+			if d.closed {
+				return
+			}
+			if err == nil {
+				var bmp *walk.Bitmap
+				if bmp, err = walk.NewBitmapFromImageForDPI(im, 96); err == nil {
+					d.views[key] = bmp
+				}
+			}
+			if err != nil {
+				d.viewsErr[key] = true // asked again the next time the mouse comes
+			}
+			d.list.Invalidate()
+		})
+	}()
+	return nil
+}
+
+// paintView draws the object in the field of the camera beside the small
+// picture the mouse is on, within the part of the list seen.
+func (d *favDialog) paintView(c *walk.Canvas, font *walk.Font) {
+	if d.hover < 0 || d.hover >= len(d.rows) {
+		return
+	}
+	o := d.rows[d.hover].o
+	s := d.dpi()
+	px := func(v float64) int { return int(math.Round(v * s)) }
+	// the part of the list seen: the client of the scroll view, in pixels
+	// of the list
+	var rc win.RECT
+	win.GetClientRect(d.scroll.Handle(), &rc)
+	a, b := win.POINT{X: rc.Left, Y: rc.Top}, win.POINT{X: rc.Right, Y: rc.Bottom}
+	win.ClientToScreen(d.scroll.Handle(), &a)
+	win.ClientToScreen(d.scroll.Handle(), &b)
+	win.ScreenToClient(d.list.Handle(), &a)
+	win.ScreenToClient(d.list.Handle(), &b)
+	seen := walk.Rectangle{X: int(a.X), Y: int(a.Y), Width: int(b.X - a.X), Height: int(b.Y - a.Y)}
+	fw, fh, text := d.viewField(o)
+	pad, capH := px(6), px(36)
+	k := math.Min(float64(px(480)), float64(seen.Width-4*pad))
+	k = math.Min(k, float64(seen.Height-capH-3*pad)*math.Max(fw, fh)/fh) / math.Max(fw, fh)
+	w, h := int(fw*k), int(fh*k)
+	if w < px(60) || h < px(30) {
+		return
+	}
+	box := walk.Rectangle{Width: w + 2*pad, Height: h + capH + 2*pad}
+	pr := d.picRect(d.hover)
+	box.X = pr.X + pr.Width + px(10)
+	if box.X+box.Width > seen.X+seen.Width-pad {
+		box.X = max(seen.X+pad, seen.X+seen.Width-pad-box.Width)
+	}
+	box.Y = min(max(pr.Y, seen.Y+pad), seen.Y+seen.Height-pad-box.Height)
+	fill := func(col walk.Color, r walk.Rectangle) {
+		if br, err := walk.NewSolidColorBrush(col); err == nil {
+			c.FillRectanglePixels(br, r)
+			br.Dispose()
+		}
+	}
+	fill(walk.RGB(150, 156, 168), walk.Rectangle{X: box.X - 1, Y: box.Y - 1, Width: box.Width + 2, Height: box.Height + 2})
+	fill(walk.RGB(255, 255, 255), box)
+	ir := walk.Rectangle{X: box.X + pad, Y: box.Y + pad, Width: w, Height: h}
+	if bmp := d.view(o, fw, fh); bmp != nil {
+		c.DrawImageStretchedPixels(bmp, ir)
+	} else {
+		fill(walk.RGB(10, 12, 16), ir)
+		msg := "Загружаю снимок…"
+		if d.viewsErr[fmt.Sprintf("%.4f %.4f %.4f %.4f", o.RA, o.Dec, fw, fh)] {
+			msg = "Снимок не получен (нужен интернет)"
+		}
+		c.DrawTextPixels(msg, font, walk.RGB(160, 170, 170), ir, walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
+	}
+	c.DrawTextPixels(text, font, walk.RGB(80, 88, 104), walk.Rectangle{X: ir.X, Y: ir.Y + h + px(4), Width: w, Height: capH - px(4)},
+		walk.TextWordbreak|walk.TextEndEllipsis)
+}
+
+// editNote asks for the note of the favorite name.
+func (d *favDialog) editNote(name string) {
+	i := favIndex(d.p.state.Favorites, name)
+	if i < 0 {
+		return
+	}
+	var dlg *walk.Dialog
+	var edit *walk.LineEdit
+	var ok, cancel *walk.PushButton
+	note := ""
+	label := d.p.state.Favorites[i].Label
+	if label == "" {
+		label = name
+	}
+	res, err := Dialog{
+		AssignTo:      &dlg,
+		Title:         "Заметка: " + label,
+		DefaultButton: &ok,
+		CancelButton:  &cancel,
+		MinSize:       Size{Width: 460},
+		Layout:        VBox{},
+		Children: []Widget{
+			Label{Text: fmt.Sprintf("Несколько слов об объекте (до %d знаков): что снимать, с каким фильтром, что не получилось.\nПусто — убрать заметку. Заметка общая со страницей приёмника.", planner.MaxNote)},
+			LineEdit{AssignTo: &edit, Text: d.p.state.Favorites[i].Note, MaxLength: planner.MaxNote},
+			Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
+				HSpacer{},
+				PushButton{AssignTo: &ok, Text: "Сохранить", OnClicked: func() { note = edit.Text(); dlg.Accept() }},
+				PushButton{AssignTo: &cancel, Text: "Отмена", OnClicked: func() { dlg.Cancel() }},
+			}},
+		},
+	}.Run(d.dlg)
+	if err != nil || res != walk.DlgCmdOK {
+		return
+	}
+	d.p.setFavNote(name, note)
+	d.render()
+	d.p.syncFavorites(func(msg string) {
+		if !d.closed {
+			setLong(d.status, msg)
+			d.render()
+		}
+	})
 }
