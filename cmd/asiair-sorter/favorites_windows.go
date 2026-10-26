@@ -708,7 +708,7 @@ func (d *favDialog) render() {
 	d.list.Invalidate()
 }
 
-const favRowH = 176 // DIP
+const favRowH = 192 // DIP
 
 // the parts of a row, in DIP from its top left
 const (
@@ -718,7 +718,7 @@ const (
 	favBtnW   = 90
 	favNoteY  = 76
 	favChartY = 96
-	favChartH = 74
+	favChartH = 90 // with the axis of the azimuth on top
 )
 
 func (d *favDialog) listClick(x, y int, b walk.MouseButton) {
@@ -808,13 +808,25 @@ func (d *favDialog) visText(v *planner.Vis) string {
 		if v.Set != 0 {
 			s = d.hm(v.Set)
 		}
+		if len(v.Az) > 0 {
+			if v.Rise != 0 {
+				r += fmt.Sprintf(" на %s (%.0f°)", planner.SideName(v.RiseAz), v.RiseAz)
+			}
+			if v.Set != 0 {
+				s += fmt.Sprintf(" на %s (%.0f°)", planner.SideName(v.SetAz), v.SetAz)
+			}
+		}
 		parts = append(parts, "восход "+r, "заход "+s)
 	} else if v.Up {
 		parts = append(parts, "не заходит")
 	} else {
 		parts = append(parts, "не восходит")
 	}
-	parts = append(parts, fmt.Sprintf("кульминация %s на %.0f°", d.hm(v.Transit), v.TransitAlt))
+	side := ""
+	if len(v.Az) > 0 {
+		side = planner.SideName(v.TransitAz) + ", "
+	}
+	parts = append(parts, fmt.Sprintf("кульминация %s на %s%.0f°", d.hm(v.Transit), side, v.TransitAlt))
 	var spans []string
 	for i, s := range v.Spans {
 		if i == 3 {
@@ -969,10 +981,17 @@ func (d *favDialog) paintList(c *walk.Canvas, _ walk.Rectangle) error {
 	return nil
 }
 
-// paintChart: the altitude through the night, as in the list of ASIAIR.
+// paintChart: the altitude through the night, as in the list of ASIAIR,
+// the axis of the azimuth on top and the sides of the sky on the curve.
 func (d *favDialog) paintChart(c *walk.Canvas, v *planner.Vis, r walk.Rectangle, faded bool, font *walk.Font) {
 	vis := d.vis
 	s := d.dpi()
+	axisY := r.Y
+	az := len(v.Az) == len(v.Alt)
+	if az {
+		r.Y += int(16 * s)
+		r.Height -= int(16 * s)
+	}
 	ph := float64(r.Height) - 14*s
 	from, to := vis.From.UnixMilli(), vis.To.UnixMilli()
 	span := float64(to - from)
@@ -1025,10 +1044,12 @@ func (d *favDialog) paintChart(c *walk.Canvas, v *planner.Vis, r walk.Rectangle,
 		}
 	}
 	// round hours, every two
+	var ticks []int64
 	for t := vis.From.In(d.zone).Truncate(time.Hour).Add(time.Hour); !t.After(vis.To); t = t.Add(time.Hour) {
 		if t.In(d.zone).Hour()%2 != 0 {
 			continue
 		}
+		ticks = append(ticks, t.UnixMilli())
 		xx := x(t.UnixMilli())
 		line(grid, walk.PenSolid, 1, []walk.Point{{X: xx, Y: r.Y}, {X: xx, Y: r.Y + int(ph)}})
 		c.DrawTextPixels(t.In(d.zone).Format("15:04"), font, walk.RGB(130, 130, 130), walk.Rectangle{X: xx - int(25*s), Y: r.Y + int(ph), Width: int(50 * s), Height: int(14 * s)},
@@ -1060,8 +1081,65 @@ func (d *favDialog) paintChart(c *walk.Canvas, v *planner.Vis, r walk.Rectangle,
 		}
 	}
 	flush()
+	if az {
+		d.paintAzimuth(c, v, ticks, from, x, y, axisY, r, faded, font)
+	}
 	if now := time.Now().UnixMilli(); now > from && now < to {
 		line(walk.RGB(200, 55, 55), walk.PenSolid, 1, []walk.Point{{X: x(now), Y: r.Y}, {X: x(now), Y: r.Y + int(ph)}})
+	}
+}
+
+// paintAzimuth: the azimuth at the times marked on the axis above the chart
+// (axisY) and the side of the sky on the curve while the object is up.
+func (d *favDialog) paintAzimuth(c *walk.Canvas, v *planner.Vis, ticks []int64, from int64, x func(int64) int, y func(float64) int,
+	axisY int, r walk.Rectangle, faded bool, font *walk.Font) {
+	s := d.dpi()
+	px := func(f float64) int { return int(math.Round(f * s)) }
+	ink, low := walk.RGB(29, 35, 48), walk.RGB(175, 180, 190)
+	if faded {
+		ink = walk.RGB(160, 165, 175)
+	}
+	bold, err := walk.NewFont(font.Family(), font.PointSize(), walk.FontBold)
+	if err != nil {
+		return
+	}
+	defer bold.Dispose()
+	if pn, err := walk.NewCosmeticPen(walk.PenSolid, walk.RGB(215, 220, 228)); err == nil {
+		c.DrawLinePixels(pn, walk.Point{X: r.X, Y: r.Y - 1}, walk.Point{X: r.X + r.Width, Y: r.Y - 1})
+		pn.Dispose()
+	}
+	c.DrawTextPixels("азимут", font, walk.RGB(130, 130, 130), walk.Rectangle{X: r.X + px(2), Y: axisY, Width: px(44), Height: r.Y - axisY - 1},
+		walk.TextSingleLine|walk.TextVCenter)
+	brush, err := walk.NewSolidColorBrush(ink)
+	if err != nil {
+		return
+	}
+	defer brush.Dispose()
+	every := planner.VisEvery.Milliseconds()
+	for _, t := range ticks {
+		i := int(math.Round(float64(t-from) / float64(every)))
+		if i < 0 || i >= len(v.Az) {
+			continue
+		}
+		xx := x(t)
+		if xx-r.X >= px(44) { // not over «азимут»
+			col := ink
+			if v.Alt[i] <= 0 {
+				col = low
+			}
+			c.DrawTextPixels(fmt.Sprintf("%.0f°", v.Az[i]), font, col, walk.Rectangle{X: xx - px(25), Y: axisY, Width: px(50), Height: r.Y - axisY - 1},
+				walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
+		}
+		if v.Alt[i] <= 3 {
+			continue
+		}
+		yy := y(v.Alt[i])
+		c.FillEllipsePixels(brush, walk.Rectangle{X: xx - px(2), Y: yy - px(2), Width: px(4), Height: px(4)})
+		lr := walk.Rectangle{X: xx - px(15), Y: yy - px(17), Width: px(30), Height: px(14)}
+		if yy-r.Y < px(18) { // near the top: under the curve
+			lr.Y = yy + px(3)
+		}
+		c.DrawTextPixels(planner.SideName(v.Az[i]), bold, ink, lr, walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
 	}
 }
 

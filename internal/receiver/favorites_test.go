@@ -31,6 +31,10 @@ func TestUIVisibility(t *testing.T) {
 	if v.Rise != 0 || v.Set != 0 || !v.Up || v.TransitAlt < 70 || v.Dark < 8*3600 || !v.Match || len(v.Alt) != len(v.Open) {
 		t.Fatalf("M 31: %+v", v)
 	}
+	// it culminates in the south; the azimuth goes with the altitude
+	if len(v.Az) != len(v.Alt) || v.TransitAz < 179 || v.TransitAz > 181 || planner.SideName(v.TransitAz) != "Ю" {
+		t.Fatalf("M 31 azimuth: %v %v", v.TransitAz, len(v.Az))
+	}
 	tr := time.UnixMilli(v.Transit).UTC()
 	if tr.Hour() < 19 || tr.Hour() > 22 {
 		t.Fatalf("transit at %v", tr)
