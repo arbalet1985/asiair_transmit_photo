@@ -5516,9 +5516,11 @@ function favRow(o, v, vis) {
     el("div", { className: "fname", textContent: label }),
     el("div", { className: "fmeta", textContent: [favKinds[o.kind] || o.kind, `RA ${favRA(o.ra)}`, `Dec ${favDec(o.dec)}`].filter(Boolean).join(" · ") }));
   if (v) info.append(el("div", { className: "fvis", textContent: favVisText(v) }));
-  // the sky around it (DSS2 from CDS, kept by the receiver)
+  // the sky around it (DSS2 from CDS, kept by the receiver); v: the way the
+  // picture is made (the key of catalog.Thumb), so that a picture made the
+  // old way and kept by the browser for a month is asked again
   const pic = el("img", { className: "fpic", loading: "lazy", alt: "", title: "Снимок неба DSS2 (CDS)",
-    src: `/ui/api/objectpic?ra=${o.ra}&dec=${o.dec}&size=${o.size || 0}&name=${encodeURIComponent(o.name)}` });
+    src: `/ui/api/objectpic?ra=${o.ra}&dec=${o.dec}&size=${o.size || 0}&name=${encodeURIComponent(o.name)}&v=g` });
   pic.onerror = () => { pic.style.visibility = "hidden"; };
   const row = el("div", { className: "favrow" + (v && !v.match ? " faded" : "") }, heart, pic, info, add);
   if (v && vis) row.append(el("div", { className: "fchart" }, favChart(v, vis)));
