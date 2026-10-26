@@ -52,7 +52,9 @@ func SizeOf(name string) float64 {
 // Thumb is the picture (JPEG) of the sky around ra, dec (J2000, degrees)
 // of fov degrees; dir keeps the pictures ("" = not kept).
 func Thumb(ctx context.Context, dir string, ra, dec, fov float64) ([]byte, error) {
-	key := fmt.Sprintf("%.3f_%+.3f_%.2f_g", ra, dec, fov) // _g: brightened as in the atlas
+	// _g: brightened as in the atlas; changed with the v= of the page of the
+	// receiver (index.html), which the browser keeps the pictures by
+	key := fmt.Sprintf("%.3f_%+.3f_%.2f_g", ra, dec, fov)
 	file := ""
 	if dir != "" {
 		file = filepath.Join(dir, key+".jpg")

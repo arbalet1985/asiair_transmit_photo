@@ -175,7 +175,7 @@
     opts = opts || {};
     if (!document.getElementById("skymapCss")) document.head.append(el("style", { id: "skymapCss", textContent: CSS }));
     const view = Object.assign({ az: 180, alt: 35, fov: 100 }, store.get("view", {}));
-    const show = Object.assign({ grid: true, lines: true, names: true, dso: true, mw: true, dss: true }, store.get("show", {}));
+    const show = Object.assign({ grid: true, lines: true, names: true, dso: true, mw: true, dss: true, day: true }, store.get("show", {}));
     const st = { lat: null, lon: 0, tz: null, sky: null, horizon: null, zones: [], minAlt: 0, targets: [], colors: [], sel: -1, favs: new Set(),
       frame: [0, 0], time: null, objects: [], picked: null, hits: [] };
     const canvas = el("canvas");
@@ -194,6 +194,7 @@
       tog("сетка", "grid", "Высота и азимут, меридиан, «не ниже» планировщика"), tog("созвездия", "lines", "Фигуры созвездий"),
       tog("имена", "names", "Названия звёзд, созвездий и объектов"), tog("объекты", "dso", "Галактики, туманности, скопления каталога"),
       tog("Млечный Путь", "mw", "Млечный Путь на тёмном небе"),
+      tog("день и ночь", "day", "Небо по Солнцу: днём голубое, в сумерки светлее; выключено — всегда ночное небо, как в темноте"),
       tog("снимок", "dss", "Снимок неба DSS2 под картой (CDS, нужен интернет): при общем виде — широкий, при приближении — чёткий"),
       btn("−1 ч", "На час назад", () => setTime(now() - 3600e3)), btn("+1 ч", "На час вперёд", () => setTime(now() + 3600e3)),
       btn("−", "Отдалить", () => zoom(1.4)), btn("+", "Приблизить", () => zoom(1 / 1.4)),
@@ -520,22 +521,24 @@
       const pxPerDeg = scale * rad;
       // the Sun gives the colour of the sky
       const sunEq = eclToEq(sunEcl(t), 0), [sunAlt, sunAz] = altAz(sunEq[0], sunEq[1], lat, sid);
+      // «день и ночь» off: the sky of a dark night whenever it is
+      const skyAlt = show.day ? sunAlt : Math.min(sunAlt, -18);
       const [cAlt, cAz] = unproj(W / 2, H / 2), [cRa, cDec] = raDec(cAlt, cAz, lat, sid);
       const cu = unit(cRa, cDec);
       // the photographs of Aladin under the map (the canvas is clear where
       // the sky is), or else the photograph of hips2fits
-      const alOn = show.dss && view.fov <= DSS_WIDE && alSync(P, cRa, cDec, sunAlt);
+      const alOn = show.dss && view.fov <= DSS_WIDE && alSync(P, cRa, cDec, skyAlt);
       if (!alOn && alDiv) alDiv.hidden = true;
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = skyColor(sunAlt);
-      ctx.globalAlpha = alOn ? clamp((sunAlt + 10) / 12, 0, 0.85) : 1; // a photograph of the night sky under a day sky
+      ctx.fillStyle = skyColor(skyAlt);
+      ctx.globalAlpha = alOn ? clamp((skyAlt + 10) / 12, 0, 0.85) : 1; // a photograph of the night sky under a day sky
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
       // the photograph of the sky, and the Milky Way of skydata.js on a
       // dark sky where there is none (no internet)
       const dssAlpha = !alOn && alState === "failed" && show.dss && view.fov <= DSS_WIDE ? 0.92 : 0;
       const dssShown = alOn || dssAlpha > 0 && dssOver(cu).over.length > 0;
-      layers(lat, sid, show.mw && !dssShown ? clamp((-sunAlt - 8) / 8, 0, 1) : 0);
+      layers(lat, sid, show.mw && !dssShown ? clamp((-skyAlt - 8) / 8, 0, 1) : 0);
       if (dssAlpha > 0) dssNeeded(cRa, cDec, cu, dssNow);
       dssNow = false;
       drawDss(P, dssAlpha, cu);
