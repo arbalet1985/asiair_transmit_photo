@@ -54,6 +54,13 @@ type Vis struct {
 	// the upper culmination
 	Transit    int64   `json:"transit"`
 	TransitAlt float64 `json:"transit_alt"`
+	// the azimuth (degrees from the north through the east) with Alt, and at
+	// the rise, the set and the culmination; with Az absent (an older
+	// receiver) none is known
+	Az        []float64 `json:"az,omitempty"`
+	RiseAz    float64   `json:"rise_az,omitempty"`
+	SetAz     float64   `json:"set_az,omitempty"`
+	TransitAz float64   `json:"transit_az,omitempty"`
 	// open to the telescope from the sunset to the sunrise, and in the dark
 	Spans [][2]int64 `json:"spans"`
 	Dark  float64    `json:"dark"` // seconds
@@ -89,7 +96,16 @@ var Sides = []string{"С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"}
 
 // Side is the bit of the side of the sky at azimuth az.
 func Side(az float64) uint8 {
-	return 1 << (int(math.Floor(math.Mod(az+22.5+720, 360)/45)) % 8)
+	return 1 << sideIndex(az)
+}
+
+func sideIndex(az float64) int {
+	return int(math.Floor(math.Mod(az+22.5+720, 360)/45)) % 8
+}
+
+// SideName: the side of the sky of the azimuth, as «ЮВ».
+func SideName(az float64) string {
+	return Sides[sideIndex(az)]
 }
 
 // window is the time the filter looks at.
@@ -160,13 +176,13 @@ func See(night string, lat, lon, sunAlt float64, sky Sky, objs []Favorite, f *Fi
 			p := moon.Object(t, lat, lon, o.RA, o.Dec)
 			up := p.Alt > 0
 			if i > 0 && up && !prev && s.Rise == 0 {
-				s.Rise = t.UnixMilli()
+				s.Rise, s.RiseAz = t.UnixMilli(), math.Round(p.Az)
 			}
 			if i > 0 && !up && prev && s.Set == 0 {
-				s.Set = t.UnixMilli()
+				s.Set, s.SetAz = t.UnixMilli(), math.Round(p.Az)
 			}
 			if i == 0 || p.Alt > s.TransitAlt {
-				s.Transit, s.TransitAlt = t.UnixMilli(), p.Alt
+				s.Transit, s.TransitAlt, s.TransitAz = t.UnixMilli(), p.Alt, p.Az
 			}
 			if i == 0 {
 				s.Up = up
@@ -174,6 +190,7 @@ func See(night string, lat, lon, sunAlt float64, sky Sky, objs []Favorite, f *Fi
 			prev = up
 		}
 		s.TransitAlt = math.Round(s.TransitAlt*10) / 10
+		s.TransitAz = math.Mod(math.Round(s.TransitAz), 360)
 		// open to the telescope in the chart
 		var open []byte
 		var start time.Time
@@ -182,6 +199,7 @@ func See(night string, lat, lon, sunAlt float64, sky Sky, objs []Favorite, f *Fi
 			ok := sky.Visible(p.Az, p.Alt)
 			if t.Sub(from)%VisEvery == 0 {
 				s.Alt = append(s.Alt, math.Round(p.Alt*10)/10)
+				s.Az = append(s.Az, math.Mod(math.Round(p.Az), 360))
 				open = append(open, map[bool]byte{true: '1', false: '0'}[ok])
 			}
 			if ok && start.IsZero() {
