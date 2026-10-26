@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -76,5 +77,24 @@ func TestUIVisibility(t *testing.T) {
 	}
 	if uiCall(t, ui, "POST", "/ui/api/favorites", map[string]any{"remove": []string{"NGC 224"}}, &fav) != 200 || len(fav.Favorites) != 0 {
 		t.Fatalf("remove: %+v", fav)
+	}
+}
+
+// TestFavoriteNotes: a note is set and taken away by name, cut to its
+// length, and kept with a favorite added.
+func TestFavoriteNotes(t *testing.T) {
+	s, _ := newTestServer(t)
+	ui := s.uiHandler()
+	var got struct{ Favorites []planner.Favorite }
+	add := map[string]any{"add": []planner.Favorite{{Name: "NGC 224", Note: " в Ha "}, {Name: "IC 1805"}}}
+	if uiCall(t, ui, "POST", "/ui/api/favorites", add, &got) != 200 || len(got.Favorites) != 2 || got.Favorites[0].Note != "в Ha" {
+		t.Fatalf("added: %+v", got)
+	}
+	long := strings.Repeat("я", planner.MaxNote+20)
+	notes := map[string]any{"notes": map[string]string{"NGC 224": "", "IC 1805": long, "M 1": "нет такого"}}
+	got.Favorites = nil
+	if uiCall(t, ui, "POST", "/ui/api/favorites", notes, &got) != 200 || len(got.Favorites) != 2 ||
+		got.Favorites[0].Note != "" || len([]rune(got.Favorites[1].Note)) != planner.MaxNote {
+		t.Fatalf("notes: %+v", got)
 	}
 }

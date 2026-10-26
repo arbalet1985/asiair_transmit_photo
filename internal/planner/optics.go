@@ -32,6 +32,21 @@ func (o Optics) FOV() (w, h float64) {
 	return float64(o.Width) * scale, float64(o.Height) * scale
 }
 
+// InEffect: the optics the atlas draws the frame with: the ones chosen
+// when complete, else the last setup of the frames with the reducer chosen.
+func InEffect(chosen *Optics, setups []Setup) Optics {
+	var o Optics
+	if chosen != nil {
+		o = *chosen
+	}
+	if o.Focal > 0 && o.Pixel > 0 && o.Width > 0 && o.Height > 0 || len(setups) == 0 {
+		return o
+	}
+	s := setups[0].Optics
+	s.Reducer = o.Reducer
+	return s
+}
+
 // Setup is the optics of frames taken: how many and the last one.
 type Setup struct {
 	Optics

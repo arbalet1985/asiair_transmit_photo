@@ -166,12 +166,12 @@ func (r *Receiver) Favorites(ctx context.Context) ([]planner.Favorite, error) {
 }
 
 // ChangeFavorites adds and removes (by name) favorite objects on the
-// receiver and gives its list after that.
-func (r *Receiver) ChangeFavorites(ctx context.Context, add []planner.Favorite, remove []string) ([]planner.Favorite, error) {
+// receiver, sets their notes (name → note) and gives its list after that.
+func (r *Receiver) ChangeFavorites(ctx context.Context, add []planner.Favorite, remove []string, notes map[string]string) ([]planner.Favorite, error) {
 	var v struct {
 		Favorites []planner.Favorite `json:"favorites"`
 	}
-	if err := r.post(ctx, "/ui/api/favorites", map[string]any{"add": add, "remove": remove}, &v); err != nil {
+	if err := r.post(ctx, "/ui/api/favorites", map[string]any{"add": add, "remove": remove, "notes": notes}, &v); err != nil {
 		if strings.Contains(err.Error(), "ответил 404") {
 			return nil, ErrNoFavorites
 		}

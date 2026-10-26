@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/arbalet1985/asiair_transmit_photo/internal/catalog"
@@ -23,6 +24,19 @@ type Favorite struct {
 	Dec   float64 `json:"dec"` // J2000, degrees
 	Kind  string  `json:"kind,omitempty"`
 	Size  float64 `json:"size,omitempty"` // arcminutes across (0: unknown)
+	Note  string  `json:"note,omitempty"` // the user's own few words
+}
+
+// MaxNote: the longest note of a favorite, characters.
+const MaxNote = 300
+
+// CleanNote: the note trimmed and cut to MaxNote.
+func CleanNote(s string) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > MaxNote {
+		s = strings.TrimSpace(string(r[:MaxNote]))
+	}
+	return s
 }
 
 // VisEvery: the samples of the altitude curve.
