@@ -743,3 +743,26 @@ func TestRefocusAfterFilter(t *testing.T) {
 		t.Error("FilterChanged")
 	}
 }
+
+// NGC 7635 and IC 1805 are higher than the pole at Moscow: they cross the
+// meridian in the north, between the pole and the zenith.
+func TestMeridianNorth(t *testing.T) {
+	dusk, dawn, _ := Night("2026-10-27", lat, lon, -18)
+	for _, tg := range []Target{{Name: "NGC 7635", RA: 350.2, Dec: 61.2}, {Name: "IC 1805", RA: 38.2, Dec: 61.45}} {
+		m, ok := Meridian(tg, lon, dusk, dawn)
+		if !ok {
+			t.Fatalf("%s: no meridian in the night", tg.Name)
+		}
+		p := moon.Object(m, lat, lon, tg.RA, tg.Dec)
+		if a := math.Min(p.Az, 360-p.Az); a > 2 || p.Alt < lat || p.Alt > 90 {
+			t.Errorf("%s on the meridian at %+v", tg.Name, p)
+		}
+	}
+	m31 := Target{RA: 10.68, Dec: 41.27}
+	if m, ok := Meridian(m31, lon, dusk, dawn); !ok || math.Abs(moon.Object(m, lat, lon, m31.RA, m31.Dec).Az-180) > 2 {
+		t.Errorf("M 31 on the meridian: %v %v", m, ok)
+	}
+	if mm := Meridians(lat); mm[0][0].Az != 180 || mm[0][0].Alt != 0 || mm[1][0].Az != 0 || mm[1][0].Alt != lat {
+		t.Errorf("meridians %+v", mm)
+	}
+}

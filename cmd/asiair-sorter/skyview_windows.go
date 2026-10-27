@@ -226,6 +226,36 @@ func (v *skyView) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
 		}
 	})
 
+	// the meridian: an object higher than the pole crosses it on the side
+	// of the pole, at the edges of the strip when that is the north
+	edges := func(az float64) []int {
+		x, _ := v.xy(az, 0)
+		if math.Mod(az+360, 360) == 0 {
+			return []int{x0, x1}
+		}
+		return []int{x}
+	}
+	merColor := walk.RGB(150, 160, 200)
+	if pn, err := walk.NewCosmeticPen(walk.PenDash, merColor); err == nil {
+		for _, m := range planner.Meridians(lat) {
+			_, ya := v.xy(0, math.Max(m[0].Alt, altMin))
+			_, yb := v.xy(0, m[1].Alt)
+			for _, x := range edges(m[0].Az) {
+				canvas.DrawLinePixels(pn, walk.Point{X: x, Y: ya}, walk.Point{X: x, Y: yb})
+			}
+		}
+		pn.Dispose()
+	}
+	pole := planner.Pole(lat)
+	for _, x := range edges(pole.Az) {
+		_, y := v.xy(0, pole.Alt)
+		pen(merColor, 1, func(pn walk.Pen) {
+			r := v.px(4)
+			canvas.DrawLinePixels(pn, walk.Point{X: x - r, Y: y}, walk.Point{X: x + r + 1, Y: y})
+			canvas.DrawLinePixels(pn, walk.Point{X: x, Y: y - r}, walk.Point{X: x, Y: y + r + 1})
+		})
+	}
+
 	// the frames taken
 	if p.pointsBox != nil && p.pointsBox.Checked() {
 		names := map[string]int{}
@@ -296,6 +326,20 @@ func (v *skyView) paint(canvas *walk.Canvas, _ walk.Rectangle) error {
 			if best > altMin {
 				x, y := v.xy(at(bt).Az, best)
 				text(tg.Name, c, walk.Rectangle{X: x - v.px(60), Y: y - v.px(20), Width: v.px(120), Height: v.px(16)}, walk.TextCenter)
+			}
+			// where it crosses the meridian
+			if m, ok := planner.Meridian(tg, lon, p.dusk, p.dawn); ok {
+				q := at(m)
+				if q.Alt > altMin {
+					_, y := v.xy(q.Az, q.Alt)
+					az := q.Az
+					if math.Min(az, 360-az) < 1 {
+						az = 0 // on the north edges, both of them
+					}
+					for _, x := range edges(az) {
+						dot(x, y, v.px(3.5), c)
+					}
+				}
 			}
 		}
 		// the path of the Moon in the night, hourly

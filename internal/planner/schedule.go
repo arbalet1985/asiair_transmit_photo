@@ -496,11 +496,14 @@ type State struct {
 }
 
 // Park is where the telescope waits before the night: at the pole.
-func (p *Plan) Park() Point {
-	if p.Params.Lat < 0 {
-		return Point{Az: 180, Alt: -p.Params.Lat}
+func (p *Plan) Park() Point { return Pole(p.Params.Lat) }
+
+// Pole is the celestial pole seen from the latitude lat.
+func Pole(lat float64) Point {
+	if lat < 0 {
+		return Point{Az: 180, Alt: -lat}
 	}
-	return Point{Az: 0, Alt: p.Params.Lat}
+	return Point{Az: 0, Alt: lat}
 }
 
 // At is the telescope at t: on its target, on the way between two during
@@ -658,4 +661,33 @@ func Hours(sec float64) string {
 func FilterChanged(last, next string) bool {
 	last, next = strings.TrimSpace(last), strings.TrimSpace(next)
 	return last != "" && next != "" && !strings.EqualFold(last, next)
+}
+
+// Meridian is when the target crosses the upper meridian between a and b
+// (the hour angle goes through 0), to the minute; false when it does not.
+// An object with the declination over the latitude crosses it on the side
+// of the pole, between the pole and the zenith.
+func Meridian(tg Target, lon float64, a, b time.Time) (time.Time, bool) {
+	prev := moon.HourAngle(a, lon, tg.RA)
+	if prev == 0 {
+		return a, true
+	}
+	for t := a.Add(time.Minute); !t.After(b); t = t.Add(time.Minute) {
+		ha := moon.HourAngle(t, lon, tg.RA)
+		if prev < 0 && ha >= 0 && ha < 6 {
+			return t, true
+		}
+		prev = ha
+	}
+	return time.Time{}, false
+}
+
+// Meridians are the two halves of the meridian over the horizon as they
+// are drawn: the side away from the pole from the horizon to the zenith,
+// and the side of the pole from the pole to the zenith (under the pole is
+// the lower culmination, no flip there).
+func Meridians(lat float64) [2][2]Point {
+	pole := Pole(lat)
+	away := Point{Az: math.Mod(pole.Az+180, 360)}
+	return [2][2]Point{{away, {Az: away.Az, Alt: 90}}, {pole, {Az: pole.Az, Alt: 90}}}
 }
