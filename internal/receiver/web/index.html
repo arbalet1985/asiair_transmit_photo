@@ -734,6 +734,7 @@
         <input type="range" id="plTime" min="0" max="600" value="0" aria-label="Время ночи">
         <span id="plTimeLabel" class="mono"></span>
         <select id="plSpeed" aria-label="Скорость анимации"><option value="5">5 мин/с</option><option value="15">15 мин/с</option><option value="30" selected>30 мин/с</option><option value="60">1 ч/с</option></select>
+        <select id="plView" aria-label="Вид неба" title="Вид неба: полоса с югом посередине, полоса с севером посередине (объекты выше полюса проходят меридиан у зенита на севере) или круг, как если смотреть вверх"><option value="s">небо: юг</option><option value="n">небо: север</option><option value="c">небо: круг</option></select>
         <label title="Где снимались полученные кадры (цвет — объект)"><input type="checkbox" id="plPoints" checked> кадры</label>
         <label title="Править горизонт и закрытые зоны на рисунке"><input type="checkbox" id="plEdit"> правка неба</label>
         <select id="plMode" hidden aria-label="Что делает касание"><option value="h">точки горизонта</option><option value="z">новая зона</option><option value="p">новый многоугольник</option><option value="d">удалить</option></select>
@@ -4782,35 +4783,67 @@ function plSetPlay(on) {
   requestAnimationFrame(step);
 }
 
-// ---- drawing the sky: a disc as seen looking up — the zenith in the
-// middle, the north on top, the east on the left, the circle at plAltMin
+// ---- drawing the sky: a strip — the azimuth across with the south (view
+// "s") or the north ("n") in the middle, the altitude up to the zenith — or
+// a disc as seen looking up ("c"): the zenith in the middle, the north on
+// top, the east on the left, the circle at plAltMin
 function plGeom() {
-  const c = $("plSky"), w = c.clientWidth, h = c.clientHeight;
+  const c = $("plSky"), w = c.clientWidth, h = c.clientHeight, v = $("plView").value;
+  if (v !== "c") return { w, h, x0: 34, y0: 22, x1: w - 8, y1: h - 20, a0: v === "n" ? 180 : 0 };
   const x0 = 8, y0 = 22, x1 = w - 8, y1 = h - 8;
   const r = Math.max(10, Math.min(x1 - x0, y1 - y0 - 28) / 2);
-  return { w, h, x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, r: r - 14 };
+  return { w, h, x0, y0, x1, y1, disc: true, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, r: r - 14 };
+}
+// plXYu places an azimuth not brought into 0…360: on the strip it may lie
+// beyond its edges (the caller clips)
+function plXYu(g, az, alt) {
+  if (g.disc) {
+    const d = g.r * (90 - alt) / (90 - plAltMin), a = az * Math.PI / 180;
+    return [g.cx - d * Math.sin(a), g.cy - d * Math.cos(a)];
+  }
+  return [g.x0 + (az - g.a0) / 360 * (g.x1 - g.x0), g.y1 - (alt - plAltMin) / (90 - plAltMin) * (g.y1 - g.y0)];
 }
 function plXY(g, az, alt) {
-  const d = g.r * (90 - alt) / (90 - plAltMin), a = az * Math.PI / 180;
-  return [g.cx - d * Math.sin(a), g.cy - d * Math.cos(a)];
+  return g.disc ? plXYu(g, az, alt) : plXYu(g, g.a0 + plNorm(az - g.a0), alt);
 }
 function plAzAlt(g, x, y) {
+  if (!g.disc) {
+    const az = plNorm(g.a0 + Math.max(0, Math.min(359.99, (x - g.x0) / (g.x1 - g.x0) * 360)));
+    const alt = Math.max(plAltMin, Math.min(90, plAltMin + (g.y1 - y) / (g.y1 - g.y0) * (90 - plAltMin)));
+    return { az, alt };
+  }
   const dx = x - g.cx, dy = y - g.cy;
   const az = plNorm(Math.atan2(-dx, -dy) * 180 / Math.PI);
   const alt = Math.max(plAltMin, Math.min(90, 90 - Math.hypot(dx, dy) / g.r * (90 - plAltMin)));
   return { az, alt };
 }
-// a line in azimuth and altitude drawn on the disc: short steps between the
-// points, the azimuth the short way round
+// the outline of the sky: the strip or the disc
+function plFrame(ctx, g) {
+  ctx.beginPath();
+  g.disc ? ctx.arc(g.cx, g.cy, g.r, 0, 2 * Math.PI) : ctx.rect(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0);
+}
+// plClip draws inside the outline of the sky only
+function plClip(ctx, g, draw) {
+  ctx.save(); plFrame(ctx, g); ctx.clip(); draw(); ctx.restore();
+}
+// x of an azimuth on the strip: both edges when it is on the seam
+const plEdges = (g, az, alt) => !g.disc && Math.abs(plD180(az - g.a0)) < 2 ? [g.x0, g.x1] : [plXY(g, az, alt || 0)[0]];
+// a line in azimuth and altitude: short steps between the points, the
+// azimuth the short way round; on the strip drawn a turn to each side too,
+// so a line across the seam goes on at the other edge (clip with plClip)
 function plLine(ctx, g, pts, closed) {
-  const n = pts.length, m = closed ? n : n - 1;
-  pts.length && ctx.moveTo(...plXY(g, pts[0].az, pts[0].alt));
+  const n = pts.length;
+  if (!n) return;
+  const m = closed ? n : n - 1, u = [[pts[0].az, pts[0].alt]];
   for (let i = 0; i < m; i++) {
-    const a = pts[i], b = pts[(i + 1) % n], daz = plD180(b.az - a.az);
+    const a = pts[i], b = pts[(i + 1) % n], daz = plD180(b.az - a.az), az0 = u[u.length - 1][0];
     const k = Math.max(1, Math.ceil(Math.max(Math.abs(daz), Math.abs(b.alt - a.alt)) / 3));
-    for (let j = 1; j <= k; j++) ctx.lineTo(...plXY(g, a.az + daz * j / k, a.alt + (b.alt - a.alt) * j / k));
+    for (let j = 1; j <= k; j++) u.push([az0 + daz * j / k, a.alt + (b.alt - a.alt) * j / k]);
   }
-  if (closed) ctx.closePath();
+  for (const k of g.disc ? [0] : [-360, 0, 360]) {
+    u.forEach(([az, alt], i) => ctx[i ? "lineTo" : "moveTo"](...plXYu(g, az + k, alt)));
+    if (closed) ctx.closePath();
+  }
 }
 // the horizon: a broken line over the azimuth, closed through the north
 function plHorizonAt(h, az) {
@@ -4857,8 +4890,8 @@ function plInZone(z, az, alt) {
   if (alt < Math.min(z.alt1, z.alt2) || alt > Math.max(z.alt1, z.alt2)) return false;
   return ((az - z.az1) % 360 + 360) % 360 <= ((z.az2 - z.az1) % 360 + 360) % 360;
 }
-// the path of a zone on the disc: a box of azimuth and altitude is a piece
-// of a ring (from az1 east to az2, through the north when az1 > az2)
+// the path of a zone: a box of azimuth and altitude (from az1 east to az2,
+// through the north when az1 > az2; on the disc a piece of a ring)
 function plZonePath(ctx, g, z) {
   ctx.beginPath();
   if (plIsPoly(z)) { plLine(ctx, g, z.poly, true); return; }
@@ -4866,8 +4899,7 @@ function plZonePath(ctx, g, z) {
   const s = Math.abs(z.az2 - z.az1) >= 360 ? 360 : plNorm(z.az2 - z.az1), k = Math.max(1, Math.ceil(s / 3)), pts = [];
   for (let j = 0; j <= k; j++) pts.push({ az: z.az1 + s * j / k, alt: hi });
   for (let j = k; j >= 0; j--) pts.push({ az: z.az1 + s * j / k, alt: lo });
-  pts.forEach((p, i) => ctx[i ? "lineTo" : "moveTo"](...plXY(g, p.az, p.alt)));
-  ctx.closePath();
+  plLine(ctx, g, pts, true);
 }
 // the path of a polygon being drawn
 function plPolyPath(ctx, g, poly, closed) {
@@ -4897,7 +4929,7 @@ function plDraw() {
   if (!PL.st || !c.clientWidth) return;
   const dpr = window.devicePixelRatio || 1;
   const cw = c.clientWidth;
-  c.style.height = Math.round(Math.max(300, Math.min(560, cw * 0.75))) + "px";
+  c.style.height = Math.round($("plView").value === "c" ? Math.max(300, Math.min(560, cw * 0.75)) : Math.max(220, Math.min(380, cw * 0.42))) + "px";
   const g = plGeom();
   if (c.width !== Math.round(g.w * dpr) || c.height !== Math.round(g.h * dpr)) {
     c.width = Math.round(g.w * dpr); c.height = Math.round(g.h * dpr);
@@ -4911,52 +4943,87 @@ function plDraw() {
   // the sky: lighter in the twilight
   const f = sun ? Math.max(0, Math.min(1, (sun[1] + 18) / 18)) : 0;
   const mix = (a, b) => Math.round(a + (b - a) * f);
-  ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, 0, 2 * Math.PI);
+  plFrame(ctx, g);
   ctx.fillStyle = `rgb(${mix(10, 70)},${mix(14, 95)},${mix(28, 150)})`; ctx.fill();
-  // the ground between the horizon and the edge, darker under 0°
+  // the ground under the horizon, darker under 0°
   const horizon = [];
   for (let az = 0; az < 360; az += 1) horizon.push({ az, alt: Math.max(plHorizonAt(sky.horizon, az), sky.min_alt) });
-  ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, 0, 2 * Math.PI); plLine(ctx, g, horizon, true);
-  ctx.fillStyle = "#3a2c20"; ctx.fill("evenodd");
   const [, y0] = plXY(g, 0, 0);
-  ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, 0, 2 * Math.PI); ctx.arc(g.cx, g.cy, g.cy - y0, 0, 2 * Math.PI);
-  ctx.fillStyle = "#261e18"; ctx.fill("evenodd");
+  ctx.beginPath();
+  if (g.disc) {
+    ctx.arc(g.cx, g.cy, g.r, 0, 2 * Math.PI); plLine(ctx, g, horizon, true);
+    ctx.fillStyle = "#3a2c20"; ctx.fill("evenodd");
+    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, 0, 2 * Math.PI); ctx.arc(g.cx, g.cy, g.cy - y0, 0, 2 * Math.PI);
+    ctx.fillStyle = "#261e18"; ctx.fill("evenodd");
+  } else {
+    ctx.moveTo(g.x0, g.y1);
+    for (let i = 0; i <= 360; i++) ctx.lineTo(...plXYu(g, g.a0 + i, horizon[plNorm(g.a0 + i) % 360].alt));
+    ctx.lineTo(g.x1, g.y1); ctx.closePath();
+    ctx.fillStyle = "#3a2c20"; ctx.fill();
+    ctx.fillStyle = "#261e18"; ctx.fillRect(g.x0, y0, g.x1 - g.x0, g.y1 - y0);
+  }
   // the zones
   plHatch = plHatch || plPattern(ctx, "rgba(220,80,80,.85)", 7);
   plHatchMaybe = plHatchMaybe || plPattern(ctx, "rgba(200,170,90,.45)", 10);
-  for (const z of PL.guess.maybe || []) { plZonePath(ctx, g, z); ctx.fillStyle = plHatchMaybe; ctx.fill("evenodd"); }
-  for (const z of sky.zones) {
-    plZonePath(ctx, g, z);
-    ctx.fillStyle = "rgba(90,34,34,.55)"; ctx.fill("evenodd");
-    ctx.fillStyle = plHatch; ctx.fill("evenodd");
-    ctx.strokeStyle = "#e65a5a"; ctx.lineWidth = 1; ctx.stroke();
-  }
-  // the grid: circles of altitude, lines to the sides of the sky
-  ctx.strokeStyle = "rgba(120,135,165,.35)"; ctx.lineWidth = 1;
-  ctx.fillStyle = "#9aa3b2"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
-  for (let alt = 0; alt < 90; alt += 15) {
-    const [, y] = plXY(g, 0, alt);
-    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.cy - y, 0, 2 * Math.PI); ctx.stroke();
-    ctx.fillText(alt + "°", plXY(g, 45, alt)[0] + 2, plXY(g, 45, alt)[1] - 1);
-  }
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"].forEach((n, i) => {
-    const [x, y] = plXY(g, i * 45, plAltMin), [xz, yz] = plXY(g, i * 45, 75);
-    ctx.beginPath(); ctx.moveTo(xz, yz); ctx.lineTo(x, y); ctx.stroke();
-    const k = (g.r + 9) / g.r;
-    ctx.fillText(n, g.cx + (x - g.cx) * k, g.cy + (y - g.cy) * k);
+  plClip(ctx, g, () => {
+    for (const z of PL.guess.maybe || []) { plZonePath(ctx, g, z); ctx.fillStyle = plHatchMaybe; ctx.fill("evenodd"); }
+    for (const z of sky.zones) {
+      plZonePath(ctx, g, z);
+      ctx.fillStyle = "rgba(90,34,34,.55)"; ctx.fill("evenodd");
+      ctx.fillStyle = plHatch; ctx.fill("evenodd");
+      ctx.strokeStyle = "#e65a5a"; ctx.lineWidth = 1; ctx.stroke();
+    }
   });
-  // the meridian: a line from the south through the zenith to the pole
-  // (the cross); an object higher than the pole crosses it between the pole
-  // and the zenith
+  // the grid
+  const sides = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"];
+  ctx.strokeStyle = "rgba(120,135,165,.35)"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#9aa3b2";
+  if (g.disc) {
+    // circles of altitude, lines to the sides of the sky
+    ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+    for (let alt = 0; alt < 90; alt += 15) {
+      const [, y] = plXY(g, 0, alt), [xl, yl] = plXY(g, 45, alt);
+      ctx.beginPath(); ctx.arc(g.cx, g.cy, g.cy - y, 0, 2 * Math.PI); ctx.stroke();
+      ctx.fillText(alt + "°", xl + 2, yl - 1);
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    sides.forEach((n, i) => {
+      const [x, y] = plXY(g, i * 45, plAltMin), [xz, yz] = plXY(g, i * 45, 75), k = (g.r + 9) / g.r;
+      ctx.beginPath(); ctx.moveTo(xz, yz); ctx.lineTo(x, y); ctx.stroke();
+      ctx.fillText(n, g.cx + (x - g.cx) * k, g.cy + (y - g.cy) * k);
+    });
+  } else {
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let alt = 0; alt <= 90; alt += 15) {
+      const [, y] = plXY(g, 0, alt);
+      ctx.beginPath(); ctx.moveTo(g.x0, y); ctx.lineTo(g.x1, y); ctx.stroke();
+      ctx.fillText(alt + "°", g.x0 - 4, y);
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let i = 0; i <= 8; i++) {
+      const az = g.a0 + i * 45, x = i === 8 ? g.x1 : plXYu(g, az, 0)[0];
+      ctx.beginPath(); ctx.moveTo(x, g.y0); ctx.lineTo(x, g.y1); ctx.stroke();
+      ctx.fillText(sides[plNorm(az) / 45], x, g.y1 + 3);
+    }
+  }
+  // the meridian: from the south through the zenith to the pole (the
+  // cross); an object higher than the pole crosses it between the zenith
+  // and the pole — in the middle of the strip with the north there
   if (pl && pl.park) {
     const [paz, palt] = pl.park;
     ctx.save();
     ctx.strokeStyle = "rgba(160,175,220,.7)"; ctx.setLineDash([5, 4]);
-    ctx.beginPath(); ctx.moveTo(...plXY(g, paz + 180, plAltMin)); ctx.lineTo(...plXY(g, paz, palt)); ctx.stroke();
+    if (g.disc) {
+      ctx.beginPath(); ctx.moveTo(...plXY(g, paz + 180, plAltMin)); ctx.lineTo(...plXY(g, paz, palt)); ctx.stroke();
+    } else {
+      for (const [az, from] of [[paz + 180, plAltMin], [paz, palt]]) {
+        const [, ya] = plXY(g, 0, Math.max(from, plAltMin)), [, yb] = plXY(g, 0, 90);
+        for (const x of plEdges(g, az)) { ctx.beginPath(); ctx.moveTo(x, ya); ctx.lineTo(x, yb); ctx.stroke(); }
+      }
+    }
     ctx.setLineDash([]);
-    const [xp, yp] = plXY(g, paz, palt);
-    ctx.beginPath(); ctx.moveTo(xp - 4, yp); ctx.lineTo(xp + 4, yp); ctx.moveTo(xp, yp - 4); ctx.lineTo(xp, yp + 4); ctx.stroke();
+    const [, yp] = plXY(g, paz, palt);
+    for (const xp of plEdges(g, paz, palt)) { ctx.beginPath(); ctx.moveTo(xp - 4, yp); ctx.lineTo(xp + 4, yp); ctx.moveTo(xp, yp - 4); ctx.lineTo(xp, yp + 4); ctx.stroke(); }
     ctx.restore();
   }
   // the frames received
@@ -4969,7 +5036,7 @@ function plDraw() {
   }
   // the horizon line and its points
   ctx.strokeStyle = "#e6be78"; ctx.lineWidth = 2;
-  ctx.beginPath(); plLine(ctx, g, horizon, true); ctx.stroke();
+  plClip(ctx, g, () => { ctx.beginPath(); plLine(ctx, g, horizon, true); ctx.stroke(); });
   const editing = $("plEdit").checked;
   ctx.fillStyle = "#ffdc96";
   for (const p of sky.horizon) {
@@ -4983,26 +5050,28 @@ function plDraw() {
       // the polygon being drawn: its vertices, the line to the pointer, the
       // first vertex bigger (touch it to close)
       const pts = PL.hover ? PL.poly.concat([PL.hover]) : PL.poly;
-      plPolyPath(ctx, g, pts, false);
-      ctx.strokeStyle = "#ff8080"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+      plClip(ctx, g, () => {
+        plPolyPath(ctx, g, pts, false);
+        ctx.strokeStyle = "#ff8080"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+      });
       ctx.fillStyle = "#ff8080";
       PL.poly.forEach((p, i) => { const [x, y] = plXY(g, p.az, p.alt), r = i ? 3 : 5; ctx.fillRect(x - r, y - r, 2 * r, 2 * r); });
     }
   }
   if (pl) {
     // the paths of the targets, thick where they are shot
-    const track = (pts, i0, i1) => {
+    const track = (pts, i0, i1) => plClip(ctx, g, () => {
       ctx.beginPath();
-      let pen = false;
-      for (let i = Math.max(0, i0); i <= i1 && i < pts.length; i++) {
-        const [az, alt] = pts[i];
-        if (alt < plAltMin) { pen = false; continue; }
-        const [x, y] = plXY(g, az, alt);
-        pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-        pen = true;
+      let run = [];
+      for (let i = Math.max(0, i0); i <= i1 && i <= pts.length; i++) {
+        const p = pts[i];
+        if (p && p[1] >= plAltMin) { run.push({ az: p[0], alt: p[1] }); continue; }
+        if (run.length > 1) plLine(ctx, g, run, false);
+        run = [];
       }
+      if (run.length > 1) plLine(ctx, g, run, false);
       ctx.stroke();
-    };
+    });
     PL.st.targets.forEach((tg, i) => {
       const pts = pl.tracks[i];
       if (tg.off || !pts) return;
@@ -5036,8 +5105,9 @@ function plDraw() {
       // where it crosses the meridian (receivers since this field)
       const mt = pl.meridian && pl.meridian[i], mp = mt ? plSample(pts, mt) : null;
       if (mp && mp[1] > plAltMin) {
-        const [x, y] = plXY(g, mp[0], mp[1]);
-        ctx.fillStyle = plColor(i); ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 2 * Math.PI); ctx.fill();
+        const [, y] = plXY(g, mp[0], mp[1]);
+        ctx.fillStyle = plColor(i);
+        for (const x of plEdges(g, mp[0], mp[1])) { ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 2 * Math.PI); ctx.fill(); }
       }
     });
     // the Moon: its path every half hour, and now with its phase
@@ -5851,6 +5921,12 @@ $("plCSV").onclick = () => {
 $("plPlay").onclick = () => plSetPlay(!PL.playing);
 $("plTime").oninput = () => { if (PL.plan) { plSetPlay(false); plSetTime(PL.plan.dusk + $("plTime").value * 60e3); } };
 $("plPoints").onchange = plDraw;
+try { $("plView").value = localStorage.getItem("plView") || "s"; } catch (e) { /* private window */ }
+if (!$("plView").value) $("plView").value = "s";
+$("plView").onchange = () => {
+  try { localStorage.setItem("plView", $("plView").value); } catch (e) { /* private window */ }
+  plDraw();
+};
 $("plNight").onchange = () => { PL.t = 0; plMakePlan(); };
 $("plStart").onchange = () => { PL.t = 0; plMakePlan(); };
 // "сейчас": the clock of the observatory, to plan the rest of the night
