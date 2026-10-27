@@ -419,10 +419,17 @@ func planResponse(ctx context.Context, p *planner.Plan, planned bool) map[string
 	for i := range p.Targets {
 		totals[i] = map[string]any{"frames": p.Frames[i], "seconds": p.Seconds[i], "time": planner.Hours(p.Seconds[i])}
 	}
+	// when each target crosses the meridian in the night (0: it does not)
+	meridian := make([]int64, len(p.Targets))
+	for i, tg := range p.Targets {
+		if m, ok := planner.Meridian(tg, lon, p.Dusk, p.Dawn); ok {
+			meridian[i] = m.UnixMilli()
+		}
+	}
 	_, off := p.Dusk.In(p.Params.Zone).Zone()
 	out := map[string]any{
 		"dusk": p.Dusk.UnixMilli(), "dawn": p.Dawn.UnixMilli(), "start": p.Start.UnixMilli(), "tz": off, "every": sampleEvery.Milliseconds(),
-		"sun": sun, "moon": mn, "illum": illum, "tracks": tracks, "steps": steps, "totals": totals,
+		"sun": sun, "moon": mn, "illum": illum, "tracks": tracks, "steps": steps, "totals": totals, "meridian": meridian,
 		"park": [2]float64{p.Park().Az, p.Park().Alt}, "planned": planned,
 	}
 	if planned {

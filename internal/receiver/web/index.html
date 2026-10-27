@@ -4945,6 +4945,22 @@ function plDraw() {
     ctx.beginPath(); ctx.moveTo(x, g.y0); ctx.lineTo(x, g.y1); ctx.stroke();
     ctx.fillText(n, x, g.y1 + 3);
   });
+  // the meridian: an object higher than the pole crosses it on the side of
+  // the pole, at the edges of the strip when that is the north
+  const plEdges = az => plNorm(az) === 0 ? [g.x0, g.x1] : [plXY(g, az, 0)[0]];
+  if (pl && pl.park) {
+    const [paz, palt] = pl.park;
+    ctx.save();
+    ctx.strokeStyle = "rgba(160,175,220,.7)"; ctx.setLineDash([5, 4]);
+    for (const [az, from] of [[paz + 180, plAltMin], [paz, palt]]) {
+      const [, ya] = plXY(g, 0, Math.max(from, plAltMin)), [, yb] = plXY(g, 0, 90);
+      for (const x of plEdges(az)) { ctx.beginPath(); ctx.moveTo(x, ya); ctx.lineTo(x, yb); ctx.stroke(); }
+    }
+    ctx.setLineDash([]);
+    const [, yp] = plXY(g, 0, palt);
+    for (const x of plEdges(paz)) { ctx.beginPath(); ctx.moveTo(x - 4, yp); ctx.lineTo(x + 4, yp); ctx.moveTo(x, yp - 4); ctx.lineTo(x, yp + 4); ctx.stroke(); }
+    ctx.restore();
+  }
   // the frames received
   if ($("plPoints").checked) {
     for (const [az, alt, k] of PL.guess.points || []) {
@@ -5028,6 +5044,13 @@ function plDraw() {
         const [x, y] = plXY(g, pts[k][0], pts[k][1]);
         ctx.fillStyle = plColor(i); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
         ctx.fillText(tg.name, Math.max(g.x0 + 40, Math.min(g.x1 - 40, x)), y - 6);
+      }
+      // where it crosses the meridian (receivers since this field)
+      const mt = pl.meridian && pl.meridian[i], mp = mt ? plSample(pts, mt) : null;
+      if (mp && mp[1] > plAltMin) {
+        const [, y] = plXY(g, mp[0], mp[1]), d = Math.min(mp[0], 360 - mp[0]);
+        ctx.fillStyle = plColor(i);
+        for (const x of plEdges(d < 1 ? 0 : mp[0])) { ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 2 * Math.PI); ctx.fill(); }
       }
     });
     // the Moon: its path every half hour, and now with its phase
